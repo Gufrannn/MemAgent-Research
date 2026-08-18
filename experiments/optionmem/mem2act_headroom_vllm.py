@@ -37,8 +37,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROMPT_VERSION = "optionmem-headroom-v2"
-ALL_CONDITIONS = ("no_memory", "full_history", "summary", "option", "state", "state_option")
+PROMPT_VERSION = "optionmem-headroom-v3"
+ALL_CONDITIONS = (
+    "no_memory", "full_history", "summary", "option", "state", "state_option",
+    "ledger_all", "ledger_retrieval", "ledger_recency", "ledger_oracle",
+)
 
 SUMMARY_SYSTEM = """You maintain long-term memory for an autonomous tool-using assistant.
 Compress the historical interaction into a query-independent memory that may help with unknown future requests.
@@ -77,6 +80,11 @@ Record only reusable control knowledge:
 Do not spend tokens repeating narrative history or long concrete result lists. Refer to exact state keys when possible.
 Do not infer or answer a future query. Stay within the requested memory budget."""
 
+LEDGER_SYSTEM = """You extract an append-only event ledger from a historical tool-using session.
+The future query is unknown. Return only one valid JSON object with an `events` array. Each event must be atomic and use:
+{"event_id":"turn-local-id","entity":"exact entity or subject","intent":"short user intent","tool":"exact tool name or empty","arguments":{},"result_facts":{},"turn":0,"provenance":"short exact source cue","validity":"current|superseded|failed|unknown"}
+Preserve exact identifiers, symbols, coordinates, dates, seasons, tournaments, preferences, tool argument bindings, useful results, updates, and failures. Keep values from the same call together. Never replace values with placeholders. Never infer a future query or invent evidence."""
+
 EXECUTOR_SYSTEM = """You are a tool-using assistant. Select the required tool call using only the supplied query, target tool schema, and optional memory/context.
 Return exactly one JSON object with this schema:
 {"name": "tool_name", "arguments": {"argument_name": "value"}}
@@ -97,6 +105,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--memory-max-tokens", type=int, default=512)
     parser.add_argument("--state-core-tokens", type=int, default=320)
     parser.add_argument("--procedure-core-tokens", type=int, default=192)
+    parser.add_argument("--ledger-max-tokens", type=int, default=2048)
+    parser.add_argument("--max-ledger-items", type=int, default=12)
     parser.add_argument("--answer-max-tokens", type=int, default=256)
     parser.add_argument("--writer-chunk-chars", type=int, default=12000)
     parser.add_argument("--max-context-chars", type=int, default=24000)
@@ -279,7 +289,7 @@ def write_memory(
     args: argparse.Namespace,
     seed: int,
 ) -> dict[str, Any]:
-    if mode not in {"summary", "option", "state", "state_core", "procedure_core"}:
+    if mode not in {"summary", "option", "state", "state_core", "procedure_core", "ledger"}:
         raise ValueError(mode)
     systems = {
         "summary": SUMMARY_SYSTEM,
@@ -287,14 +297,27 @@ def write_memory(
         "state": STATE_SYSTEM,
         "state_core": STATE_SYSTEM,
         "procedure_core": PROCEDURE_CORE_SYSTEM,
+        "ledger": LEDGER_SYSTEM,
     }
     system = systems[mode]
     token_budget = memory_token_budget(mode, args)
     memory = "No previous memory."
     total_latency = 0.0
     chunks = split_text(render_session(session), args.writer_chunk_chars)
+    ledger_items: list[dict[str, Any]] = []
+    ledger_valid = True
     for chunk_index, chunk in enumerate(chunks):
-        prompt = f"""Update the {mode} memory using the next chronological history chunk.
+        if mode == "ledger":
+            prompt = f"""Extract atomic events from this chronological history chunk.
+The future task/query is deliberately unknown. Do not summarize events together.
+Output budget: at most {token_budget} tokens.
+
+HISTORY CHUNK
+{chunk}
+
+JSON EVENT LEDGER"""
+        else:
+            prompt = f"""Update the {mode} memory using the next chronological history chunk.
 The future task/query is deliberately unknown.
 Memory budget: at most {token_budget} output tokens.
 
@@ -305,22 +328,37 @@ NEXT HISTORY CHUNK
 {chunk}
 
 UPDATED MEMORY"""
-        memory, latency = client.complete(
+        response, latency = client.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             max_tokens=token_budget,
             seed=seed + chunk_index,
         )
         total_latency += latency
-        memory = memory.strip()
-    return {
+        memory = response.strip()
+        if mode == "ledger":
+            parsed = find_json_object(memory)
+            events = parsed.get("events", []) if isinstance(parsed, dict) else []
+            if not isinstance(events, list):
+                events = []
+            ledger_valid = ledger_valid and isinstance(parsed, dict) and isinstance(parsed.get("events"), list)
+            ledger_items.extend(event for event in events if isinstance(event, dict))
+    result = {
         "text": memory,
         "chars": len(memory),
         "latency_s": total_latency,
         "chunks": len(chunks),
     }
+    if mode == "ledger":
+        result["events"] = ledger_items
+        result["text"] = compact_json({"events": ledger_items})
+        result["chars"] = len(result["text"])
+        result["valid_ledger_json"] = float(ledger_valid)
+    return result
 
 
 def memory_token_budget(mode: str, args: argparse.Namespace) -> int:
+    if mode == "ledger":
+        return args.ledger_max_tokens
     if mode == "state_core":
         return args.state_core_tokens
     if mode == "procedure_core":
@@ -433,6 +471,63 @@ def score_tool_call(predicted: dict[str, Any] | None, expected: dict[str, Any]) 
     }
 
 
+def lexical_tokens(value: Any) -> set[str]:
+    text = compact_json(value) if not isinstance(value, str) else value
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9_.:/+-]{2,}|[\u4e00-\u9fff]{2,}", text)
+        if token.casefold() not in {"the", "and", "that", "this", "with", "from", "name", "arguments"}
+    }
+
+
+def ledger_events(
+    sessions: list[dict[str, Any]],
+    memories: dict[str, dict[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for session_index, session in enumerate(sessions):
+        item = memories["ledger"][session["session_id"]]
+        for event_index, event in enumerate(item.get("events", [])):
+            copied = dict(event)
+            copied["_session_id"] = session["session_id"]
+            turn_match = re.search(r"\d+", str(event.get("turn", event_index)))
+            turn_index = int(turn_match.group()) if turn_match else event_index
+            copied["_order"] = session_index * 10000 + turn_index
+            events.append(copied)
+    return events
+
+
+def select_ledger_events(
+    qa: dict[str, Any],
+    events: list[dict[str, Any]],
+    condition: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if condition == "ledger_all":
+        selected = events
+    elif condition == "ledger_recency":
+        selected = sorted(events, key=lambda event: event.get("_order", 0), reverse=True)[:limit]
+    else:
+        if condition == "ledger_oracle":
+            # Gold-conditioned selection is deliberately an analysis-only upper bound.
+            needle: Any = qa["tool_call"]
+        else:
+            needle = {"query": qa["query"], "schema": qa["target_tool_schema"]}
+        query_tokens = lexical_tokens(needle)
+        target_name = str(qa["tool_call"].get("name", "")).casefold()
+
+        def rank(event: dict[str, Any]) -> tuple[float, int]:
+            overlap = len(query_tokens & lexical_tokens(event))
+            tool_bonus = 3.0 if target_name and str(event.get("tool", "")).casefold() == target_name else 0.0
+            return overlap + tool_bonus, int(event.get("_order", 0))
+
+        selected = sorted(events, key=rank, reverse=True)[:limit]
+    return [
+        {key: value for key, value in event.items() if not key.startswith("_")}
+        for event in selected
+    ]
+
+
 def build_executor_prompt(
     qa: dict[str, Any],
     condition: str,
@@ -460,6 +555,12 @@ def build_executor_prompt(
                 f"SESSION {session['session_id']} PROCEDURE CORE\n{procedure}"
             )
         context = pack_segments(segments, args.max_memory_context_chars)
+    elif condition.startswith("ledger_"):
+        events = ledger_events(sessions, memories)
+        selected = select_ledger_events(qa, events, condition, args.max_ledger_items)
+        label = "ANALYSIS-ONLY GOLD ORACLE EVENT LEDGER" if condition == "ledger_oracle" else "EVENT LEDGER"
+        context = label + "\n" + json.dumps(selected, ensure_ascii=False, indent=2)
+        context = balanced_clip(context, args.max_memory_context_chars)
     else:
         raise ValueError(condition)
 
@@ -539,6 +640,12 @@ def summarize(
         ("state_option", "state"),
         ("state_option", "option"),
         ("state_option", "full_history"),
+        ("ledger_all", "summary"),
+        ("ledger_retrieval", "summary"),
+        ("ledger_recency", "summary"),
+        ("ledger_oracle", "summary"),
+        ("ledger_oracle", "ledger_retrieval"),
+        ("ledger_oracle", "full_history"),
     )
     for left, right in comparisons:
         if left not in conditions or right not in conditions:
@@ -640,6 +747,8 @@ def main() -> int:
             writer_modes_list.append(condition)
         elif condition == "state_option":
             writer_modes_list.extend(("state_core", "procedure_core"))
+        elif condition.startswith("ledger_"):
+            writer_modes_list.append("ledger")
     writer_modes = tuple(dict.fromkeys(writer_modes_list))
     memories: dict[str, dict[str, dict[str, Any]]] = {mode: {} for mode in writer_modes}
     writer_jobs: list[tuple[str, dict[str, Any], str]] = []
@@ -724,6 +833,16 @@ def main() -> int:
     summary["memory_max_tokens"] = args.memory_max_tokens
     summary["state_core_tokens"] = args.state_core_tokens
     summary["procedure_core_tokens"] = args.procedure_core_tokens
+    summary["ledger_max_tokens"] = args.ledger_max_tokens
+    summary["max_ledger_items"] = args.max_ledger_items
+    if "ledger" in memories:
+        ledger_records = list(memories["ledger"].values())
+        summary["ledger_extraction"] = {
+            "sessions": len(ledger_records),
+            "valid_json_rate": statistics.fmean(item.get("valid_ledger_json", 0.0) for item in ledger_records),
+            "events_mean": statistics.fmean(len(item.get("events", [])) for item in ledger_records),
+            "events_total": sum(len(item.get("events", [])) for item in ledger_records),
+        }
     summary["query_hidden_during_memory_writing"] = True
     summary_path = args.output.with_suffix(args.output.suffix + ".summary.json")
     atomic_write_json(summary_path, summary)

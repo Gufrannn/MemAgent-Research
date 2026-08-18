@@ -26,6 +26,27 @@ The v2 diagnostic keeps the total writer budget at 512 tokens per session while
 separating parameter-grounding state from reusable control knowledge.  It is a
 representation headroom test, not Future-Utility RL.
 
+## v3: event-sourced executable memory
+
+The v3 diagnostic replaces whole-memory rewriting with query-unknown atomic
+event extraction. Events keep entity/tool/argument/result/provenance bindings
+together and are appended locally across chunks. It compares:
+
+| Condition | Selection rule |
+|---|---|
+| `ledger_all` | All extracted events (context-clipped only) |
+| `ledger_retrieval` | Deployable lexical query/schema retrieval |
+| `ledger_recency` | Query-independent recent-event heuristic |
+| `ledger_oracle` | Analysis-only gold-tool/argument retrieval upper bound |
+
+The oracle is never a deployable result. Its role is causal diagnosis: a weak
+oracle rejects the event representation; a strong oracle with weak retrieval
+identifies retrieval/retention headroom. Only the latter justifies item-level
+Future-Utility RL.
+
+Run `run_mem2act_ledger_headroom.sh`; all writer and executor calls still use
+the configured OpenAI-compatible vLLM endpoint.
+
 All generations use an OpenAI-compatible vLLM endpoint. The primary metric is
 exact tool-call accuracy; tool-name and per-argument accuracy are diagnostics.
 The summary reports paired bootstrap confidence intervals.
