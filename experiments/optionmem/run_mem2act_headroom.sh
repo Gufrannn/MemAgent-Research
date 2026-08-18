@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORK_ROOT=${WORK_ROOT:-/data/cw/memagent_work}
+PROJ_ROOT=${PROJ_ROOT:-$WORK_ROOT/code/MemAgent}
+DATA_ROOT=${MEM2ACT_ROOT:-$WORK_ROOT/datasets/Mem2ActBench}
+BASE_URL=${BASE_URL:-http://127.0.0.1:8001}
+SERVED_MODEL=${SERVED_MODEL:-qwen25-7b}
+NUM_SAMPLES=${NUM_SAMPLES:-50}
+CONCURRENCY=${CONCURRENCY:-8}
+RUN_NAME=${RUN_NAME:-optionmem_mem2act_n${NUM_SAMPLES}}
+CACHE_PATH=${CACHE_PATH:-$WORK_ROOT/logs/optionmem/mem2act_query_unknown_memory_cache.json}
+
+source "$WORK_ROOT/.venv/bin/activate"
+cd "$PROJ_ROOT"
+
+if [[ ! -f "$DATA_ROOT/toolmembench_small/qa_dataset.jsonl" ]]; then
+  echo "Mem2ActBench not found at $DATA_ROOT" >&2
+  echo "Clone the official repository before running this script." >&2
+  exit 2
+fi
+
+mkdir -p "$WORK_ROOT/logs/optionmem"
+
+python experiments/optionmem/mem2act_headroom_vllm.py \
+  --data-dir "$DATA_ROOT/toolmembench_small" \
+  --base-url "$BASE_URL" \
+  --served-model "$SERVED_MODEL" \
+  --num-samples "$NUM_SAMPLES" \
+  --concurrency "$CONCURRENCY" \
+  --conditions no_memory,full_history,summary,option \
+  --memory-max-tokens 512 \
+  --cache "$CACHE_PATH" \
+  --output "$WORK_ROOT/logs/optionmem/${RUN_NAME}.jsonl" \
+  2>&1 | tee "$WORK_ROOT/logs/optionmem/${RUN_NAME}.log"
