@@ -44,6 +44,11 @@ oracle rejects the event representation; a strong oracle with weak retrieval
 identifies retrieval/retention headroom. Only the latter justifies item-level
 Future-Utility RL.
 
+Ledger extraction uses independently parsed 5k-character chunks and vLLM JSON
+mode. Events are appended by deterministic host code rather than asking the
+model to rewrite prior memory. Raw chunk responses remain in the cache for
+audit and malformed-output diagnosis.
+
 Run `run_mem2act_ledger_headroom.sh`; all writer and executor calls still use
 the configured OpenAI-compatible vLLM endpoint.
 

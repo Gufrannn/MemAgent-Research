@@ -106,6 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-core-tokens", type=int, default=320)
     parser.add_argument("--procedure-core-tokens", type=int, default=192)
     parser.add_argument("--ledger-max-tokens", type=int, default=2048)
+    parser.add_argument("--ledger-chunk-chars", type=int, default=5000)
     parser.add_argument("--max-ledger-items", type=int, default=12)
     parser.add_argument("--answer-max-tokens", type=int, default=256)
     parser.add_argument("--writer-chunk-chars", type=int, default=12000)
@@ -231,6 +232,7 @@ class VLLMClient:
         messages: list[dict[str, str]],
         max_tokens: int,
         seed: int,
+        json_object: bool = False,
     ) -> tuple[str, float]:
         payload = {
             "model": self.model,
@@ -239,6 +241,8 @@ class VLLMClient:
             "max_tokens": max_tokens,
             "seed": seed,
         }
+        if json_object:
+            payload["response_format"] = {"type": "json_object"}
         encoded = json.dumps(payload).encode("utf-8")
         last_error: Exception | None = None
         for attempt in range(self.retries):
@@ -276,6 +280,7 @@ def memory_cache_key(
             mode,
             str(memory_token_budget(mode, args)),
             str(args.writer_chunk_chars),
+            str(args.ledger_chunk_chars) if mode == "ledger" else "-",
             session["session_id"],
             digest,
         ]
@@ -303,9 +308,11 @@ def write_memory(
     token_budget = memory_token_budget(mode, args)
     memory = "No previous memory."
     total_latency = 0.0
-    chunks = split_text(render_session(session), args.writer_chunk_chars)
+    chunk_chars = args.ledger_chunk_chars if mode == "ledger" else args.writer_chunk_chars
+    chunks = split_text(render_session(session), chunk_chars)
     ledger_items: list[dict[str, Any]] = []
     ledger_valid = True
+    raw_responses: list[str] = []
     for chunk_index, chunk in enumerate(chunks):
         if mode == "ledger":
             prompt = f"""Extract atomic events from this chronological history chunk.
@@ -332,10 +339,12 @@ UPDATED MEMORY"""
             [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             max_tokens=token_budget,
             seed=seed + chunk_index,
+            json_object=mode == "ledger",
         )
         total_latency += latency
         memory = response.strip()
         if mode == "ledger":
+            raw_responses.append(memory)
             parsed = find_json_object(memory)
             events = parsed.get("events", []) if isinstance(parsed, dict) else []
             if not isinstance(events, list):
@@ -353,6 +362,7 @@ UPDATED MEMORY"""
         result["text"] = compact_json({"events": ledger_items})
         result["chars"] = len(result["text"])
         result["valid_ledger_json"] = float(ledger_valid)
+        result["raw_responses"] = raw_responses
     return result
 
 
@@ -834,6 +844,7 @@ def main() -> int:
     summary["state_core_tokens"] = args.state_core_tokens
     summary["procedure_core_tokens"] = args.procedure_core_tokens
     summary["ledger_max_tokens"] = args.ledger_max_tokens
+    summary["ledger_chunk_chars"] = args.ledger_chunk_chars
     summary["max_ledger_items"] = args.max_ledger_items
     if "ledger" in memories:
         ledger_records = list(memories["ledger"].values())

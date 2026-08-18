@@ -32,6 +32,7 @@ python experiments/optionmem/mem2act_headroom_vllm.py \
   --conditions "$CONDITIONS" \
   --memory-max-tokens 512 \
   --ledger-max-tokens 2048 \
+  --ledger-chunk-chars 5000 \
   --max-ledger-items 12 \
   --cache "$CACHE_PATH" \
   --output "$WORK_ROOT/logs/optionmem/${RUN_NAME}.jsonl" \
