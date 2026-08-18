@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WORK_ROOT=${WORK_ROOT:-/data/cw/memagent_work}
-PROJ_ROOT=${PROJ_ROOT:-$WORK_ROOT/code/MemAgent}
+PROJ_ROOT=${PROJ_ROOT:-$WORK_ROOT/code/MemAgent-Research}
 DATA_ROOT=${MEM2ACT_ROOT:-$WORK_ROOT/datasets/Mem2ActBench}
 BASE_URL=${BASE_URL:-http://127.0.0.1:8001}
 SERVED_MODEL=${SERVED_MODEL:-qwen25-7b}

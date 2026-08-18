@@ -512,34 +512,53 @@ def main() -> int:
             f"Expected official Mem2ActBench-small files at {qa_path} and {session_path}"
         )
 
-    qas = select_questions(load_jsonl(qa_path), args)
+    all_qas = load_jsonl(qa_path)
     sessions = load_jsonl(session_path)
     source_to_session: dict[str, dict[str, Any]] = {}
     for session in sessions:
         for source_id in session.get("original_conversation_ids", []):
             source_to_session[source_id] = session
 
+    # The released small split currently contains at least one QA whose source
+    # conversation ID is absent from the released conversation file (qa_389 ->
+    # toolace_7839 in commit b007269).  Keep the official files untouched, make
+    # the inconsistency auditable, and sample only from resolvable questions so
+    # --num-samples still means the requested number of runnable examples.
+    unresolved: dict[str, list[str]] = {}
+    resolvable_qas: list[dict[str, Any]] = []
+    for qa in all_qas:
+        missing_ids = [
+            source_id
+            for source_id in qa.get("source_conversation_ids", [])
+            if source_id not in source_to_session
+        ]
+        if missing_ids:
+            unresolved[qa["qa_id"]] = missing_ids
+        else:
+            resolvable_qas.append(qa)
+    if unresolved:
+        print(
+            "warning: skipping official QAs with unresolved source IDs: "
+            + json.dumps(unresolved, ensure_ascii=False, sort_keys=True),
+            file=sys.stderr,
+            flush=True,
+        )
+    qas = select_questions(resolvable_qas, args)
+
     qa_sessions: dict[str, list[dict[str, Any]]] = {}
     referenced_sessions: dict[str, dict[str, Any]] = {}
-    missing: dict[str, list[str]] = {}
     for qa in qas:
         ordered: list[dict[str, Any]] = []
         seen: set[str] = set()
-        missing_ids: list[str] = []
         for source_id in qa.get("source_conversation_ids", []):
             session = source_to_session.get(source_id)
-            if session is None:
-                missing_ids.append(source_id)
-                continue
+            if session is None:  # guarded by the resolvability filter above
+                raise AssertionError(f"Unresolved source ID after filtering: {source_id}")
             if session["session_id"] not in seen:
                 ordered.append(session)
                 seen.add(session["session_id"])
                 referenced_sessions[session["session_id"]] = session
-        if missing_ids:
-            missing[qa["qa_id"]] = missing_ids
         qa_sessions[qa["qa_id"]] = ordered
-    if missing:
-        raise ValueError(f"Official source IDs could not be resolved: {missing}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.overwrite and args.output.exists():
