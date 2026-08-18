@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROMPT_VERSION = "optionmem-headroom-v3.1"
+PROMPT_VERSION = "optionmem-headroom-v3.2"
 ALL_CONDITIONS = (
     "no_memory", "full_history", "summary", "option", "state", "state_option",
     "ledger_all", "ledger_retrieval", "ledger_recency", "ledger_oracle",
@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--memory-max-tokens", type=int, default=512)
     parser.add_argument("--state-core-tokens", type=int, default=320)
     parser.add_argument("--procedure-core-tokens", type=int, default=192)
-    parser.add_argument("--ledger-max-tokens", type=int, default=2048)
+    parser.add_argument("--ledger-max-tokens", type=int, default=4096)
     parser.add_argument("--ledger-chunk-chars", type=int, default=3000)
     parser.add_argument("--max-ledger-items", type=int, default=12)
     parser.add_argument("--answer-max-tokens", type=int, default=256)
@@ -312,7 +312,7 @@ def write_memory(
     chunk_chars = args.ledger_chunk_chars if mode == "ledger" else args.writer_chunk_chars
     chunks = split_text(render_session(session), chunk_chars)
     ledger_items: list[dict[str, Any]] = []
-    ledger_valid = True
+    valid_chunks = 0
     raw_responses: list[str] = []
     for chunk_index, chunk in enumerate(chunks):
         if mode == "ledger":
@@ -350,7 +350,7 @@ UPDATED MEMORY"""
             events = parsed.get("events", []) if isinstance(parsed, dict) else []
             if not isinstance(events, list):
                 events = []
-            ledger_valid = ledger_valid and isinstance(parsed, dict) and isinstance(parsed.get("events"), list)
+            valid_chunks += int(isinstance(parsed, dict) and isinstance(parsed.get("events"), list))
             ledger_items.extend(event for event in events if isinstance(event, dict))
     result = {
         "text": memory,
@@ -362,7 +362,9 @@ UPDATED MEMORY"""
         result["events"] = ledger_items
         result["text"] = compact_json({"events": ledger_items})
         result["chars"] = len(result["text"])
-        result["valid_ledger_json"] = float(ledger_valid)
+        result["valid_ledger_json"] = float(valid_chunks == len(chunks))
+        result["valid_chunks"] = valid_chunks
+        result["total_chunks"] = len(chunks)
         result["raw_responses"] = raw_responses
     return result
 
@@ -491,6 +493,24 @@ def lexical_tokens(value: Any) -> set[str]:
     }
 
 
+def scalar_strings(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in scalar_strings(child)]
+    if isinstance(value, list):
+        return [item for child in value for item in scalar_strings(child)]
+    if value is None:
+        return []
+    return [str(value).strip().casefold()]
+
+
+def argument_surface_recall(context: str, expected: dict[str, Any]) -> float:
+    values = [value for value in scalar_strings(expected.get("arguments", {})) if value]
+    if not values:
+        return 1.0
+    haystack = context.casefold()
+    return statistics.fmean(float(value in haystack) for value in values)
+
+
 def ledger_events(
     sessions: list[dict[str, Any]],
     memories: dict[str, dict[str, dict[str, Any]]],
@@ -530,6 +550,14 @@ def select_ledger_events(
         def rank(event: dict[str, Any]) -> tuple[float, int]:
             overlap = len(query_tokens & lexical_tokens(event))
             tool_bonus = 3.0 if target_name and str(event.get("tool", "")).casefold() == target_name else 0.0
+            if condition == "ledger_oracle":
+                event_text = compact_json(event).casefold()
+                value_hits = sum(
+                    value in event_text
+                    for value in scalar_strings(qa["tool_call"].get("arguments", {}))
+                    if value
+                )
+                overlap += 10 * value_hits
             return overlap + tool_bonus, int(event.get("_order", 0))
 
         selected = sorted(events, key=rank, reverse=True)[:limit]
@@ -641,6 +669,9 @@ def summarize(
             for metric in ("valid_json", "name", "arguments", "exact")
         }
         result["conditions"][condition]["latency_s_mean"] = statistics.fmean(record["latency_s"] for record in records)
+        result["conditions"][condition]["gold_argument_surface_recall"] = statistics.fmean(
+            record["gold_argument_surface_recall"] for record in records
+        )
 
     comparisons = (
         ("option", "summary"),
@@ -813,6 +844,9 @@ def main() -> int:
                 "score": score_tool_call(parsed, qa["tool_call"]),
                 "latency_s": latency,
                 "prompt_chars": len(prompt),
+                "gold_argument_surface_recall": argument_surface_recall(
+                    prompt.split("\nCURRENT USER QUERY\n", 1)[0], qa["tool_call"]
+                ),
             }
         return {
             "qa_id": qa["qa_id"],
@@ -854,6 +888,10 @@ def main() -> int:
             "valid_json_rate": statistics.fmean(item.get("valid_ledger_json", 0.0) for item in ledger_records),
             "events_mean": statistics.fmean(len(item.get("events", [])) for item in ledger_records),
             "events_total": sum(len(item.get("events", [])) for item in ledger_records),
+            "chunk_valid_json_rate": (
+                sum(item.get("valid_chunks", 0) for item in ledger_records)
+                / max(1, sum(item.get("total_chunks", 0) for item in ledger_records))
+            ),
         }
     summary["query_hidden_during_memory_writing"] = True
     summary_path = args.output.with_suffix(args.output.suffix + ".summary.json")

@@ -49,6 +49,11 @@ mode. Events are appended by deterministic host code rather than asking the
 model to rewrite prior memory. Raw chunk responses remain in the cache for
 audit and malformed-output diagnosis.
 
+The summary reports both all-chunks-valid session rate and chunk-level JSON
+validity, plus gold-argument surface recall for each executor context. The
+analysis-only oracle ranks events by exact gold-value coverage; this makes it a
+representation/retrieval ceiling rather than a deployable policy.
+
 Event admission is deliberately selective: tool evidence, concrete state,
 preferences/constraints, corrections, and actionable failures are retained;
 generic dialogue and non-actionable assistant prose are excluded. This avoids

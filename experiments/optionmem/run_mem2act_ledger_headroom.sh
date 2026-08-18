@@ -31,7 +31,7 @@ python experiments/optionmem/mem2act_headroom_vllm.py \
   --concurrency "$CONCURRENCY" \
   --conditions "$CONDITIONS" \
   --memory-max-tokens 512 \
-  --ledger-max-tokens 2048 \
+  --ledger-max-tokens 4096 \
   --ledger-chunk-chars 3000 \
   --max-ledger-items 12 \
   --cache "$CACHE_PATH" \
