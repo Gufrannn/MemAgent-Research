@@ -19,6 +19,12 @@ shown. The query and target tool schema are only supplied to the executor.
 | `full_history` | Official historical sessions + query + schema |
 | `summary` | Query-independent fixed-budget factual memory + query + schema |
 | `option` | Query-independent fixed-budget procedural memory + query + schema |
+| `state` | Query-independent typed state store (exact entities, IDs, current values, tool evidence) + query + schema |
+| `state_option` | Equal-total-budget factorization: 320-token typed state + 192-token procedure core + query + schema |
+
+The v2 diagnostic keeps the total writer budget at 512 tokens per session while
+separating parameter-grounding state from reusable control knowledge.  It is a
+representation headroom test, not Future-Utility RL.
 
 All generations use an OpenAI-compatible vLLM endpoint. The primary metric is
 exact tool-call accuracy; tool-name and per-argument accuracy are diagnostics.

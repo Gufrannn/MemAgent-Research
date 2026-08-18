@@ -10,6 +10,7 @@ NUM_SAMPLES=${NUM_SAMPLES:-50}
 CONCURRENCY=${CONCURRENCY:-8}
 RUN_NAME=${RUN_NAME:-optionmem_mem2act_n${NUM_SAMPLES}}
 CACHE_PATH=${CACHE_PATH:-$WORK_ROOT/logs/optionmem/mem2act_query_unknown_memory_cache.json}
+CONDITIONS=${CONDITIONS:-no_memory,full_history,summary,option}
 
 source "$WORK_ROOT/.venv/bin/activate"
 cd "$PROJ_ROOT"
@@ -28,7 +29,7 @@ python experiments/optionmem/mem2act_headroom_vllm.py \
   --served-model "$SERVED_MODEL" \
   --num-samples "$NUM_SAMPLES" \
   --concurrency "$CONCURRENCY" \
-  --conditions no_memory,full_history,summary,option \
+  --conditions "$CONDITIONS" \
   --memory-max-tokens 512 \
   --cache "$CACHE_PATH" \
   --output "$WORK_ROOT/logs/optionmem/${RUN_NAME}.jsonl" \

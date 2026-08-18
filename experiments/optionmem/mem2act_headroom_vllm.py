@@ -2,13 +2,15 @@
 """Query-unknown procedural-memory headroom test on Mem2ActBench.
 
 The script never exposes the evaluation query or gold tool call while writing
-memory.  It compares four execution conditions using the same OpenAI-compatible
+memory.  It compares execution conditions using the same OpenAI-compatible
 vLLM endpoint:
 
   * no_memory: query and target tool schema only
   * full_history: the official benchmark-selected historical sessions
   * summary: fixed-budget, query-unknown factual summaries of those sessions
   * option: fixed-budget, query-unknown procedural memories of those sessions
+  * state: fixed-budget, query-unknown typed state memories
+  * state_option: an equal-total-budget typed-state/procedure factorization
 
 No training data is created.  The official Mem2ActBench-small files are read
 directly and the output is a JSONL audit trail plus a paired-bootstrap summary.
@@ -35,8 +37,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROMPT_VERSION = "optionmem-headroom-v1"
-ALL_CONDITIONS = ("no_memory", "full_history", "summary", "option")
+PROMPT_VERSION = "optionmem-headroom-v2"
+ALL_CONDITIONS = ("no_memory", "full_history", "summary", "option", "state", "state_option")
 
 SUMMARY_SYSTEM = """You maintain long-term memory for an autonomous tool-using assistant.
 Compress the historical interaction into a query-independent memory that may help with unknown future requests.
@@ -53,6 +55,27 @@ Write compact records with these fields when supported by the history:
 - PROVENANCE: short source/turn cue; never invent evidence
 Prefer executable decision rules over narrative summaries. Do not answer a future query because it is not known yet.
 Stay within the requested memory budget."""
+
+STATE_SYSTEM = """You maintain a query-independent typed state store for a tool-using agent.
+Preserve exact values that an unknown future tool call may need. Use compact records with these fields:
+- ENTITIES: exact names, aliases, IDs, symbols, locations, coordinates, dates, seasons, tournaments, account keys, and document names
+- CURRENT_STATE: newest valid value or status; mark superseded values explicitly
+- PREFERENCES_CONSTRAINTS: user defaults, locale, requirements, exclusions, and thresholds
+- TOOL_EVIDENCE: exact tool name plus observed argument=value bindings and useful results
+- CONFLICTS_FAILURES: old -> new updates, contradictions, failed arguments, and unavailable tools
+Coverage is more important than prose. Retain every explicit identifier and concrete user/tool value before describing outcomes.
+Never replace exact values with placeholders such as 'user_id', 'earlier', or 'current location'.
+Do not infer a future query and do not write a narrative summary. Stay within the requested memory budget."""
+
+PROCEDURE_CORE_SYSTEM = """You compile a compact query-independent procedure store for a tool-using agent.
+Record only reusable control knowledge:
+- WHEN: observable trigger or intent
+- TOOL_ORDER: ordered tools/actions
+- ARG_BINDINGS: how arguments are obtained from typed state or prior tool outputs
+- SUCCESS_CHECK: observable completion condition
+- GOTCHA: failure, stale-value, conflict, or clarification rule
+Do not spend tokens repeating narrative history or long concrete result lists. Refer to exact state keys when possible.
+Do not infer or answer a future query. Stay within the requested memory budget."""
 
 EXECUTOR_SYSTEM = """You are a tool-using assistant. Select the required tool call using only the supplied query, target tool schema, and optional memory/context.
 Return exactly one JSON object with this schema:
@@ -72,6 +95,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--levels", default="all", help="Comma-separated L1/L2/L3/L4 or all")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--memory-max-tokens", type=int, default=512)
+    parser.add_argument("--state-core-tokens", type=int, default=320)
+    parser.add_argument("--procedure-core-tokens", type=int, default=192)
     parser.add_argument("--answer-max-tokens", type=int, default=256)
     parser.add_argument("--writer-chunk-chars", type=int, default=12000)
     parser.add_argument("--max-context-chars", type=int, default=24000)
@@ -239,7 +264,7 @@ def memory_cache_key(
             PROMPT_VERSION,
             args.served_model,
             mode,
-            str(args.memory_max_tokens),
+            str(memory_token_budget(mode, args)),
             str(args.writer_chunk_chars),
             session["session_id"],
             digest,
@@ -254,16 +279,24 @@ def write_memory(
     args: argparse.Namespace,
     seed: int,
 ) -> dict[str, Any]:
-    if mode not in {"summary", "option"}:
+    if mode not in {"summary", "option", "state", "state_core", "procedure_core"}:
         raise ValueError(mode)
-    system = SUMMARY_SYSTEM if mode == "summary" else OPTION_SYSTEM
+    systems = {
+        "summary": SUMMARY_SYSTEM,
+        "option": OPTION_SYSTEM,
+        "state": STATE_SYSTEM,
+        "state_core": STATE_SYSTEM,
+        "procedure_core": PROCEDURE_CORE_SYSTEM,
+    }
+    system = systems[mode]
+    token_budget = memory_token_budget(mode, args)
     memory = "No previous memory."
     total_latency = 0.0
     chunks = split_text(render_session(session), args.writer_chunk_chars)
     for chunk_index, chunk in enumerate(chunks):
         prompt = f"""Update the {mode} memory using the next chronological history chunk.
 The future task/query is deliberately unknown.
-Memory budget: at most {args.memory_max_tokens} output tokens.
+Memory budget: at most {token_budget} output tokens.
 
 PREVIOUS MEMORY
 {memory}
@@ -274,7 +307,7 @@ NEXT HISTORY CHUNK
 UPDATED MEMORY"""
         memory, latency = client.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            max_tokens=args.memory_max_tokens,
+            max_tokens=token_budget,
             seed=seed + chunk_index,
         )
         total_latency += latency
@@ -285,6 +318,14 @@ UPDATED MEMORY"""
         "latency_s": total_latency,
         "chunks": len(chunks),
     }
+
+
+def memory_token_budget(mode: str, args: argparse.Namespace) -> int:
+    if mode == "state_core":
+        return args.state_core_tokens
+    if mode == "procedure_core":
+        return args.procedure_core_tokens
+    return args.memory_max_tokens
 
 
 def find_json_object(text: str) -> dict[str, Any] | None:
@@ -403,11 +444,21 @@ def build_executor_prompt(
         context = "No historical memory is available."
     elif condition == "full_history":
         context = pack_segments((render_session(session) for session in sessions), args.max_context_chars)
-    elif condition in {"summary", "option"}:
+    elif condition in {"summary", "option", "state"}:
         segments = []
         for session in sessions:
             item = memories[condition][session["session_id"]]
             segments.append(f"SESSION {session['session_id']} {condition.upper()} MEMORY\n{item['text']}")
+        context = pack_segments(segments, args.max_memory_context_chars)
+    elif condition == "state_option":
+        segments = []
+        for session in sessions:
+            state = memories["state_core"][session["session_id"]]["text"]
+            procedure = memories["procedure_core"][session["session_id"]]["text"]
+            segments.append(
+                f"SESSION {session['session_id']} TYPED STATE\n{state}\n\n"
+                f"SESSION {session['session_id']} PROCEDURE CORE\n{procedure}"
+            )
         context = pack_segments(segments, args.max_memory_context_chars)
     else:
         raise ValueError(condition)
@@ -479,7 +530,17 @@ def summarize(
         }
         result["conditions"][condition]["latency_s_mean"] = statistics.fmean(record["latency_s"] for record in records)
 
-    for left, right in (("option", "summary"), ("option", "full_history"), ("summary", "full_history")):
+    comparisons = (
+        ("option", "summary"),
+        ("option", "full_history"),
+        ("summary", "full_history"),
+        ("state", "summary"),
+        ("state_option", "summary"),
+        ("state_option", "state"),
+        ("state_option", "option"),
+        ("state_option", "full_history"),
+    )
+    for left, right in comparisons:
         if left not in conditions or right not in conditions:
             continue
         differences = [
@@ -573,7 +634,13 @@ def main() -> int:
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
 
     client = VLLMClient(args)
-    writer_modes = tuple(condition for condition in ("summary", "option") if condition in conditions)
+    writer_modes_list: list[str] = []
+    for condition in conditions:
+        if condition in {"summary", "option", "state"}:
+            writer_modes_list.append(condition)
+        elif condition == "state_option":
+            writer_modes_list.extend(("state_core", "procedure_core"))
+    writer_modes = tuple(dict.fromkeys(writer_modes_list))
     memories: dict[str, dict[str, dict[str, Any]]] = {mode: {} for mode in writer_modes}
     writer_jobs: list[tuple[str, dict[str, Any], str]] = []
     for mode in writer_modes:
@@ -655,6 +722,8 @@ def main() -> int:
     summary["data_dir"] = str(args.data_dir)
     summary["seed"] = args.seed
     summary["memory_max_tokens"] = args.memory_max_tokens
+    summary["state_core_tokens"] = args.state_core_tokens
+    summary["procedure_core_tokens"] = args.procedure_core_tokens
     summary["query_hidden_during_memory_writing"] = True
     summary_path = args.output.with_suffix(args.output.suffix + ".summary.json")
     atomic_write_json(summary_path, summary)
