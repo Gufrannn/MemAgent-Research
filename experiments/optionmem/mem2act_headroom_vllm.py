@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROMPT_VERSION = "optionmem-headroom-v3"
+PROMPT_VERSION = "optionmem-headroom-v3.1"
 ALL_CONDITIONS = (
     "no_memory", "full_history", "summary", "option", "state", "state_option",
     "ledger_all", "ledger_retrieval", "ledger_recency", "ledger_oracle",
@@ -83,7 +83,8 @@ Do not infer or answer a future query. Stay within the requested memory budget."
 LEDGER_SYSTEM = """You extract an append-only event ledger from a historical tool-using session.
 The future query is unknown. Return only one valid JSON object with an `events` array. Each event must be atomic and use:
 {"event_id":"turn-local-id","entity":"exact entity or subject","intent":"short user intent","tool":"exact tool name or empty","arguments":{},"result_facts":{},"turn":0,"provenance":"short exact source cue","validity":"current|superseded|failed|unknown"}
-Preserve exact identifiers, symbols, coordinates, dates, seasons, tournaments, preferences, tool argument bindings, useful results, updates, and failures. Keep values from the same call together. Never replace values with placeholders. Never infer a future query or invent evidence."""
+Create an event only for actionable evidence: a tool call/result, an explicit user preference or constraint, a concrete entity/value update, a correction, or a failure that changes future action. Omit greetings, generic questions, acknowledgements, explanations, opinions, and assistant prose with no reusable state or control evidence.
+Preserve exact identifiers, symbols, coordinates, dates, seasons, tournaments, preferences, tool argument bindings, useful results, updates, and failures. Keep values from the same call together. Compact large results to the exact reusable fields and identifiers; do not copy long prose or exhaustive lists. Never replace values with placeholders. Never infer a future query or invent evidence."""
 
 EXECUTOR_SYSTEM = """You are a tool-using assistant. Select the required tool call using only the supplied query, target tool schema, and optional memory/context.
 Return exactly one JSON object with this schema:
@@ -106,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-core-tokens", type=int, default=320)
     parser.add_argument("--procedure-core-tokens", type=int, default=192)
     parser.add_argument("--ledger-max-tokens", type=int, default=2048)
-    parser.add_argument("--ledger-chunk-chars", type=int, default=5000)
+    parser.add_argument("--ledger-chunk-chars", type=int, default=3000)
     parser.add_argument("--max-ledger-items", type=int, default=12)
     parser.add_argument("--answer-max-tokens", type=int, default=256)
     parser.add_argument("--writer-chunk-chars", type=int, default=12000)
