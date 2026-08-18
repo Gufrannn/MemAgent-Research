@@ -1,0 +1,34 @@
+{
+  "agent": {
+    "model_name": "qwen25-7b",
+    "backend": "openai",
+    "api_key": "EMPTY",
+    "base_url": "http://127.0.0.1:8001/v1",
+    "temperature": 0.0,
+    "max_tokens": 512
+  },
+  "memory": {
+    "use_step_memory": false,
+    "memory_system_name": "control_boundary",
+    "server_url": "http://127.0.0.1:8000"
+  },
+  "env": {
+    "env_name": "webshop",
+    "env_server_url": "http://127.0.0.1:8005",
+    "env_config": {
+      "bootstrap_upstream_env": true,
+      "action_format": "react",
+      "upstream_webshop_data_root": "data/shopping"
+    }
+  },
+  "task_specific": {
+    "task_category": "beauty",
+    "task_file_limit": 1,
+    "max_steps": 25,
+    "split_steps": true,
+    "resume": true
+  },
+  "output": {
+    "output_dir": "results/control_memory_boundary"
+  }
+}

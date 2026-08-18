@@ -27,6 +27,10 @@ def main() -> None:
 
     source = Path(__file__).with_name("control_boundary.py")
     shutil.copy2(source, target_dir / source.name)
+    config_dir = root / "configs" / "web_shopping_configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for config_name in ("control_raw-qwen25-7b.json", "control_boundary-qwen25-7b.json"):
+        shutil.copy2(Path(__file__).with_name(config_name), config_dir / config_name)
 
     init_path = target_dir / "__init__.py"
     init_text = init_path.read_text()
@@ -52,7 +56,7 @@ def main() -> None:
         '    "control_boundary": lambda: ControlBoundaryMemorySystem(mode="control"),',
     )
     server_path.write_text(server_text)
-    print(f"installed control_raw and control_boundary into {root}")
+    print(f"installed control_raw, control_boundary, and paired WebShop configs into {root}")
 
 
 if __name__ == "__main__":

@@ -40,3 +40,17 @@ export CONTROL_MEMORY_MAX_CONTEXT_CHARS=14000
 Run matched official tasks once with each backend. Start with WebShop because
 its official memory entry contains the full turn trace, final observation, and
 reward. Do not compare different task IDs or model settings across conditions.
+
+The installer also copies two matched Qwen2.5-7B configs. After following the
+official `setup_web_shopping.md` instructions and starting the environment and
+memory servers, run:
+
+```bash
+python run_shopping.py --config configs/web_shopping_configs/control_raw-qwen25-7b.json
+python run_shopping.py --config configs/web_shopping_configs/control_boundary-qwen25-7b.json
+```
+
+Both use the official `beauty` task category with `task_file_limit=1` as the
+first paired smoke. Expand only after both conditions complete on identical
+tasks and the interaction logs confirm that each task has prior rewarded
+episodes available for retrieval.
