@@ -46,6 +46,27 @@ Do not predict a future question and do not invent causal relations. Return only
 within {budget} tokens.""",
 }
 
+LEDGER_PROMPT = """Extract a query-agnostic GROUNDED STATE LEDGER from the historical session.
+The ledger is a machine-facing memory, not a prose summary. Preserve every concrete identifier,
+address, ID, number, date, location, preference, constraint, and current goal that could bind a
+future tool argument. NEVER replace a concrete value with a placeholder such as user_id,
+user_address, same_id, or an invented example. Track newer versus superseded values and retain
+source_id provenance. Use compact JSON Lines, one object per fact, with keys:
+key, value, value_type, source_id, temporal_order, status, supersedes.
+Use status=current|superseded|uncertain. Do not see or predict a future query. Do not invent facts.
+Return only JSON Lines within {budget} tokens."""
+
+DYNAMICS_PROMPT = """Extract query-agnostic ACTION-CONDITIONED DYNAMICS from the historical session.
+The grounded ledger below is immutable: do not rewrite, summarize, or replace its values.
+Record only relationships explicitly supported by observed turns/tool calls:
+1) action parameter -> grounded ledger key bindings;
+2) action preconditions;
+3) observed (pre-state, action) -> (post-state, outcome) transitions;
+4) failures, recovery rules, and success criteria.
+Use compact JSON Lines. Every line must include kind=binding|transition|failure|success and evidence
+source_id(s). If the history contains no supported dynamics, return an empty string. Never invent
+causal structure and never predict a future query. Return only JSON Lines within {budget} tokens."""
+
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as handle:
@@ -158,6 +179,7 @@ def metric_summary(rows: list[dict[str, Any]], condition: str) -> dict[str, floa
         "json_valid": statistics.fmean(v["json_valid"] for v in vals),
         "tool_name_accuracy": statistics.fmean(v["tool_name_correct"] for v in vals),
         "argument_accuracy": statistics.fmean(v["argument_accuracy"] for v in vals),
+        "gold_argument_surface_recall": statistics.fmean(v["gold_argument_surface_recall"] for v in vals),
         "exact_tool_call_accuracy": statistics.fmean(v["exact"] for v in vals),
         "mean_context_chars": statistics.fmean(v["context_chars"] for v in vals),
         "mean_latency_s": statistics.fmean(v["latency_s"] for v in vals),
@@ -170,6 +192,8 @@ def build_summary(rows: list[dict[str, Any]], conditions: list[str], seed: int) 
         out["conditions"][condition] = metric_summary(rows, condition)
     pairs = [("control", "state"), ("control", "summary"),
              ("control", "full_history"), ("state", "summary")]
+    pairs += [("control_nested", "ledger384"), ("control_nested", "ledger512"),
+              ("control_nested", "summary"), ("ledger512", "summary")]
     for left, right in pairs:
         if left not in conditions or right not in conditions:
             continue
@@ -202,6 +226,8 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--levels", default="L1,L2,L3,L4")
     parser.add_argument("--memory-tokens", type=int, default=512)
+    parser.add_argument("--ledger-base-tokens", type=int, default=384)
+    parser.add_argument("--dynamics-tokens", type=int, default=128)
     parser.add_argument("--answer-tokens", type=int, default=256)
     parser.add_argument("--max-history-chars", type=int, default=32000)
     parser.add_argument("--concurrency", type=int, default=8)
@@ -212,7 +238,7 @@ def main() -> None:
     args = parser.parse_args()
 
     conditions = [x.strip() for x in args.conditions.split(",") if x.strip()]
-    allowed = {"no_memory", "full_history", *MEMORY_PROMPTS}
+    allowed = {"no_memory", "full_history", "ledger384", "ledger512", "control_nested", *MEMORY_PROMPTS}
     unknown = set(conditions) - allowed
     if unknown:
         parser.error(f"unknown conditions: {sorted(unknown)}")
@@ -238,8 +264,11 @@ def main() -> None:
     cache_guard = threading.Lock()
     key_locks: dict[tuple[str, str], threading.Lock] = {}
 
-    def get_memory(session: dict[str, Any], mode: str) -> str:
-        key = (session["session_id"], mode)
+    def get_memory(session: dict[str, Any], mode: str, budget: int | None = None,
+                   immutable_ledger: str = "") -> str:
+        actual_budget = budget or args.memory_tokens
+        extra_digest = hashlib.sha256(immutable_ledger.encode()).hexdigest() if immutable_ledger else ""
+        key = (session["session_id"], f"{mode}:{actual_budget}:{extra_digest}")
         with cache_guard:
             if key in memory_cache:
                 return memory_cache[key]
@@ -252,18 +281,27 @@ def main() -> None:
                     return memory_cache[key]
             history = render_turns(session, args.max_history_chars)
             digest = hashlib.sha256(json.dumps({
-                "v": 1, "model": args.served_model, "mode": mode, "budget": args.memory_tokens,
-                "history": history,
+                "v": 2, "model": args.served_model, "mode": mode, "budget": actual_budget,
+                "history": history, "immutable_ledger": immutable_ledger,
             }, sort_keys=True).encode()).hexdigest()
             path = args.cache_dir / f"{digest}.json"
             if path.exists():
                 memory = json.loads(path.read_text())["memory"]
             else:
+                if mode == "ledger":
+                    instruction = LEDGER_PROMPT.format(budget=actual_budget)
+                elif mode == "dynamics":
+                    instruction = DYNAMICS_PROMPT.format(budget=actual_budget)
+                else:
+                    instruction = MEMORY_PROMPTS[mode].format(budget=actual_budget)
+                writer_input = "HISTORICAL SESSION (future query unavailable):\n" + history
+                if immutable_ledger:
+                    writer_input += "\n\nIMMUTABLE GROUNDED LEDGER:\n" + immutable_ledger
                 memory, latency = chat(
                     args.base_url, args.served_model,
-                    [{"role": "system", "content": MEMORY_PROMPTS[mode].format(budget=args.memory_tokens)},
-                     {"role": "user", "content": "HISTORICAL SESSION (future query unavailable):\n" + history}],
-                    args.memory_tokens, args.temperature, args.seed, args.timeout, args.retries,
+                    [{"role": "system", "content": instruction},
+                     {"role": "user", "content": writer_input}],
+                    actual_budget, args.temperature, args.seed, args.timeout, args.retries,
                 )
                 path.write_text(json.dumps({"memory": memory, "latency_s": latency}, ensure_ascii=False, indent=2))
             with cache_guard:
@@ -280,6 +318,11 @@ def main() -> None:
         selected = [session_by_id[sid] for sid in selected_ids]
         histories = [render_turns(s, args.max_history_chars) for s in selected]
         memories = {mode: [get_memory(s, mode) for s in selected] for mode in MEMORY_PROMPTS if mode in conditions}
+        needs_nested = any(c in conditions for c in ("ledger384", "ledger512", "control_nested"))
+        ledgers384 = [get_memory(s, "ledger", args.ledger_base_tokens) for s in selected] if needs_nested else []
+        ledgers512 = [get_memory(s, "ledger", args.memory_tokens) for s in selected] if "ledger512" in conditions else []
+        dynamics = ([get_memory(s, "dynamics", args.dynamics_tokens, ledger)
+                     for s, ledger in zip(selected, ledgers384)] if "control_nested" in conditions else [])
         gold = qa["tool_call"]
         row = {
             "qa_id": qa["qa_id"], "index": index, "level": qa["complexity_metadata"]["level"],
@@ -291,6 +334,16 @@ def main() -> None:
                 context = "(No historical memory supplied.)"
             elif condition == "full_history":
                 context = "\n\n===== NEXT SESSION =====\n\n".join(histories)
+            elif condition == "ledger384":
+                context = "\n\n===== NEXT SESSION LEDGER =====\n\n".join(ledgers384)
+            elif condition == "ledger512":
+                context = "\n\n===== NEXT SESSION LEDGER =====\n\n".join(ledgers512)
+            elif condition == "control_nested":
+                parts = []
+                for ledger, dyn in zip(ledgers384, dynamics):
+                    parts.append("GROUNDED LEDGER (immutable):\n" + ledger +
+                                 "\n\nACTION-CONDITIONED DYNAMICS (additive):\n" + (dyn or "(none observed)"))
+                context = "\n\n===== NEXT SESSION CONTROL MEMORY =====\n\n".join(parts)
             else:
                 context = "\n\n===== NEXT SESSION MEMORY =====\n\n".join(memories[condition])
             system = """You select a tool call using the supplied past context and current request.
@@ -313,11 +366,25 @@ Use only the target tool schema. Preserve exact argument types."""
             arg_acc = sum(arg_hits) / len(arg_hits) if arg_hits else float(pred_args == expected)
             name_ok = equal_value(pred.get("name"), gold["name"])
             exact = name_ok and set(pred_args) == set(expected) and all(arg_hits)
+            gold_scalars = []
+            def collect_scalars(value: Any) -> None:
+                if isinstance(value, dict):
+                    for nested in value.values(): collect_scalars(nested)
+                elif isinstance(value, list):
+                    for nested in value: collect_scalars(nested)
+                elif value is not None:
+                    gold_scalars.append(str(value).lower())
+            collect_scalars(expected)
+            surface_recall = (sum(v in context.lower() for v in gold_scalars) / len(gold_scalars)
+                              if gold_scalars else 1.0)
             row["conditions"][condition] = {
                 "prediction": pred, "raw": raw, "json_valid": valid,
                 "tool_name_correct": float(name_ok), "argument_accuracy": arg_acc,
                 "exact": float(exact), "context_chars": len(context), "latency_s": latency,
+                "gold_argument_surface_recall": surface_recall,
             }
+            if condition in {"summary", "state", "control", "ledger384", "ledger512", "control_nested"}:
+                row["conditions"][condition]["memory_text"] = context
         return index, row
 
     pending = [(i + args.start, q) for i, q in enumerate(qas) if q["qa_id"] not in completed]
@@ -337,6 +404,7 @@ Use only the target tool schema. Preserve exact argument types."""
     summary.update({
         "protocol": "query-unknown per-session memory; paired deterministic executor",
         "memory_tokens": args.memory_tokens, "model": args.served_model,
+        "ledger_base_tokens": args.ledger_base_tokens, "dynamics_tokens": args.dynamics_tokens,
         "selection": {"start": args.start, "requested": args.num_samples, "levels": sorted(levels)},
     })
     summary_path = Path(str(args.output) + ".summary.json")

@@ -72,3 +72,25 @@ L2/L3/L4 rather than only L1. If control and state tie, this benchmark does not
 identify action-conditioned structure; move the same query-unknown protocol to
 workflow/gotcha subsets of LongMemEval-V2 or MemoryArena rather than training on
 an unsupported objective.
+
+## V2: nested grounded-ledger ablation
+
+The first prompt-only pilot falsified the original `control` condition: it
+replaced exact addresses/IDs with placeholders and was significantly worse than
+`state` on the hard subset. V2 therefore makes the causal comparison nested.
+
+- `ledger384`: shared 384-token typed, provenance-bearing grounded ledger.
+- `ledger512`: 512-token ledger controlling for total memory budget.
+- `control_nested`: the exact same cached `ledger384` plus 128 tokens of
+  separately extracted, evidence-bound action dynamics.
+
+The core comparisons are `control_nested-ledger384` (additive value) and
+`control_nested-ledger512` (matched total budget). The output now stores memory
+text for audit and reports gold-argument surface recall to separate information
+loss from executor failure.
+
+```bash
+export WORK_ROOT=/data/cw/memagent_work
+export NUM_SAMPLES=16 LEVELS=L1,L2,L3,L4
+bash experiments/control_memory/run_mem2act_nested_control.sh
+```
