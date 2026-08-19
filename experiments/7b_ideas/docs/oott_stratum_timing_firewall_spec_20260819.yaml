@@ -1,0 +1,34 @@
+schema_version: oott-stratum-timing-firewall-v1
+status: freeze_before_T200_OOTT_analysis
+purpose: prevent_postoutcome_or_postpolicy_strata_from_being_misread_as_baseline_effect_modifiers
+classes:
+  P:
+    meaning: pre_policy_pre_outcome_frozen
+    allowed_claims: [effect_modifier_screening, baseline_heterogeneity, paired_transport_by_frozen_stratum]
+  O:
+    meaning: policy_induced_occupancy_descriptor
+    allowed_claims: [occupancy_distribution_shift, common_support_description, selected_post_policy_description]
+    require_unstratified_total_contrast: true
+    forbid: [causal_effect_modifier, baseline_confounder_adjustment, causal_mediator, occupancy_causes_degradation]
+  Y:
+    meaning: final_outcome_or_endpoint_defined
+    allowed_claims: [scorer_calibration, error_type_decomposition, blinded_error_analysis]
+    route: RED_calibration_error_analysis
+    forbid: [occupancy_localization, effect_modifier, causal_subgroup, policy_support]
+automatic_classification:
+  depends_on_gold_reward_or_final_endpoint: Y
+  else_depends_on_compared_policy_output: O
+  else_verified_frozen_before_policy: P
+  unknown_provenance: reject
+o3_revision:
+  O3a: {name: pre_outcome_transport_heterogeneity, strata: P_only}
+  O3b:
+    name: induced_occupancy_support_map
+    strata: O_only
+    require: [cell_probability_by_checkpoint_regime, common_support, total_unstratified_contrast, coverage_shift]
+    wording: descriptive_not_causal
+manifest:
+  required_before_any_stratum_run: true
+  require_frozen_hash: true
+validator: validate_oott_stratum_timing_20260819.py
+resource: {new_rollout: false, new_training: false, unlocks_training: false, changes_completion_to_200: false}
