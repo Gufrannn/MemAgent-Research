@@ -1,0 +1,35 @@
+schema_version: single-mechanism-extension-router-v1
+purpose: prevent_posthoc_selection_among_mechanism_extensions
+adjudicator: adjudicate_single_mechanism_extension_20260819.py
+training_authorized: false
+default_current_status: PENDING_NO_EXTENSION
+candidates: [CWI, SMIC_HMIC, PORTABILITY, SUCCESSIVE_REFINEMENT]
+allowed_inputs_only: [C0_execution, C1_serialization, C2_utilization, C3_structure, C4_write_and_obligations, budget_frontier_pre_extension, claim_need_frozen_pre_extension, construct_only_yield_and_preflight]
+forbidden_router_inputs: [any_candidate_extension_effect, candidate_primary_endpoint, checkpoint_winner_status, narrative_preference_after_outcome, p_value_from_any_candidate_pilot]
+eligibility:
+  CWI:
+    require: [serialization_pass, utilization_pass, two_distinct_jointly_necessary_support_writes, A_readable_before_B, B_write_responsive, first_failure_after_closing_support, cap_not_primary_explanation]
+    contraindicate: [single_write_unusable, unreliable_A_or_B_probe, budget_only_bottleneck]
+  SMIC_HMIC:
+    require: [serialization_pass, utilization_pass, construct_valid, matched_semantic_history_and_memory_interventions, local_target_readable, nonlocal_or_cascade_is_unresolved, CWI_signature_false]
+    contraindicate: [string_diff_only, semantic_unit_invalid, requires_database_or_gold_parser_engineering]
+  PORTABILITY:
+    require: [same_reader_tetrad_utility_pass, canonical_competence_pass, finite_reader_claim_needed_pre_extension, at_least_two_shareable_reader_protocols, private_convention_is_unresolved]
+    contraindicate: [one_competent_reader, reader_specific_template_rewrite, selected_from_checkpoint_score]
+  SUCCESSIVE_REFINEMENT:
+    require: [budget_frontier_cap_separation, frontier_behavior_SESOI, first_support_before_switch_and_not_repeated, second_support_after_switch, canonical_first_support_readable, rescue_construct_valid, budget_path_is_unresolved]
+    contraindicate: [low_budget_not_binding, support_repeated, prompt_or_compute_only_difference]
+decision:
+  exactly_one_true: SELECT_ONE
+  zero_true_with_pending: PENDING_NO_EXTENSION
+  zero_true_without_pending: NO_MECHANISM_EXTENSION
+  more_than_one_true: AMBIGUOUS_NO_EXTENSION
+tie_resolution:
+  candidate_effect_pilot: forbidden
+  construct_only_discriminator: allowed
+  require_new_manifest_after_discriminator: true
+reporting:
+  unselected_candidates_must_not_run: true
+  negative_selected_result_switches_to_runner_up: false
+  portability_CWRTD_reader_method_share_one_data_family: true
+unlocks: {method_training: false, step400: false, C256: false}

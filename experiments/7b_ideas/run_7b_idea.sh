@@ -18,6 +18,11 @@ IDEA_EVIDENCE_LEDGER=${IDEA_EVIDENCE_LEDGER:-}
 IDEA_RUN_LEDGER=${IDEA_RUN_LEDGER:-$WORK_ROOT/idea_run_ledger.jsonl}
 IDEA_REWARD_AUDIT=${IDEA_REWARD_AUDIT:-$OUT/reward_tuple_audit.jsonl}
 
+if [[ ${MECHANISM_EXTENSION_REQUEST:-none} != none ]]; then
+  echo "PENDING_NO_EXTENSION: training launcher never starts mechanism extensions; run the outcome-blind extension adjudicator first" >&2
+  exit 70
+fi
+
 [[ "$MODEL" == *Qwen2.5-7B-Instruct* ]] || { echo "Only Qwen2.5-7B-Instruct is supported" >&2; exit 60; }
 [[ "$N_GPUS" -eq 8 ]] || { echo "Default scientific target is one node with 8 H20 GPUs; override is smoke-only" >&2; [[ ${ALLOW_SMOKE_GPU_OVERRIDE:-0} == 1 ]] || exit 61; }
 [[ "$PHASE" == fresh2 || "$PHASE" == resume3 || "$PHASE" == extended ]] || { echo "PHASE must be fresh2, resume3, or extended" >&2; exit 62; }
