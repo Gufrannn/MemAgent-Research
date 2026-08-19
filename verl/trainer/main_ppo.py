@@ -16,6 +16,7 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 """
 
 import os
+from functools import partial
 
 import hydra
 import ray
@@ -54,10 +55,7 @@ def get_custom_reward_fn(config):
 
     reward_kwargs = dict(reward_fn_config.get("reward_kwargs", {}))
 
-    def wrapped_fn(*args, **kwargs):
-        return raw_fn(*args, **kwargs, **reward_kwargs)
-
-    return wrapped_fn
+    return partial(raw_fn, **reward_kwargs) if reward_kwargs else raw_fn
 
 
 @hydra.main(config_path="config", config_name="ppo_trainer", version_base=None)

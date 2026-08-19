@@ -18,6 +18,8 @@ The input is a parquet file that contains N generated sequences and (optional) t
 """
 
 from collections import defaultdict
+from functools import partial
+import os
 
 import hydra
 import numpy as np
@@ -30,7 +32,6 @@ from verl.utils.fs import copy_to_local
 
 def get_custom_reward_fn(config):
     import importlib.util
-    import os
     import sys
 
     reward_fn_config = config.get("custom_reward_function") or {}
@@ -58,10 +59,7 @@ def get_custom_reward_fn(config):
 
     reward_kwargs = dict(reward_fn_config.get("reward_kwargs", {}))
 
-    def wrapped_fn(*args, **kwargs):
-        return raw_fn(*args, **kwargs, **reward_kwargs)
-
-    return wrapped_fn
+    return partial(raw_fn, **reward_kwargs) if reward_kwargs else raw_fn
 
 
 @ray.remote

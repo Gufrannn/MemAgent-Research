@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from functools import partial
 
 import ray
 
@@ -48,10 +49,10 @@ def get_custom_reward_fn(config):
 
     reward_kwargs = dict(reward_fn_config.get("reward_kwargs", {}))
 
-    def wrapped_fn(*args, **kwargs):
-        return raw_fn(*args, **kwargs, **reward_kwargs)
-
-    return wrapped_fn
+    # ThreadRewardManager forwards this callable through a Ray actor into a
+    # ProcessPoolExecutor. A nested closure is not serializable by Python's
+    # standard multiprocessing pickler; functools.partial is.
+    return partial(raw_fn, **reward_kwargs) if reward_kwargs else raw_fn
 
 
 def load_reward_manager(config, tokenizer, num_examine, **reward_kwargs):
