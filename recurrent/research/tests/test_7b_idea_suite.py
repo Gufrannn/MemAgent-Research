@@ -27,9 +27,9 @@ def eligible_row():
             "status": "eligible", "gates": gates,
             "shape_a": {"t0_formula": "P2_raw^T0 vs P2_raw^T0+D_pre^audit", "t1_leaks_into_t0": False},
             "shape_a_contract": {"independent_unit": "stable_example_id", "max_independent_n": 128,
-              "primary_representation": "paired_tau", "stacked_role": "implementation_consistency_audit_only",
+              "primary_representation": "paired_H_H", "stacked_role": "implementation_consistency_audit_only",
               "count_paired_and_stacked_as_one": True, "select_more_significant_representation": False,
-              "b_raw": "tau~P2_raw_T0", "b_struct": "tau~P2_raw_T0+D_star", "d_star_dimensions": 1,
+              "b_raw": "H_H~P2_raw_T0", "b_struct": "H_H~P2_raw_T0+D_star", "d_star_dimensions": 1,
               "outer_grouped_folds": 4, "model_capacity": "low_capacity_linear", "harm_events": 19,
               "multivariable_logistic_primary": False, "auroc_primary": False,
               "arms_increase_independent_n": False, "turns_increase_independent_n": False,
@@ -150,25 +150,61 @@ def test_shape_a_full_transcript_semantic_is_inductive_bias(tmp_path):
 def test_estimand_equivalence_auditor_and_fail_closed_guards():
     path = Path(__file__).parents[3] / "experiments/7b_ideas/analysis/audit_shapeA_estimand_equivalence_20260819.py"
     spec = importlib.util.spec_from_file_location("shape_a_audit", path); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    def row(stable,write,d,count,**updates):
+        value={"stable_example_id":stable,"checkpoint_hash":"a"*64,"write_id":write,
+          "prebranch_eligibility_manifest_hash":"b"*64,"target_write_count":count,
+          "measurement_available":True,"measurement_exclusion_reason":None,"eligible_write_count":count,
+          "eligible":True,"attempted":True,"factual_commit_complete":True,"noop_retain_complete":True,
+          "pair_qualified":True,"failure_reason":None,"shapeA_stage":"audit32","experiment_name":"shape-a-test",
+          "turn_type":"update","required_component_pattern":"all_required","required_components_complete":True,
+          "joint_null_stratum_yield_sufficient":True,"calibration_stratum_key":"update|all_required",
+          "dstar_calibration_manifest_hash":"c"*64,"dstar_raw":d,"joint_null_median":0.0,
+          "joint_null_mad":1.0,"d_star":max(-5,min(5,d)),"y_commit":1+d,"y_retain":2+3*d}
+        value.update(updates);return value
     rows=[]
     for i,writes in enumerate((1,2,3,1,2,3,1,2)):
         for j in range(writes):
-            d=float(i)+j/10;rows.append({"stable_example_id":f"e{i}","write_id":f"w{j}",
-              "d_star":d,"y_commit":1+i+j,"y_retain":2+3*d})
+            d=float(i)/2+j/10;rows.append(row(f"e{i}",f"w{j}",d,writes))
     result = module.audit(rows)
     assert result["algebraically_equivalent"] and not result["claim_authorized"] and not result["p_values_emitted"]
     assert result["independent_n"]==8 and result["write_rows"]==15
-    assert result["weight"]=="1/m_i" and not result["stacked_is_second_evidence"]
+    assert result["weight"]=="1/m_i^elig" and not result["stacked_is_second_evidence"]
+    assert result["row_key"]==["stable_example_id","checkpoint_hash","write_id"]
+    assert result["outcome"]=="H_H=y_retain-y_commit" and not result["tau_H_used_as_primary"]
     with pytest.raises(ValueError, match="unique"): module.audit(rows + [rows[0]])
-    too_many=[{"stable_example_id":f"x{i}","write_id":"w0","d_star":i,
-      "y_commit":0,"y_retain":i+1} for i in range(129)]
+    too_many=[row(f"x{i}","w0",(i%9)/2,1) for i in range(129)]
     with pytest.raises(ValueError, match=r"\[2,128\]"): module.audit(too_many)
     with pytest.raises(ValueError, match="rank deficient"):
-        module.audit([{**row, "d_star": 1} for row in rows])
-    with pytest.raises(ValueError,match="write_id"):module.audit([{k:v for k,v in row.items() if k!="write_id"} for row in rows])
-    with pytest.raises(ValueError,match="row-level independence/HC3"):module.audit([dict(row,row_level_hc3=True) for row in rows])
-    oof=module.aggregate_oof_loss([dict(row,oof_loss=float(index)) for index,row in enumerate(rows)])
-    assert oof["independent_n"]==8 and oof["aggregation"]=="within_example_1_over_m_then_across_examples"
+        module.audit([{**item,"dstar_raw":1,"d_star":1} for item in rows])
+    with pytest.raises(ValueError,match="ledger fields"):module.audit([{k:v for k,v in item.items() if k!="write_id"} for item in rows])
+    with pytest.raises(ValueError,match="row-level independence/HC3"):module.audit([dict(item,row_level_hc3=True) for item in rows])
+    oof=module.aggregate_oof_loss([dict(item,oof_loss=float(index)) for index,item in enumerate(rows)])
+    assert oof["independent_n"]==8 and oof["aggregation"]=="within_example_1_over_m_elig_then_across_examples"
+
+    missing=[dict(item) for item in rows];missing[2].update({"noop_retain_complete":False,"pair_qualified":False,
+      "failure_reason":"retain_endpoint_failed"});missing[2].pop("y_retain")
+    diagnostic=module.audit(missing)
+    assert diagnostic["status"]=="CONSTRUCTION_DIAGNOSTIC_ONLY"
+    assert diagnostic["eligible_weight_coverage"]<1 and not diagnostic["missing_weight_reallocated"]
+    assert diagnostic["observed_postbranch_missing_weight"]>0
+    with pytest.raises(ValueError,match="SHAPEA_PRIMARY_COVERAGE_FAIL"):module.audit(missing,require_primary=True)
+
+    target=[dict(item) for item in rows]
+    target[0]["target_write_count"]=2
+    target.append(row("e0","w_unmeasured",0.0,2,measurement_available=False,measurement_exclusion_reason="required_component_missing",
+      eligible_write_count=1,eligible=False,attempted=False,factual_commit_complete=False,noop_retain_complete=False,
+      pair_qualified=False,failure_reason=None,required_components_complete=False,joint_null_stratum_yield_sufficient=False))
+    for key in ("dstar_raw","joint_null_median","joint_null_mad","d_star","y_commit","y_retain"):
+        target[-1].pop(key,None)
+    measured=module.audit(target)
+    assert measured["measurement_availability_rate_R1_over_target"]<1
+    assert measured["paired_closure_coverage_R1"]==1 and measured["measurement_R0_exclusion_ledger"][0]["arm_failure"] is False
+    bad_components=[dict(item) for item in rows];bad_components[0]["required_components_complete"]=False
+    with pytest.raises(ValueError,match="R=1 eligible write requires complete components"):
+        module.audit(bad_components)
+    wrong_d=[dict(item) for item in rows];wrong_d[2]["d_star"]=0.0
+    with pytest.raises(ValueError,match="continuous joint-null median/MAD"):
+        module.audit(wrong_d)
 
 
 def test_outcome_blind_provenance_preflight_four_classes_and_mismatch():
@@ -452,12 +488,16 @@ def test_shape_a_horizon_primary_freeze_and_selection_failures():
     assert result["status"]=="SHAPEA_EH_PRIMARY_FROZEN" and not result["outcomes_read"]
     for key,value in (("estimand_mode","E0"),("endpoint","terminal_EM"),
       ("b0_candidate_descendants",True),("horizon_rows_increase_n",True),
+      ("legacy_valid_n_96_rescue",True),("dstar_truncate_at_zero",True),
+      ("legacy_max0_w_minus_q95",True),("mixed_tau_H_and_H_H_primary",True),
       ("endpoint_estimand_subset_selection_after_results",True),
       ("delete_negative_or_invalid_rows_after_results",True)):
         bad=dict(config);bad[key]=value
         with pytest.raises(ValueError,match="HORIZON_ENDPOINT_SELECTION_INVALID"):module.validate(bad)
     bad=dict(config);bad["f1_commit"]=.8
     with pytest.raises(ValueError,match="HORIZON_ENDPOINT_SELECTION_INVALID"):module.validate(bad)
+    bad=dict(config);bad["b0_covariates"]=list(config["b0_covariates"])+["candidate_length"]
+    with pytest.raises(ValueError,match="b0_postbranch"):module.validate(bad)
     launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
     assert "SHAPEA_HORIZON_PRIMARY_MANIFEST" in launcher
 

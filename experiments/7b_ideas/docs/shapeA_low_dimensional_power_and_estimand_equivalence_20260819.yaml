@@ -1,15 +1,27 @@
 version: 2026-08-19
 independent_unit: stable_example_id
+analysis_row_key: [stable_example_id, checkpoint_hash, write_id]
 max_independent_n: 128
 repeats_do_not_increase_n: [arms, turns, seeds, tokens]
-primary_representation: paired_tau
+primary_representation: paired_H_H
 stacked_role: implementation_consistency_audit_only
 count_paired_and_stacked_as_one: true
 select_more_significant_representation: false
 primary_models:
-  b_raw: "tau~P2_raw_T0"
-  b_struct: "tau~P2_raw_T0+D_star"
+  b_raw: "H_H~P2_raw_T0"
+  b_struct: "H_H~P2_raw_T0+D_star"
 d_star_dimensions: 1
+d_star_direction: higher_is_worse
+d_star_calibration: frozen_turn_type_x_required_component_pattern_joint_null_median_mad
+d_star_clip: [-5, 5]
+d_star_truncate_at_zero: false
+q95_role: secondary_anomaly_flag_only
+denominators:
+  target: outcome_blind_turn_selection_manifest
+  paired: prebranch_R1_measurable_stratum
+  paired_weight: 1/m_i^elig
+  missing_weight_reallocated: false
+  report_separately: true
 outer_grouped_folds: 4
 model_capacity: low_capacity_linear
 rare_harm_rule:

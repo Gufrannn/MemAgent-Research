@@ -31,9 +31,9 @@ NCR_GATES = (
 def validate_shape_a_contract(contract: dict[str, Any]) -> None:
     expected = {
         "independent_unit": "stable_example_id", "max_independent_n": 128,
-        "primary_representation": "paired_tau", "stacked_role": "implementation_consistency_audit_only",
+        "primary_representation": "paired_H_H", "stacked_role": "implementation_consistency_audit_only",
         "count_paired_and_stacked_as_one": True, "select_more_significant_representation": False,
-        "b_raw": "tau~P2_raw_T0", "b_struct": "tau~P2_raw_T0+D_star",
+        "b_raw": "H_H~P2_raw_T0", "b_struct": "H_H~P2_raw_T0+D_star",
         "d_star_dimensions": 1, "outer_grouped_folds": 4, "model_capacity": "low_capacity_linear",
     }
     wrong = {key: (contract.get(key), value) for key, value in expected.items() if contract.get(key) != value}
