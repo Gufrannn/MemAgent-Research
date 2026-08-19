@@ -16,7 +16,9 @@ The small Gate A run defaults to the deterministic `naive` reward manager so
 that it tests the training/checkpoint path rather than multiprocessing reward
 infrastructure. Set `REWARD_MANAGER=thread` for a separate throughput check.
 
-The launcher supports explicit 2/4/6/8-GPU allocations with matching FSDP size.
+The launcher supports explicit 1/2/4/6/8-GPU allocations with matching FSDP size.
+A 1-GPU allocation is intended only for sub-billion-parameter infrastructure
+debugging before transferring fixes back to the 7B branch.
 A 2-GPU H20 run is an infrastructure smoke only; it is not comparable to the
 official training shape or admissible as a method/baseline performance result.
 
