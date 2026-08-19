@@ -18,6 +18,7 @@ PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-4}
 N_GPUS=${N_GPUS:-2}
 FSDP_SIZE=${FSDP_SIZE:-$N_GPUS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.55}
+REWARD_MANAGER=${REWARD_MANAGER:-naive}
 OUT=$WORK_ROOT/logs/memory_agent/$EXP
 
 case "$PHASE" in
@@ -101,7 +102,7 @@ export NCCL_DEBUG=WARN
   +data.context_key=context \
   data.max_prompt_length=8192 \
   data.max_response_length=1024 \
-  reward_model.reward_manager=thread \
+  reward_model.reward_manager="$REWARD_MANAGER" \
   custom_reward_function.path="$CODE/recurrent/research/hotpotqa_dense_reward.py" \
   custom_reward_function.name=compute_score \
   +custom_reward_function.reward_kwargs.f1_weight=0.95 \
