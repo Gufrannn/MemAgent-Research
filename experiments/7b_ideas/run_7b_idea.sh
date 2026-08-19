@@ -17,6 +17,15 @@ OUT=${OUT:-$WORK_ROOT/$EXP}
 IDEA_EVIDENCE_LEDGER=${IDEA_EVIDENCE_LEDGER:-}
 IDEA_RUN_LEDGER=${IDEA_RUN_LEDGER:-$WORK_ROOT/idea_run_ledger.jsonl}
 IDEA_REWARD_AUDIT=${IDEA_REWARD_AUDIT:-$OUT/reward_tuple_audit.jsonl}
+EXACT_NOOP_V2_MANIFEST=${EXACT_NOOP_V2_MANIFEST:-}
+STOP_RULE_MANIFEST=${STOP_RULE_MANIFEST:-}
+
+if [[ ${W4_GRADIENT_PILOT_REQUEST:-0} == 1 || ${W4_OPTIMIZER_STEPS:-0} != 0 ]]; then
+  [[ -n ${IDEA_EVIDENCE_LEDGER:-} && -f ${IDEA_EVIDENCE_LEDGER:-/nonexistent} ]] || { echo "PENDING_EVIDENCE_NO_SELECTION: W4 request requires evidence ledger" >&2; exit 77; }
+  [[ -n ${MECHANISM_EXTENSION_DECISION:-} && -f ${MECHANISM_EXTENSION_DECISION:-/nonexistent} ]] || { echo "PENDING_NO_EXTENSION: W4 request requires single-extension router decision" >&2; exit 78; }
+  echo "W4_NO_GO: gradient pilot and optimizer steps are not currently authorized; highest_level=W3" >&2
+  exit 79
+fi
 
 if [[ ${MEMORY_R2_BASELINE_REQUEST:-0} == 1 ]]; then
   [[ -n ${IDEA_EVIDENCE_LEDGER:-} && -f ${IDEA_EVIDENCE_LEDGER:-/nonexistent} ]] || { echo "PENDING_EVIDENCE_NO_SELECTION: Memory-R2-like request requires evidence ledger" >&2; exit 71; }
@@ -41,12 +50,15 @@ if [[ "$IDEA_ARM" != qa_only_original ]]; then
   : "${IDEA_REWARD_MANIFEST:?Non-Original arms require IDEA_REWARD_MANIFEST}"
   : "${IDEA_MANIFEST_HASH:?Non-Original arms require IDEA_MANIFEST_HASH}"
   [[ ${#IDEA_MANIFEST_HASH} -eq 64 ]] || { echo "NO_METHOD: IDEA_MANIFEST_HASH must be SHA-256" >&2; exit 67; }
+  [[ -n "$EXACT_NOOP_V2_MANIFEST" && -f "$EXACT_NOOP_V2_MANIFEST" ]] || { echo "E_QUALIFICATION_FAIL: Non-Original arms require EXACT_NOOP_V2_MANIFEST; legacy replay is ineligible" >&2; exit 75; }
+  PYTHONPATH="$CODE${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" "$SCRIPT_DIR/analysis/validate_exact_noop_v2_manifest_20260819.py" --manifest "$EXACT_NOOP_V2_MANIFEST" \
+    || { echo "E_QUALIFICATION_FAIL: exact-NOOP v2 replay preflight failed" >&2; exit 76; }
   if [[ "$IDEA_ARM" == ncr_certified_routing || "$IDEA_ARM" == generic_frozen_judge_tournament || "$IDEA_ARM" == information_matched_raw_judge ]]; then
     : "${NCR_FROZEN_READOUT_HASH:?This arm requires a frozen readout SHA-256}"
     [[ ${#NCR_FROZEN_READOUT_HASH} -eq 64 ]] || { echo "NO_METHOD: frozen readout hash must be SHA-256" >&2; exit 68; }
   fi
 fi
-export IDEA_ARM IDEA_EVIDENCE_LEDGER IDEA_REWARD_MANIFEST IDEA_REWARD_AUDIT IDEA_MANIFEST_HASH NCR_FROZEN_READOUT_HASH
+export IDEA_ARM IDEA_EVIDENCE_LEDGER IDEA_REWARD_MANIFEST IDEA_REWARD_AUDIT IDEA_MANIFEST_HASH NCR_FROZEN_READOUT_HASH EXACT_NOOP_V2_MANIFEST
 cd "$CODE"
 PREFLIGHT_ARGS=(--arm "$IDEA_ARM")
 [[ -z "$IDEA_EVIDENCE_LEDGER" ]] || PREFLIGHT_ARGS+=(--evidence-ledger "$IDEA_EVIDENCE_LEDGER")
@@ -63,6 +75,9 @@ if [[ "$PHASE" == resume3 ]]; then
   RESUME_ARGS=(trainer.resume_mode=resume_path trainer.resume_from_path="$RESUME_FROM")
 elif [[ "$PHASE" == extended ]]; then
   [[ ${TERMINAL_RULE_FROZEN:-false} == true ]] || { echo "Extended anchors require TERMINAL_RULE_FROZEN=true before metric unblinding" >&2; exit 69; }
+  [[ -n "$STOP_RULE_MANIFEST" && -f "$STOP_RULE_MANIFEST" ]] || { echo "NO_METHOD: extended anchors require frozen adaptive stop v4 manifest" >&2; exit 80; }
+  "$PYTHON" "$SCRIPT_DIR/analysis/validate_adaptive_stop_rule_v4_20260819.py" --manifest "$STOP_RULE_MANIFEST" \
+    || { echo "NO_METHOD: adaptive stop v4 preflight failed" >&2; exit 81; }
   TOTAL_STEPS=${EXTENDED_STEPS:?Set EXTENDED_STEPS explicitly}; [[ "$TOTAL_STEPS" =~ ^(25|50|100|200)$ ]] || { echo "Allowed frozen anchors: 25/50/100/200; never automatic 400" >&2; exit 66; }
 fi
 

@@ -27,7 +27,7 @@ def validate(rows):
 
 def validate_gate_ledger(value):
     required = {"schema_version": "paired-write-harm-gate-v1", "shapeA_v8_primary": "pass",
-      "exact_paired_replay": "pass", "threshold_frozen_outside_confirmation": True,
+      "exact_paired_replay": "exact_noop_v2_qualified", "threshold_frozen_outside_confirmation": True,
       "adds_rollout": False, "adds_training": False}
     wrong = {key: (value.get(key), expected) for key, expected in required.items() if value.get(key) != expected}
     hashes = ("shapeA_evidence_hash", "paired_replay_hash", "threshold_manifest_hash")
@@ -84,7 +84,7 @@ def self_test():
     except ValueError as exc: assert "duplicate" in str(exc)
     else: raise AssertionError("duplicate_id_not_rejected")
     ledger = {"schema_version": "paired-write-harm-gate-v1", "shapeA_v8_primary": "pass",
-      "shapeA_evidence_hash": "a", "exact_paired_replay": "pass", "paired_replay_hash": "b",
+      "shapeA_evidence_hash": "a", "exact_paired_replay": "exact_noop_v2_qualified", "paired_replay_hash": "b",
       "threshold_frozen_outside_confirmation": True, "threshold_manifest_hash": "c",
       "adds_rollout": False, "adds_training": False}
     assert validate_gate_ledger(ledger)

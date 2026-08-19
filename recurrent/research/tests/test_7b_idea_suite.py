@@ -7,6 +7,9 @@ import importlib.util
 
 from recurrent.research.cerc_native_credit import validate_native_credit
 from recurrent.research.idea_admissibility import ELIGIBLE, NO_METHOD, PENDING, adjudicate, require_arm
+from recurrent.research.exact_noop_v2 import (E_LABEL,H_LABEL,P_LABEL,ExactNoopV2ReplayBuilder,
+    build_arm_record,classify_estimand,materialize_proposal)
+from recurrent.research.counterfactual_gradient_witness import capture_w4_event
 from recurrent.research.ncr_certified_routing import generic_auxiliary, route_ncr
 from recurrent.research.typed_boundary_prompt import ARMS, build_prompts
 
@@ -19,6 +22,7 @@ def eligible_row():
         "beats_information_matched_raw_judge", "beats_generic_tie_rescue")}
     gates.update({"himpo_non_equivalence": True, "himpo_like_baseline_matched": True})
     gates.update({"memory_r2_non_equivalence": True, "memory_r2_like_baseline_matched": True})
+    gates["exact_noop_v2_qualified"] = True
     return {"event_id": "e1", "timestamp": "2026-08-19T00:00:00Z", "candidate": "ncr_certified_routing",
             "status": "eligible", "gates": gates,
             "shape_a": {"t0_formula": "P2_raw^T0 vs P2_raw^T0+D_pre^audit", "t1_leaks_into_t0": False},
@@ -326,3 +330,171 @@ def test_memory_r2_collision_and_dual_launcher_firewall():
     assert "MEMORY_R2_BASELINE_REQUEST" in launcher
     assert "IDEA_EVIDENCE_LEDGER" in launcher and "MECHANISM_EXTENSION_DECISION" in launcher
     assert "LoGo-GRPO implementation and training are not authorized" in launcher
+
+
+def _e_proposal():
+    return materialize_proposal(stable_id="e1",turn=2,upstream_state_hash="a"*64,
+      candidate_token_ids=[10,20],suffix_hash="b"*64,writer_seed=7,
+      reader_seed_or_coupling_id="coupled-reader-1",endpoint_version="em-v1",
+      old_memory_token_hash="c"*64)
+
+
+def _exact_noop_validator():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_exact_noop_v2_manifest_20260819.py"
+    spec=importlib.util.spec_from_file_location("exact_noop_v2_validator",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def test_p_h_e_estimands_are_mutually_exclusive_and_not_selected_by_outcome():
+    assert classify_estimand({"same_anchor_policy_rerollout":True})==P_LABEL
+    assert classify_estimand({"teacher_forced_updated_vs_old_target_answerability":True})==H_LABEL
+    assert classify_estimand({"same_materialized_candidate":True,"shared_suffix_real_endpoint":True,
+      "commit_retain_only_intervention":True})==E_LABEL
+    with pytest.raises(ValueError,match="mutually exclusive"):
+        classify_estimand({"same_anchor_policy_rerollout":True,
+          "teacher_forced_updated_vs_old_target_answerability":True})
+
+
+def test_exact_noop_v2_materializes_once_and_never_reruns_writer():
+    builder=ExactNoopV2ReplayBuilder(_e_proposal())
+    commit=builder.record_endpoint(arm="commit",output_token_ids=[1],endpoint_value=1.0)
+    retain=builder.record_endpoint(arm="retain",output_token_ids=[2],endpoint_value=0.0)
+    assert commit["candidate_memory_token_hash"]==retain["candidate_memory_token_hash"]
+    assert commit["loaded_memory_token_hash"]==commit["candidate_memory_token_hash"]
+    assert retain["loaded_memory_token_hash"]!=retain["candidate_memory_token_hash"]
+    assert len(builder.complete_pair())==2
+    with pytest.raises(ValueError,match="no last-write-wins"):
+        builder.record_endpoint(arm="commit",output_token_ids=[3],endpoint_value=.5)
+    with pytest.raises(ValueError,match="writer ran"):
+        ExactNoopV2ReplayBuilder(_e_proposal()).record_endpoint(
+          arm="commit",output_token_ids=[1],endpoint_value=1,writer_ran=True)
+
+
+def test_exact_noop_v2_join_fails_closed_on_duplicates_missing_and_pair_mismatch():
+    module=_exact_noop_validator();proposal=_e_proposal()
+    rows=[build_arm_record(proposal,arm="commit",output_token_ids=[1],endpoint_value=1),
+      build_arm_record(proposal,arm="retain",output_token_ids=[2],endpoint_value=0)]
+    result=module.validate(rows)
+    assert result["status"]=="E_QUALIFIED" and result["pair_count"]==1
+    assert not result["state_level_writer_policy_risk_identified"]
+    assert not result["training_authorized"] and not result["select_best_estimand"]
+    invalid=[rows+[dict(rows[0])],[{k:v for k,v in rows[0].items() if k!="suffix_hash"},rows[1]]]
+    for key in ("suffix_hash","endpoint_version","reader_seed_or_coupling_id"):
+        mismatch=[dict(rows[0]),dict(rows[1])]
+        mismatch[1][key]="d"*64 if key=="suffix_hash" else "different"
+        invalid.append(mismatch)
+    for bad in invalid:
+        with pytest.raises(ValueError,match="E_QUALIFICATION_FAIL"):module.validate(bad)
+
+
+def test_exact_noop_v2_is_mandatory_in_evidence_and_launcher(tmp_path):
+    bad=eligible_row();bad["gates"].pop("exact_noop_v2_qualified")
+    with pytest.raises(ValueError,match="exact_noop_v2_qualified"):
+        require_arm("ncr_certified_routing",write_ledger(tmp_path,[bad]))
+    launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
+    assert "EXACT_NOOP_V2_MANIFEST" in launcher
+    assert "validate_exact_noop_v2_manifest_20260819.py" in launcher
+    assert "legacy replay is ineligible" in launcher
+
+
+def _w4_validator():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_counterfactual_gradient_witness_20260819.py"
+    spec=importlib.util.spec_from_file_location("w4_validator",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def _w4_manifest(n=20):
+    events=[]
+    for i in range(n):
+        candidate=f"{i+1000:064x}";pair=f"{i+2000:064x}"
+        events.append(capture_w4_event(stable_id=f"e{i}",group_id=f"g{i}",candidate_hash=candidate,
+          pair_key_hash=pair,checkpoint_hash="a"*64,subspace_hash="b"*64,
+          y_commit=1.0,y_retain=0.0,writer_token_score_gradients=[[1.0,0.0],[0.0,1.0]],
+          writer_token_mask=[True,True],policy_controlled_token_kinds=["token","eos_or_stop"],
+          actual_grpo_writer_gradient=[.5,0.0],
+          actual_candidate_hash=candidate,actual_group_id=f"g{i}",actual_checkpoint_hash="a"*64,
+          actual_subspace_hash="b"*64))
+    return {"schema_version":"counterfactual-gradient-witness-v2",
+      "on_policy_same_checkpoint_candidate":True,"exact_noop_v2_qualified":True,
+      "exact_noop_v2_manifest_hash":"c"*64,"noop_baseline_candidate_independent":True,
+      "noop_rng_independent":True,"noop_cache_independent":True,"writer_token_mask_exact":True,
+      "noop_coupling_frozen_before_candidate":True,"noop_coupling_exogenous_given_state":True,
+      "reader_seed_derivation":"pre_candidate_state_coupling_manifest",
+      "rng_advance_candidate_length_dependent":False,"validity_frozen_before_tau":True,
+      "truncation_frozen_before_tau":True,"row_selection_frozen_before_tau":True,
+      "tau_or_outcome_conditioned_selection":False,
+      "shared_suffix_endpoint_frozen":True,"actual_group_reconstructable":True,
+      "actual_bonus_reconstructable":True,"actual_logprob_reconstructable":True,
+      "actual_clip_reconstructable":True,"actual_kl_reconstructable":True,
+      "optimizer_steps":0,"new_rollouts":False,"material_effect_threshold":.1,
+      "evidence_basis":["alignment","captured_signed_ratio","effect_weighted_mass"],"events":events}
+
+
+def test_w4_capture_metrics_pilot_and_scientific_minimum():
+    module=_w4_validator()
+    result=module.validate(_w4_manifest(20))
+    assert result["status"]=="W4_CAPTURE_QUALIFIED_ANALYSIS_ONLY"
+    assert result["independent_material_events"]==20 and result["highest_claim_level"]=="W3"
+    assert not result["w4_claim_authorized"] and not result["training_authorized"]
+    assert module.validate(_w4_manifest(4))["status"]=="W4_PLUMBING_ONLY"
+
+
+def test_w4_fail_closed_reference_reconstruction_and_forbidden_shortcuts():
+    module=_w4_validator()
+    for key,value in (("on_policy_same_checkpoint_candidate",False),("noop_baseline_candidate_independent",False),
+      ("noop_rng_independent",False),("noop_cache_independent",False),("writer_token_mask_exact",False),
+      ("noop_coupling_frozen_before_candidate",False),("noop_coupling_exogenous_given_state",False),
+      ("rng_advance_candidate_length_dependent",True),("validity_frozen_before_tau",False),
+      ("truncation_frozen_before_tau",False),("row_selection_frozen_before_tau",False),
+      ("tau_or_outcome_conditioned_selection",True),
+      ("actual_group_reconstructable",False),("actual_bonus_reconstructable",False),
+      ("actual_logprob_reconstructable",False),("actual_clip_reconstructable",False),
+      ("actual_kl_reconstructable",False),("optimizer_steps",1),("new_rollouts",True)):
+        bad=_w4_manifest();bad[key]=value
+        with pytest.raises(ValueError,match="W4_NO_GO.*highest_level=W3"):module.validate(bad)
+    bad=_w4_manifest();bad["evidence_basis"]=["gradient_difference_norm"]
+    with pytest.raises(ValueError,match="forbidden evidence basis"):module.validate(bad)
+    bad=_w4_manifest();bad["events"][0]["actual_group_id"]="wrong"
+    with pytest.raises(ValueError,match="candidate/group/checkpoint/subspace mismatch"):module.validate(bad)
+
+
+def test_csfgw_v2_score_function_identity_positive_and_three_negative_controls():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_counterfactual_score_function_identity_20260819.py"
+    spec=importlib.util.spec_from_file_location("csfgw_identity",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.self_test()
+    rows=[{"probability":.5,"commit_return":1.0,"noop_baseline":.25,"score_gradient":[.5],
+      "selected":True,"policy_controlled_token_kinds":["token","eos_or_stop"],
+      "score_mask_token_kinds":["token","eos_or_stop"]},
+      {"probability":.5,"commit_return":0.0,"noop_baseline":.25,"score_gradient":[-.5],
+      "selected":True,"policy_controlled_token_kinds":["token","eos_or_stop"],
+      "score_mask_token_kinds":["token","eos_or_stop"]}]
+    manifest={**module.EXPECTED,"direct_commit_return_gradient":[.25],"candidates":rows}
+    assert module.audit(manifest)["status"]=="CSFGW_IDENTITY_V2_PASS"
+    bad=json.loads(json.dumps(manifest));bad["reader_seed_derivation"]="hash(candidate)"
+    with pytest.raises(ValueError,match="W4_NO_GO"):module.audit(bad)
+
+
+def test_w4_launcher_is_dual_gated_and_never_runs_pilot():
+    launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
+    for marker in ("W4_GRADIENT_PILOT_REQUEST","W4_OPTIMIZER_STEPS","IDEA_EVIDENCE_LEDGER",
+                   "MECHANISM_EXTENSION_DECISION","W4_NO_GO","highest_level=W3"):
+        assert marker in launcher
+
+
+def test_adaptive_stop_rule_v4_and_launcher_guard():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_adaptive_stop_rule_v4_20260819.py"
+    spec=importlib.util.spec_from_file_location("stop_v4",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    config=json.loads((Path(__file__).parents[3]/"experiments/7b_ideas/configs/adaptive_stop_rule_v4.json").read_text())
+    result=module.validate(config)
+    assert result["terminal_step"]==200 and not result["controls_continuation"]
+    assert not result["step_400_authorized"] and not result["best_checkpoint_selection"]
+    for key,value in (("controls_continuation",True),("terminal_step",400),
+      ("select_best_checkpoint_for_confirmatory",True),("step_400_automatic",True)):
+        bad=dict(config);bad[key]=value
+        with pytest.raises(ValueError,match="STOP_RULE_V4_FAIL_CLOSED"):module.validate(bad)
+    launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
+    assert "STOP_RULE_MANIFEST" in launcher and "validate_adaptive_stop_rule_v4_20260819.py" in launcher

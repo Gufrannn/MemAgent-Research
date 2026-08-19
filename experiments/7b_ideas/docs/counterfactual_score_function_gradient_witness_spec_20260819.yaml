@@ -1,0 +1,32 @@
+schema_version: counterfactual-gradient-witness-v2
+reference:
+  on_policy_same_checkpoint_candidate: required
+  exact_noop_v2_same_candidate_E: required
+  noop_baseline_candidate_rng_cache_independent: required
+  noop_coupling_frozen_before_candidate: required
+  conditional_independence: U_independent_of_C_given_S
+  forbidden_reader_seed_derivation: [candidate_hash, candidate_length]
+  rng_advance_candidate_length_dependent: false
+  writer_token_mask_exact: required
+  writer_mask_includes: [all_policy_controlled_tokens, eos_or_stop_decision]
+  shared_suffix_endpoint_frozen: required
+selection:
+  validity_frozen_before_tau: true
+  truncation_frozen_before_tau: true
+  row_selection_frozen_before_tau: true
+  tau_or_outcome_conditioned_selection: false
+  PA_or_PB_bypass: false
+definition:
+  tau: Y_commit_minus_Y_retain
+  G_CF: tau_times_sum_writer_token_grad_log_pi_candidate_given_state
+  G_E: actual_complete_GRPO_loss_graph_writer_gradient
+comparison_keys: [candidate, group, checkpoint, parameter_subspace]
+actual_graph_reconstruction: [group, bonus, logprob, clip, KL]
+outputs: [alignment, captured_signed_ratio, effect_weighted_silent_mass, effect_weighted_opposing_mass]
+forbidden_evidence: [gradient_difference_norm, gradient_norm_only, scalar_advantage_sign, single_parameter_delta]
+defaults: {optimizer_steps: 0, new_rollouts: false}
+sample_size:
+  pilot4: plumbing_only
+  minimum_independent_material_events_for_scientific_audit: 20
+failure: {status: W4_NO_GO, highest_level: W3}
+authorization: {w4_claim: false, training: false, gradient_pilot: false, optimizer_step: false}

@@ -1,0 +1,32 @@
+schema_version: phe-held-fixed-exact-noop-v2
+estimands:
+  P:
+    label: P_SAME_ANCHOR_POLICY_RELATIVE_CREDIT
+    held_fixed: [pre_session_state]
+    resampled: [candidate, operation, post_state]
+  H:
+    label: H_PRIVILEGED_PROXY
+    object: teacher_forced_updated_vs_old_target_answerability
+    privileged: true
+  E:
+    label: E_SAME_CANDIDATE_EXECUTION_EFFECT
+    held_fixed: [upstream_state, materialized_candidate, suffix, writer_seed, reader_seed_or_coupling_id, endpoint_version]
+    intervention: commit_vs_retain
+    state_level_writer_policy_risk_identified: false
+rules:
+  P_equals_E: false
+  H_equals_E: false
+  select_most_favorable_estimand_after_outcome: false
+  candidate_materialization_count: 1
+  writer_runs_after_materialization: 0
+  legacy_replay_eligible: false
+e_join:
+  pair_keys: [stable_id, turn, upstream_state_hash, candidate_memory_token_hash, suffix_hash, writer_seed, reader_seed_or_coupling_id, endpoint_version]
+  arm_fields: [arm, loaded_memory_token_hash, output_token_ids_hash, endpoint_value]
+  exact_arms: [commit, retain]
+  duplicate_policy: E_QUALIFICATION_FAIL_NO_LAST_WRITE_WINS
+  mismatch_policy: E_QUALIFICATION_FAIL
+authorization:
+  replay_qualification_only: true
+  training_authorized: false
+  claim_authorized: false

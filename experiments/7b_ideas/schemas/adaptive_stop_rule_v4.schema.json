@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Adaptive checkpoint stop-rule freeze v4",
+  "type":"object",
+  "required":["schema_version","frozen_before_any_anchor_unblinding","anchors","terminal_step","post_200_action","t100_and_intermediate_anchor_use","controls_continuation","metrics_control_continuation","allowed_early_stop_reasons","select_best_checkpoint_for_confirmatory","step_400_automatic","step_400_requires_separate_prefreeze","authorizes_new_training"],
+  "properties":{
+    "schema_version":{"const":"adaptive-stop-v4"},
+    "frozen_before_any_anchor_unblinding":{"const":true},
+    "anchors":{"const":[2,25,50,100,200]},"terminal_step":{"const":200},"post_200_action":{"const":"stop"},
+    "t100_and_intermediate_anchor_use":{"const":"post_freeze_screening_only"},
+    "controls_continuation":{"const":false},"metrics_control_continuation":{"const":false},
+    "allowed_early_stop_reasons":{"const":["NaN","unrecoverable_OOM","identity_or_data_corruption","resource_outside_existing_authorization"]},
+    "select_best_checkpoint_for_confirmatory":{"const":false},"step_400_automatic":{"const":false},
+    "step_400_requires_separate_prefreeze":{"const":true},"authorizes_new_training":{"const":false}
+  },
+  "additionalProperties":false
+}

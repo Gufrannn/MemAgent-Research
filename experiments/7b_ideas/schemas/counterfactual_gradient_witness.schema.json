@@ -1,0 +1,25 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"W4 counterfactual score-function gradient witness capture",
+  "type":"object",
+  "required":["schema_version","on_policy_same_checkpoint_candidate","exact_noop_v2_qualified","exact_noop_v2_manifest_hash","noop_baseline_candidate_independent","noop_rng_independent","noop_cache_independent","noop_coupling_frozen_before_candidate","noop_coupling_exogenous_given_state","reader_seed_derivation","rng_advance_candidate_length_dependent","writer_token_mask_exact","validity_frozen_before_tau","truncation_frozen_before_tau","row_selection_frozen_before_tau","tau_or_outcome_conditioned_selection","shared_suffix_endpoint_frozen","actual_group_reconstructable","actual_bonus_reconstructable","actual_logprob_reconstructable","actual_clip_reconstructable","actual_kl_reconstructable","optimizer_steps","new_rollouts","material_effect_threshold","evidence_basis","events"],
+  "properties":{
+    "schema_version":{"const":"counterfactual-gradient-witness-v2"},
+    "on_policy_same_checkpoint_candidate":{"const":true},"exact_noop_v2_qualified":{"const":true},
+    "exact_noop_v2_manifest_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "noop_baseline_candidate_independent":{"const":true},"noop_rng_independent":{"const":true},"noop_cache_independent":{"const":true},
+    "noop_coupling_frozen_before_candidate":{"const":true},"noop_coupling_exogenous_given_state":{"const":true},
+    "reader_seed_derivation":{"const":"pre_candidate_state_coupling_manifest"},
+    "rng_advance_candidate_length_dependent":{"const":false},
+    "validity_frozen_before_tau":{"const":true},"truncation_frozen_before_tau":{"const":true},
+    "row_selection_frozen_before_tau":{"const":true},"tau_or_outcome_conditioned_selection":{"const":false},
+    "writer_token_mask_exact":{"const":true},"shared_suffix_endpoint_frozen":{"const":true},
+    "actual_group_reconstructable":{"const":true},"actual_bonus_reconstructable":{"const":true},
+    "actual_logprob_reconstructable":{"const":true},"actual_clip_reconstructable":{"const":true},"actual_kl_reconstructable":{"const":true},
+    "optimizer_steps":{"const":0},"new_rollouts":{"const":false},
+    "material_effect_threshold":{"type":"number","exclusiveMinimum":0},
+    "evidence_basis":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+    "events":{"type":"array","minItems":4,"items":{"type":"object"}}
+  },
+  "additionalProperties":true
+}

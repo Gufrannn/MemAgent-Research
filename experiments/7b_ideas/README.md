@@ -4,9 +4,13 @@
 
 NCR is the only conditional method candidate. Its ledger must certify candidate-free Shape A T0 (`P2_raw^T0` versus `+D_pre^audit`), exact linked same-write keys, real-GRPO exact-tie coverage, parameter-independent frozen readout, writer-only routing, bitwise unchanged non-tie advantage, gradient safety, and wins over QA-only plus all registered information/compute-matched baselines. T1 candidate gates may not leak into T0. “Temporal” is reserved for update-local claims.
 
+Exact replay uses the v2 held-fixed contract. `P` is same-anchor policy rerollout credit, `H` is the candidate-aware privileged updated-versus-old answerability proxy, and `E` is the same-materialized-candidate commit-versus-retain shared-suffix execution effect; they are different estimands and may not be selected after inspecting outcomes. `E` does not identify state-level writer-policy risk. The proposal is materialized exactly once and neither execution arm reruns the writer. Every E join uses all eight frozen keys and rejects duplicates rather than overwriting them. Legacy replay without these fields is ineligible for Shape A and all non-Original launchers.
+
 CERC is a native-credit control and permanently rejects cross-variant grouping. Typed Boundary is a five-arm prompt diagnostic only because of the MemTX collision. Target-aligned repair is a concept placeholder with no launcher and may never stack with NCR.
 
 Fresh runs stop at two steps. Resume is explicit to step 3. Longer anchors are only 25/50/100/200 and require `PHASE=extended CONFIRM_EXTENDED_RUN=1 EXTENDED_STEPS=...`; checkpoint and terminal rules must be frozen before metric unblinding, and step 400 is never automatic. Full RULER is not launched here: it is allowed only after the unique repair has at least three confirmed training seeds, using authoring 8 then 64 examples/task/length and a 16K→32K→64K 20% exact floor staircase.
+
+Extended anchors also require `STOP_RULE_MANIFEST=experiments/7b_ideas/configs/adaptive_stop_rule_v4.json`. T100 and all intermediate anchors are screening-only and cannot control continuation. Only NaN, unrecoverable OOM, identity/data corruption, or resources outside existing authorization permit an early stop. Step 200 is terminal; confirmatory reporting cannot select the best of 25/50/100/200.
 
 ## H20 examples
 
@@ -32,6 +36,7 @@ NCR and its registered baselines require one adjudicated evidence ledger and one
 ```bash
 export IDEA_EVIDENCE_LEDGER=/audit/frozen_evidence.jsonl
 export IDEA_REWARD_MANIFEST=/audit/frozen_trajectory_scores.jsonl
+export EXACT_NOOP_V2_MANIFEST=/audit/exact_noop_v2_pairs.jsonl
 export IDEA_MANIFEST_HASH=<64-hex-sha256>
 export NCR_FROZEN_READOUT_HASH=<64-hex-sha256>
 export IDEA_LAMBDA=0.1
@@ -54,3 +59,5 @@ Mechanism extensions are governed by the outcome-blind single-mechanism router. 
 HiMPO directly collides with T1 local updated-vs-previous target-answerability credit, hindsight-filtered memory blame, and memory-token-only local advantage. It is never a Shape A T0 feature or baseline: T0 accepts only candidate-free pre-action old state, direction-blind raw marginals, and P2 audit inputs. The NCR ledger requires explicit HiMPO non-equivalence and a matched-baseline gate; the training hook rejects colliding credit sources. The HiMPO-like T1 baseline schema is reserved only—implementation and training remain unauthorized by default.
 
 Memory-R2 directly collides with generic blocked within-state credit, same-anchor session rerollout, global/local LoGo-GRPO, CERC-as-method, and 8→16→32 curriculum claims. Its rerollouts regenerate the extractor candidate and manager action; they are not exact discard of one frozen materialized candidate. The NCR ledger and training hook enforce non-equivalence. Memory-R2-like requests require both the evidence ledger and single-extension router, then still fail closed because LoGo-GRPO implementation and long training are currently unauthorized.
+
+W4 counterfactual gradient witness code is capture/validation infrastructure only. It compares the exact-E score-function reference with the reconstructed actual full-GRPO writer gradient at the same candidate/group/checkpoint/subspace, and reports alignment plus effect-weighted silent/opposing mass. The launcher rejects every W4 gradient-pilot or optimizer-step request; neither a capture nor its validator authorizes training or a W4 claim.

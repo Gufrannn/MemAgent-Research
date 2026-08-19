@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Exact same-materialized-candidate commit/retain E record",
+  "type":"object",
+  "required":["stable_id","turn","upstream_state_hash","candidate_memory_token_hash","suffix_hash","writer_seed","reader_seed_or_coupling_id","endpoint_version","arm","loaded_memory_token_hash","output_token_ids_hash","endpoint_value","candidate_materialization_count","writer_runs_after_materialization","estimand"],
+  "properties":{
+    "stable_id":{"type":"string","minLength":1},"turn":{"type":"integer","minimum":0},
+    "upstream_state_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"candidate_memory_token_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "suffix_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"writer_seed":{"type":"integer"},
+    "reader_seed_or_coupling_id":{"type":"string","minLength":1},"endpoint_version":{"type":"string","minLength":1},
+    "arm":{"enum":["commit","retain"]},"loaded_memory_token_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "output_token_ids_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"endpoint_value":{"type":"number"},
+    "candidate_materialization_count":{"const":1},"writer_runs_after_materialization":{"const":0},
+    "estimand":{"const":"E_SAME_CANDIDATE_EXECUTION_EFFECT"}
+  },
+  "additionalProperties":true
+}

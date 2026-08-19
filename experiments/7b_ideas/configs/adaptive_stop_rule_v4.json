@@ -1,0 +1,15 @@
+{
+  "schema_version": "adaptive-stop-v4",
+  "frozen_before_any_anchor_unblinding": true,
+  "anchors": [2, 25, 50, 100, 200],
+  "terminal_step": 200,
+  "post_200_action": "stop",
+  "t100_and_intermediate_anchor_use": "post_freeze_screening_only",
+  "controls_continuation": false,
+  "metrics_control_continuation": false,
+  "allowed_early_stop_reasons": ["NaN", "unrecoverable_OOM", "identity_or_data_corruption", "resource_outside_existing_authorization"],
+  "select_best_checkpoint_for_confirmatory": false,
+  "step_400_automatic": false,
+  "step_400_requires_separate_prefreeze": true,
+  "authorizes_new_training": false
+}

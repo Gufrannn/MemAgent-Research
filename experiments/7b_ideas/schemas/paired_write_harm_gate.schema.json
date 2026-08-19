@@ -7,7 +7,7 @@
     "schema_version": {"const": "paired-write-harm-gate-v1"},
     "shapeA_v8_primary": {"const": "pass"},
     "shapeA_evidence_hash": {"type": "string", "minLength": 1},
-    "exact_paired_replay": {"const": "pass"},
+    "exact_paired_replay": {"const": "exact_noop_v2_qualified"},
     "paired_replay_hash": {"type": "string", "minLength": 1},
     "threshold_frozen_outside_confirmation": {"const": true},
     "threshold_manifest_hash": {"type": "string", "minLength": 1},
