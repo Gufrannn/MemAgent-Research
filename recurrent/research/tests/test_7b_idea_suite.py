@@ -293,3 +293,10 @@ def test_launcher_fresh_resume_strict_vllm_and_frozen_anchors():
 
 def test_original_requires_no_evidence_and_is_exact_noop():
     assert require_arm("qa_only_original", None).training_authorized
+
+
+def test_shape_a_schema_v8_mechanical_downgrades():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/adjudicate_shapeA_structural_claim_20260819.py"
+    spec=importlib.util.spec_from_file_location("v8",path); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    module.self_test()
+    assert all(not module._result("x","y",{})[key] for key in ("method_training_authorized","online_deployment_claim_authorized"))

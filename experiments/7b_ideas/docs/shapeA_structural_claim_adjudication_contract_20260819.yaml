@@ -1,0 +1,15 @@
+schema_version: shapeA-structural-v8
+core_conjunction:
+  - provenance_and_data_processing
+  - semantic_measurement_reliability
+  - estimand_and_inference_integrity
+  - semantic_pairing_specificity
+downgrades:
+  provenance_and_data_processing: ACCESS_MISMATCH_OR_UNKNOWN_PROVENANCE_NO_GO
+  semantic_measurement_reliability: MEASUREMENT_INCOMPLETE
+  estimand_and_inference_integrity: INVALID_INFERENCE_NO_GO
+  semantic_pairing_specificity: GENERIC_RELATIONAL_COMPRESSION_ONLY
+temporal_axis_is_orthogonal: true
+always_false: [method_training_authorized, online_deployment_claim_authorized]
+completion_to_200_unchanged: true
+automatic_400: false
