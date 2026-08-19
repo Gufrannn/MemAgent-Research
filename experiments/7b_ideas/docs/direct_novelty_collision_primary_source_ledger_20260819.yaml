@@ -1,0 +1,25 @@
+schema_version: direct-novelty-collision-ledger-v1
+verified_at_utc: 2026-08-19T11:18:09Z
+record_count: 16
+policy: {primary_source_only: true, version_pin_required: true, preprint_status_visible: true}
+records:
+  - {id: 2506.02125v1, alias: DHR, collision: [question_trained_history_representation, future_derived_privileged_QA, generic_QA_auxiliary]}
+  - {id: 2605.12978v1, alias: Useful_Memories_Faulty, collision: [generic_update_harm, noop_retain, consolidation_gate]}
+  - {id: 2605.23723v1, alias: MemAudit, collision: [post_failure_counterfactual_attribution, structural_anomaly_after_outcome]}
+  - {id: 2605.22842v1, alias: Misattribution_Gap, collision: [memory_vs_model_attribution, post_hoc_causal_entry]}
+  - {id: 2604.27003v1, alias: Continual_Learning_Memory, collision: [generic_memory_negative_transfer, stability_plasticity]}
+  - {id: 2607.22962v1, alias: ConsistencyGate, collision: [write_time_correctness_gate, self_consistency_admission]}
+  - {id: 2605.30711v2, alias: SAGE, collision: [novelty_gate, add_noop_merge_routing]}
+  - {id: 2607.23929v2, alias: MemTX, collision: [transactional_commit, typed_boundaries, action_gate, cascade_repair]}
+  - {id: 2605.17830v1, alias: Longitudinal_Safety, collision: [fixed_probe_memory_risk, null_memory_counterfactual]}
+  - {id: 2602.10560v1, alias: GRU_Mem, collision: [MemAgent_update_gate, exit_gate, RL_gate_rewards]}
+  - {id: 2606.08656v1, alias: MemoPilot, collision: [RL_over_memory_updates, multi_turn_memory_credit]}
+  - id: 2606.16285v1
+    alias: HiMPO
+    full_text_verified: true
+    collision: [local_counterfactual_memory_state_utility, old_vs_updated_memory_answerability_credit, hindsight_filtered_memory_credit, memory_token_specific_advantage, blame_leakage_localization]
+    residual_not_established: [outcome_independent_pre_candidate_structural_defect, exact_materialized_candidate_commit_vs_retain_shared_suffix_effect, heldout_effect_modification_over_equal_permission_raw_baseline, linked_state_harm_reward_estimator_witness]
+  - {id: 2605.21125v1, alias: AVSPO, collision: [zero_advantage_diagnosis, virtual_tie_rescue, gradient_density_recovery]}
+  - {id: 2607.27773v2, alias: ChronoMem, collision: [whole_state_version_control, semantic_global_rollback]}
+  - {id: 2608.10502v1, alias: Dependency_Rollback, collision: [post_failure_dependency_repair, selective_replay]}
+  - {id: SSRN-7160321, alias: Paired_Memory_Credit, collision: [paired_candidate_marginal_effect, outcome_hidden_factorial_credit, observability_gate, credit_transport]}

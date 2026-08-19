@@ -17,6 +17,7 @@ def eligible_row():
         "frozen_readout", "writer_only", "non_tie_bitwise_unchanged", "gradient_safety",
         "beats_qa_only", "beats_generic_qa", "beats_generic_judge",
         "beats_information_matched_raw_judge", "beats_generic_tie_rescue")}
+    gates.update({"himpo_non_equivalence": True, "himpo_like_baseline_matched": True})
     return {"event_id": "e1", "timestamp": "2026-08-19T00:00:00Z", "candidate": "ncr_certified_routing",
             "status": "eligible", "gates": gates,
             "shape_a": {"t0_formula": "P2_raw^T0 vs P2_raw^T0+D_pre^audit", "t1_leaks_into_t0": False},
@@ -300,3 +301,14 @@ def test_shape_a_schema_v8_mechanical_downgrades():
     spec=importlib.util.spec_from_file_location("v8",path); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     module.self_test()
     assert all(not module._result("x","y",{})[key] for key in ("method_training_authorized","online_deployment_claim_authorized"))
+
+
+def test_himpo_t1_columns_hard_fail_in_t0_manifest():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_himpo_novelty_and_baseline_20260819.py"
+    spec=importlib.util.spec_from_file_location("himpo",path); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    good={"analysis_phase":"T0_SHAPEA","candidate_accessed":False,
+      "feature_columns":["pre_action_old_state","direction_blind_raw_marginals","P2_audit"]}
+    assert module.validate(good)["himpo_is_t0_baseline"] is False
+    for column in ("candidate_text","m_t","new_vs_old_answerability","updated_vs_previous_utility"):
+        with pytest.raises(ValueError,match="leaked into T0"):
+            module.validate({"analysis_phase":"T0_SHAPEA","candidate_accessed":False,"feature_columns":[column]})

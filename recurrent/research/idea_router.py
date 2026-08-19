@@ -39,6 +39,12 @@ def apply_idea_arm(*, trajectory_qa_advantage: torch.Tensor, batch, reward_batch
     for trajectory_id in trajectory_ids:
         if trajectory_id not in manifest: raise ValueError(f"NO_METHOD: missing manifest row {trajectory_id}")
         row = manifest[trajectory_id]
+        if row.get("credit_source") in {
+            "updated_vs_previous_oracle_target_answerability",
+            "hindsight_filtered_updated_vs_previous_answerability",
+            "memory_token_only_local_counterfactual_answerability",
+        }:
+            raise ValueError("NO_METHOD: local answerability credit is directly covered by HiMPO")
         if arm != "ncr_certified_routing" and set(row) & FORBIDDEN_OUTCOME_FIELDS:
             raise ValueError("NO_METHOD: generic baseline contains BOT/NOOP labels")
         rows.append(row)

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HiMPO collision and future matched-baseline manifest",
+  "type": "object",
+  "required": ["analysis_phase", "implementation_authorized", "training_authorized"],
+  "properties": {
+    "candidate_unique_and_all_evidence_passed": {"type": "boolean"},
+    "proposed_claims": {"type": "array", "items": {"type": "string"}},
+    "credit_definition": {"type": "string"},
+    "analysis_phase": {"enum": ["T0_SHAPEA", "T1_CANDIDATE_CREDIT"]},
+    "candidate_accessed": {"type": "boolean"},
+    "feature_columns": {"type": "array", "items": {"type": "string"}},
+    "implementation_authorized": {"const": false},
+    "training_authorized": {"const": false},
+    "himpo_like_baseline": {
+      "type": "object",
+      "required": ["writer_mask", "eligible_rows", "oracle_information", "forward_budget", "token_budget", "scale"]
+    },
+    "candidate_method": {
+      "type": "object",
+      "required": ["writer_mask", "eligible_rows", "oracle_information", "forward_budget", "token_budget", "scale"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"analysis_phase": {"const": "T0_SHAPEA"}}},
+      "then": {
+        "properties": {
+          "candidate_accessed": {"const": false},
+          "feature_columns": {
+            "items": {"enum": ["pre_action_old_state", "direction_blind_raw_marginals", "P2_audit"]}
+          }
+        },
+        "required": ["candidate_accessed", "feature_columns"]
+      }
+    },
+    {
+      "if": {"properties": {"analysis_phase": {"const": "T1_CANDIDATE_CREDIT"}}},
+      "then": {
+        "required": ["candidate_unique_and_all_evidence_passed", "proposed_claims", "credit_definition", "candidate_method", "himpo_like_baseline"]
+      }
+    }
+  ],
+  "additionalProperties": true
+}
