@@ -258,6 +258,22 @@ class DataParallelPPOActor(BasePPOActor):
             batch = indexing_proto(proto, data.batch['no_padding_mask']).batch
         else:
             batch = data.select(batch_keys=select_keys).batch
+        from recurrent.research.actor_batch import DIAG_PREFIX
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        response_valid_tokens = int(batch["response_mask"].sum().item())
+        print(
+            f"{DIAG_PREFIX} actor rank={rank}: per_rank_local_batch_size={len(batch)}, "
+            f"response_valid_tokens={response_valid_tokens}, "
+            f"micro_batch_size={self.config.ppo_micro_batch_size_per_gpu}, "
+            f"computed_num_mini_batches/sections="
+            f"{self.config.train_batch_size // self.config.ppo_mini_batch_size}, "
+            f"tensor_shapes={{{', '.join(f'{key!r}: {tuple(value.shape)!r}' for key, value in batch.items())}}}"
+        )
+        if len(batch) < 1 or response_valid_tokens < 1:
+            raise ValueError(
+                f"{DIAG_PREFIX} actor rank={rank} has no trainable samples: "
+                f"local_batch_size={len(batch)}, response_valid_tokens={response_valid_tokens}"
+            )
         has_multi_modal_inputs = 'multi_modal_inputs' in data.non_tensor_batch.keys()
 
         # Split to make minibatch iterator for updating the actor
@@ -283,6 +299,12 @@ class DataParallelPPOActor(BasePPOActor):
             for batch_idx, data in enumerate(dataloader):
                 # split batch into micro_batches
                 mini_batch = data
+                mini_batch_response_tokens = int(mini_batch["response_mask"].sum().item())
+                if mini_batch_response_tokens < 1:
+                    raise ValueError(
+                        f"{DIAG_PREFIX} actor rank={rank} mini-batch has no trainable response tokens: "
+                        f"mini_batch_size={len(mini_batch)}, response_valid_tokens=0"
+                    )
                 if has_multi_modal_inputs:
                     self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                     num_micro_batches = mini_batch.batch.batch_size[0] // self.config.ppo_micro_batch_size_per_gpu
@@ -304,6 +326,12 @@ class DataParallelPPOActor(BasePPOActor):
                         self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                         # split batch into micro_batches
                         micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
+
+                print(
+                    f"{DIAG_PREFIX} actor rank={rank}: mini_batch_size={len(mini_batch)}, "
+                    f"micro_batch_size={self.config.ppo_micro_batch_size_per_gpu}, "
+                    f"computed_num_micro_batches/sections={len(micro_batches)}"
+                )
 
                 self.actor_optimizer.zero_grad()
 
