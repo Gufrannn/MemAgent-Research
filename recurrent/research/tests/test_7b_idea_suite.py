@@ -9,7 +9,8 @@ from recurrent.research.cerc_native_credit import validate_native_credit
 from recurrent.research.idea_admissibility import ELIGIBLE, NO_METHOD, PENDING, adjudicate, require_arm
 from recurrent.research.exact_noop_v2 import (E_LABEL,H_LABEL,P_LABEL,ExactNoopV2ReplayBuilder,
     build_arm_record,build_vg_record,classify_estimand,materialize_proposal)
-from recurrent.research.counterfactual_gradient_witness import capture_w4_event,vector_hash
+from recurrent.research.counterfactual_gradient_witness import (
+    capture_w4_group, capture_w4_objective_mismatch_group, group_estimators)
 from recurrent.research.ncr_certified_routing import generic_auxiliary, route_ncr
 from recurrent.research.typed_boundary_prompt import ARMS, build_prompts
 
@@ -509,106 +510,209 @@ def _w4_validator():
     return module
 
 
-def _w4_manifest(n=20,*,coupling_ids=("u0",),credit=(.5,0.),task=(.5,0.),reg=(0.,0.),total=(.5,0.)):
-    events=[]
-    for i in range(n):
-        candidate=f"{i+1000:064x}";pair=f"{i+2000:064x}"
-        for coupling_index,coupling_id in enumerate(coupling_ids):
-          events.append(capture_w4_event(stable_id=f"e{i}",group_id=f"g{i}",candidate_hash=candidate,
-            pair_key_hash=pair,checkpoint_hash="a"*64,subspace_hash="b"*64,reader_coupling_id=coupling_id,
-            y_commit=1.0+.1*coupling_index,y_retain=0.0,
-            writer_token_score_gradients=[[1.0,0.0],[0.0,1.0]],writer_token_mask=[True,True],
-            policy_controlled_token_kinds=["token","eos_or_stop"],credit_writer_gradient=list(credit),
-            task_writer_gradient=list(task),regularizer_writer_gradient=list(reg),total_writer_gradient=list(total),
-            loss_graph_hash="d"*64,actual_candidate_hash=candidate,actual_group_id=f"g{i}",
-            actual_checkpoint_hash="a"*64,actual_subspace_hash="b"*64))
-    multiple=len(coupling_ids)>1
-    return {"schema_version":"counterfactual-gradient-witness-v4",
-      "on_policy_same_checkpoint_candidate":True,"exact_noop_v2_qualified":True,
-      "exact_noop_v2_manifest_hash":"c"*64,"noop_baseline_candidate_independent":True,
-      "noop_rng_independent":True,"noop_cache_independent":True,"writer_token_mask_exact":True,
-      "noop_coupling_frozen_before_candidate":True,"noop_coupling_exogenous_given_state":True,
-      "factual_retain_shared_crn":True,
-      "reader_seed_derivation":"pre_candidate_state_coupling_manifest",
-      "rng_advance_candidate_length_dependent":False,"coupling_plan_frozen_before_first_tau":True,
-      "seeds_added_after_first_tau":False,"seed_selected_by_sign":False,
-      "reader_repeats_increase_independent_n":False,"candidate_clustered_inference":True,
-      "coupling_mode":"prefrozen_multiple_independent_crn" if multiple else "single_exogenous_crn",
-      "frozen_reader_coupling_ids":list(coupling_ids),"expected_couplings_per_candidate":len(coupling_ids),
-      "validity_frozen_before_tau":True,
-      "truncation_frozen_before_tau":True,"row_selection_frozen_before_tau":True,
-      "tau_or_outcome_conditioned_selection":False,
-      "shared_suffix_endpoint_frozen":True,"actual_group_reconstructable":True,
+def _w4_parity(*, mismatch=None):
+    dimensions = ["horizon","future_policy","suffix_contract","reader","answer_cell",
+      "answer_normalization","reward_components","reward_weights","reward_scale","invalid_rule",
+      "truncation_rule","missing_rule","row_weights","candidate_joinability","score_mask_joinability"]
+    rows=[]
+    for index,name in enumerate(dimensions):
+        train=f"{index+100:064x}";science=(f"{index+200:064x}" if name==mismatch else train)
+        rows.append({"dimension":name,"training_definition_hash":train,
+          "scientific_definition_hash":science,"same_definition":train==science})
+    return rows
+
+
+def _w4_nodes(mode="L", *, full=True):
+    rows=[]
+    for index,role in enumerate(("current_writer","future_writer","future_answer","future_reader")):
+        current=role=="current_writer"
+        frozen=mode=="L" and not current
+        included=current or (mode=="T" and full)
+        rows.append({"node_id":role,"role":role,"checkpoint_hash":f"{index+300:064x}",
+          "parameter_identity_hash":f"{index+400:064x}","shares_theta":not frozen,
+          "semantics":"frozen_environment" if frozen else "target_policy","token_span":[index,index+1],
+          "includes_eos_or_stop":current,"mask_hash":f"{index+500:064x}",
+          "actual_included":included,"reference_included":included,"arm_parity":True,"stopgrad":frozen})
+    return rows
+
+
+def _w4_common(group_count=20, *, mismatch=None, policy_mode="L", full=True):
+    return {"schema_version":"counterfactual-gradient-witness-v8",
+      "endpoint_mode":"OM_distinct_endpoint" if mismatch else "CV_same_endpoint",
+      "endpoint_parity_ledger":_w4_parity(mismatch=mismatch),
+      "policy_derivative_mode":"L_frozen_future_policy" if policy_mode=="L" else "T_tied_recurrent_policy",
+      "policy_gradient_scope_label":("frozen_future_local_writer_gradient" if policy_mode=="L" else
+        ("full_terminal_recurrent_policy_gradient" if full else "local_recurrent_semi_gradient")),
+      "policy_node_ledger":_w4_nodes(policy_mode,full=full),
+      "on_policy_same_checkpoint_candidates":True,"candidate_groups_prefrozen":True,
+      "candidate_groups_independent":True,"iid_candidates_within_group":True,
+      "candidate_group_manifest_hash":"9"*64,"reader_seed_derivation":"pre_candidate_state_coupling_manifest",
+      "rng_advance_candidate_length_dependent":False,"writer_token_mask_exact":True,
+      "writer_mask_includes_eos_or_stop":True,"validity_frozen_before_return":True,
+      "truncation_frozen_before_return":True,"row_selection_frozen_before_return":True,
+      "return_or_outcome_conditioned_selection":False,"actual_group_reconstructable":True,
       "actual_bonus_reconstructable":True,"actual_logprob_reconstructable":True,
-      "actual_clip_reconstructable":True,"actual_kl_reconstructable":True,
-      "same_loss_graph_decomposition":True,"gradient_components_reconstructable":True,
-      "credit_uses_actual_group_advantage":True,"credit_token_broadcast_exact":True,
-      "credit_clip_disabled":True,"credit_regularizers_disabled":True,"gradient_additivity_atol":1e-8,
-      "optimizer_steps":0,"new_rollouts":False,"material_effect_threshold":.1,
-      "evidence_basis":["alignment","captured_signed_ratio","effect_weighted_mass"],"events":events}
+      "loss_reconstruction_exact":True,"single_batch_directional_evidence_authorized":False,
+      "algorithm_novelty_authorized":False,
+      "raw_euclidean_cosine_role":"fixed_coordinate_secondary_diagnostic_only",
+      "raw_euclidean_cosine_parameterization_invariant":False,"geometry_selected_after_endpoint":False,
+      "direction_adjudication_requested":False,"gradient_geometry_mode":"none_no_direction_adjudication",
+      "actual_parameter_block_hash":"7"*64,"reference_parameter_block_hash":"7"*64,
+      "optimizer_steps":0,"new_rollouts":False}
 
 
-def test_w4_capture_metrics_pilot_and_scientific_minimum():
+def _w4_manifest(group_count=20, *, reference=False, policy_mode="L", full=True):
+    value=_w4_common(group_count,policy_mode=policy_mode,full=full)
+    groups=[]
+    for i in range(group_count):
+        scores=[[1.,0.],[0.,1.],[-1.,0.],[0.,-1.]]
+        rewards=[float((i+j)%3) for j in range(4)]
+        groups.append(capture_w4_group(candidate_group_id=f"g{i}",candidate_group_manifest_hash="9"*64,
+          checkpoint_hash="a"*64,state_hash=f"{i+1000:064x}",subspace_hash="b"*64,
+          loss_graph_hash="d"*64,candidate_hashes=[f"{i*10+j+2000:064x}" for j in range(4)],
+          commit_returns=rewards,noop_baseline_returns=[.25]*4,score_gradients=scores,
+          policy_controlled_token_kinds=["token","eos_or_stop"],
+          many_action_reference_gradient=[0.,0.] if reference else None))
+    value.update({"exact_noop_v2_qualified":True,"exact_noop_v2_manifest_hash":"c"*64,
+      "exact_noop_role":"control_variate_not_new_action_value_target",
+      "noop_baseline_candidate_independent":True,"noop_rng_independent":True,"noop_cache_independent":True,
+      "noop_coupling_frozen_before_candidate":True,"noop_coupling_exogenous_given_state":True,
+      "including_self_all_mean_estimator":True,"including_self_expected_scale_formula":"(n-1)/n",
+      "including_self_debias_formula":"n/(n-1)",
+      "scientific_null":"paired_group_mean_G_credit_debiased_minus_G_CF_equals_zero",
+      "independent_many_action_reference_available":reference,
+      "engineering_application_review":{"expected_equivalence_pass":False,
+        "noop_variance_or_mse_reduction_pass":False,"beats_equal_cost_loo":False,
+        "beats_equal_cost_state_value":False,"fresh_endpoint_safety_pass":False},
+      "evidence_basis":["paired_group_mean","cross_group_variance"],"groups":groups})
+    return value
+
+
+def _w4_om_manifest(group_count=4, *, policy_mode="L", full=True):
+    value=_w4_common(group_count,mismatch="reward_components",policy_mode=policy_mode,full=full)
+    groups=[]
+    for i in range(group_count):
+        groups.append(capture_w4_objective_mismatch_group(candidate_group_id=f"g{i}",
+          candidate_group_manifest_hash="9"*64,checkpoint_hash="a"*64,state_hash=f"{i+1000:064x}",
+          subspace_hash="b"*64,loss_graph_hash="d"*64,
+          candidate_hashes=[f"{i*10+j+2000:064x}" for j in range(4)],
+          training_commit_returns=[2.,2.,2.,2.],scientific_eval_returns=[2.,3.,2.,3.],
+          endpoint_label_shuffle_returns=[3.,2.,3.,2.],
+          component_ablation_returns={"answer_cell":[0.,1.,0.,1.]},
+          score_gradients=[[1.,0.],[0.,1.],[-1.,0.],[0.,-1.]],
+          policy_controlled_token_kinds=["token","eos_or_stop"]))
+    value.update({"red_calibration_pass":True,"endpoint_label_shuffle_null_registered":True,
+      "equal_scale_component_ablation_registered":True,"component_ablation_scales_match":True,
+      "objective_mismatch_label":"surrogate_objective_gradient_mismatch",
+      "same_reward_credit_loss_claim_authorized":False,
+      "evidence_basis":["clustered_objective_difference","endpoint_label_shuffle_null","component_ablation"],
+      "groups":groups})
+    return value
+
+
+def test_w4_v8_cv_control_variate_group_audit_and_scientific_minimum():
+    module=_w4_validator();result=module.validate(_w4_manifest())
+    assert result["status"]=="W4_V8_SCIENTIFIC_AUDIT_READY"
+    assert result["endpoint_mode"]=="CV_same_endpoint" and result["independent_candidate_groups"]==20
+    assert result["including_self_all_mean"]["n4_expected_scale"]==.75
+    assert result["including_self_all_mean"]["n4_debias_factor"]==pytest.approx(4/3)
+    assert result["including_self_all_mean"]["debiased_is_batchwise_identical_to_loo"]
+    assert result["mse_status"].startswith("not_reported") and not result["training_authorized"]
+    assert "single_batch_alignment" in result["prohibited_inferences"]
+    assert module.validate(_w4_manifest(4))["status"]=="W4_V8_PLUMBING_ONLY"
+
+
+def test_w4_v8_all_equal_group_noise_and_mse_reference_rule():
+    estimates=group_estimators({"commit_returns":[2.]*4,"noop_baseline_returns":[0.]*4,
+      "score_gradients":[[1.],[0.],[0.],[0.]]})
+    assert estimates["g_credit_debiased"]==[0.] and estimates["g_cf_external_noop"]==[.5]
+    report=_w4_validator().validate(_w4_manifest(4,reference=True))
+    assert report["mse_status"].startswith("reported_against_independent")
+    assert "estimator_mse" in report and not report["algorithm_novelty"]
+
+
+def test_w4_v8_fail_closed_common_cv_and_forbidden_single_batch_evidence():
     module=_w4_validator()
-    result=module.validate(_w4_manifest(20))
-    assert result["status"]=="W4_CAPTURE_QUALIFIED_ANALYSIS_ONLY"
-    assert result["independent_material_events"]==20 and result["highest_claim_level"]=="W3"
-    assert result["coupling_scope"]=="realized_coupling_only"
-    assert "realized_coupling_credit_effect_weighted_opposing_mass" in result
-    assert not result["candidate_stable_help_harm_authorized"]
-    assert not result["w4_claim_authorized"] and not result["training_authorized"]
-    assert module.validate(_w4_manifest(4))["status"]=="W4_PLUMBING_ONLY"
-
-
-def test_w4_fail_closed_reference_reconstruction_and_forbidden_shortcuts():
-    module=_w4_validator()
-    for key,value in (("on_policy_same_checkpoint_candidate",False),("noop_baseline_candidate_independent",False),
-      ("noop_rng_independent",False),("noop_cache_independent",False),("writer_token_mask_exact",False),
-      ("noop_coupling_frozen_before_candidate",False),("noop_coupling_exogenous_given_state",False),
-      ("rng_advance_candidate_length_dependent",True),("validity_frozen_before_tau",False),
-      ("truncation_frozen_before_tau",False),("row_selection_frozen_before_tau",False),
-      ("tau_or_outcome_conditioned_selection",True),
-      ("actual_group_reconstructable",False),("actual_bonus_reconstructable",False),
-      ("actual_logprob_reconstructable",False),("actual_clip_reconstructable",False),
-      ("actual_kl_reconstructable",False),("gradient_components_reconstructable",False),
-      ("same_loss_graph_decomposition",False),("seeds_added_after_first_tau",True),
-      ("seed_selected_by_sign",True),("reader_repeats_increase_independent_n",True),
-      ("optimizer_steps",1),("new_rollouts",True)):
-        bad=_w4_manifest();bad[key]=value
+    for key,value in (("candidate_groups_independent",False),("iid_candidates_within_group",False),
+      ("writer_token_mask_exact",False),("return_or_outcome_conditioned_selection",True),
+      ("actual_group_reconstructable",False),("optimizer_steps",1),("new_rollouts",True),
+      ("noop_baseline_candidate_independent",False),("noop_coupling_exogenous_given_state",False)):
+        bad=_w4_manifest(4);bad[key]=value
         with pytest.raises(ValueError,match="W4_NO_GO.*highest_level=W3"):module.validate(bad)
-    bad=_w4_manifest();bad["evidence_basis"]=["gradient_difference_norm"]
-    with pytest.raises(ValueError,match="forbidden evidence basis"):module.validate(bad)
-    bad=_w4_manifest();bad["events"][0]["actual_group_id"]="wrong"
-    with pytest.raises(ValueError,match="candidate/group/checkpoint/subspace mismatch"):module.validate(bad)
+    bad=_w4_manifest(4);bad["evidence_basis"]=["single_batch_alignment"]
+    with pytest.raises(ValueError,match="forbidden single-batch"):module.validate(bad)
+    bad=_w4_manifest(4);bad["groups"][0]["noop_baseline_returns"][0]=.5
+    group=bad["groups"][0]
+    flattened=group["commit_returns"]+group["noop_baseline_returns"]+[x for row in group["score_gradients"] for x in row]
+    group["capture_hash"]=module.vector_hash(flattened)
+    with pytest.raises(ValueError,match="candidate-dependent"):module.validate(bad)
 
 
-def test_w4_v3_graph_decomposition_and_delivery_attribution():
+def test_w4_v8_endpoint_parity_routes_cv_or_objective_mismatch_and_ambiguous_fails():
+    module=_w4_validator();om=module.validate(_w4_om_manifest())
+    assert om["endpoint_mode"]=="OM_distinct_endpoint"
+    assert om["audit_label"]=="surrogate_objective_gradient_mismatch"
+    assert not om["same_reward_credit_estimator_loss_claim_authorized"]
+    assert om["mismatched_endpoint_dimensions"]==["reward_components"]
+    assert "g_eval_minus_g_train_cluster_interval" in om
+    bad=_w4_manifest(4);bad["endpoint_parity_ledger"].pop()
+    with pytest.raises(ValueError,match="ENDPOINT_TARGET_AMBIGUOUS"):module.validate(bad)
+    bad=_w4_manifest(4);bad["endpoint_parity_ledger"][0]["same_definition"]=False
+    with pytest.raises(ValueError,match="ENDPOINT_TARGET_AMBIGUOUS"):module.validate(bad)
+
+
+def test_w4_v8_policy_derivative_ledger_frozen_full_tied_and_semigradient():
     module=_w4_validator()
-    regularized=_w4_manifest(4,credit=(1.,0.),task=(1.,0.),reg=(-2.,0.),total=(-1.,0.))
-    result=module.validate(regularized)
-    assert result["delivery_adjudication_counts"]=={"REGULARIZATION_TRADEOFF":4}
-    assert all(row["credit_alignment"]>0 and row["total_alignment_sign"]<0 for row in result["event_metrics"])
-    bottleneck=module.validate(_w4_manifest(4,credit=(1.,0.),task=(-1.,0.),reg=(0.,0.),total=(-1.,0.)))
-    assert bottleneck["delivery_adjudication_counts"]=={"CLIP_OR_TRUST_REGION_DELIVERY_BOTTLENECK":4}
-    bad=_w4_manifest(4);bad["events"][0]["total_writer_gradient"]=[2.,0.]
-    bad["events"][0]["total_gradient_hash"]=vector_hash([2.,0.])
-    with pytest.raises(ValueError,match=r"G_total != G_task \+ G_reg"):module.validate(bad)
+    frozen=module.validate(_w4_manifest(4))
+    assert frozen["policy_gradient_scope_label"]=="frozen_future_local_writer_gradient"
+    assert not frozen["full_recurrent_policy_gradient_authorized"]
+    tied=module.validate(_w4_manifest(4,policy_mode="T",full=True))
+    assert tied["policy_gradient_scope_label"]=="full_terminal_recurrent_policy_gradient"
+    assert tied["full_recurrent_policy_gradient_authorized"]
+    semi=module.validate(_w4_manifest(4,policy_mode="T",full=False))
+    assert semi["policy_gradient_scope_label"]=="local_recurrent_semi_gradient"
+    bad=_w4_manifest(4);bad["policy_node_ledger"][1]["reference_included"]=True
+    with pytest.raises(ValueError,match="actual/reference policy score-node sets differ"):module.validate(bad)
 
 
-def test_w4_v4_single_vs_prefrozen_multiple_coupling_reporting():
+def test_w4_v8_geometry_is_prefrozen_and_parameter_block_matched():
     module=_w4_validator()
-    single=module.validate(_w4_manifest(4))
-    assert single["aggregate_g_cf_mc_sample_valid"] and single["independent_candidates"]==4
-    assert single["reader_coupling_rows"]==4 and not single["reader_repeats_increase_independent_n"]
-    multiple=module.validate(_w4_manifest(4,coupling_ids=("u0","u1","u2")))
-    assert multiple["independent_candidates"]==4 and multiple["reader_coupling_rows"]==12
-    assert multiple["coupling_scope"]=="prefrozen_candidate_mean"
-    assert all(row["within_candidate_tau_dispersion"] is not None and row["coupling_sign_stability"]==1 for row in multiple["event_metrics"])
-    bad=_w4_manifest(4);bad["evidence_basis"].append("candidate_stable_help_harm")
-    with pytest.raises(ValueError,match="single coupling cannot support"):module.validate(bad)
+    fisher=_w4_manifest(4);fisher.update({"direction_adjudication_requested":True,
+      "gradient_geometry_mode":"Fisher_tested_subspace","fixed_coordinate_euclidean_pairing":-1.,
+      "fisher_geometry":{"parameter_block_hash":"7"*64,"projection_hash":"6"*64,
+        "sensitivity_manifest_hash":"5"*64,"effective_rank":2,"condition_number":10.,
+        "relative_damping":.01,"eigen_cutoff":.001,"endpoint_reference_fisher_bilinear":.5}})
+    report=module.validate(fisher)
+    assert report["geometry_claim"]=="empirical_Fisher_tested_subspace_geometry"
+    assert report["geometry_adjudication"]=="COORDINATE_SCALE_ARTIFACT"
+    delivery=_w4_manifest(4);delivery.update({"direction_adjudication_requested":True,
+      "gradient_geometry_mode":"optimizer_delivery","fixed_coordinate_euclidean_pairing":1.,
+      "optimizer_delivery":{"parameter_block_hash":"7"*64,"optimizer_state_hash_before":"4"*64,
+        "optimizer_state_hash_after":"4"*64,"adam_moments_included":True,"learning_rate_included":True,
+        "clip_included":True,"weight_decay_included":True,"accumulation_included":True,
+        "scaling_included":True,"state_mutation_disabled":True,"endpoint_gradient":[1.,0.],
+        "delta_theta_actual":[-1.,0.]}})
+    report=module.validate(delivery)
+    assert report["geometry_adjudication"]=="DELIVERY_CONFLICT_NOT_AUTOMATIC_CREDIT_FAILURE"
+    assert not report["pure_credit_evidence"] and report["optimizer_state_unchanged"]
+    bad=_w4_manifest(4);bad["reference_parameter_block_hash"]="8"*64
+    with pytest.raises(ValueError,match="actual/reference parameter blocks differ"):module.validate(bad)
+    bad=_w4_manifest(4);bad["geometry_selected_after_endpoint"]=True
+    with pytest.raises(ValueError,match="W4_NO_GO"):module.validate(bad)
 
 
-def test_csfgw_v2_score_function_identity_positive_and_three_negative_controls():
+def test_w4_v8_exact_enumeration_self_tests():
+    root=Path(__file__).parents[3]
+    for name,function,status in (("enumerate_w4_group_estimators_20260819.py","enumerate_identities","W4_GROUP_ESTIMATOR_ENUMERATION_PASS"),
+      ("enumerate_w4_endpoint_target_20260819.py","enumerate_counterexample","W4_ENDPOINT_TARGET_ENUMERATION_PASS"),
+      ("enumerate_w4_future_policy_20260819.py","enumerate_counterexample","W4_FUTURE_POLICY_ENUMERATION_PASS"),
+      ("enumerate_w4_gradient_geometry_20260819.py","enumerate_counterexample","PASS_EXACT_LINEAR_ALGEBRA")):
+        path=root/"experiments/7b_ideas/analysis"/name
+        spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        assert getattr(module,function)()["status"]==status
+
+
+def test_csfgw_v8_score_function_identity_positive_and_three_negative_controls():
     path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_counterfactual_score_function_identity_20260819.py"
     spec=importlib.util.spec_from_file_location("csfgw_identity",path)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -620,7 +724,7 @@ def test_csfgw_v2_score_function_identity_positive_and_three_negative_controls()
       "selected":True,"policy_controlled_token_kinds":["token","eos_or_stop"],
       "score_mask_token_kinds":["token","eos_or_stop"]}]
     manifest={**module.EXPECTED,"direct_commit_return_gradient":[.25],"candidates":rows}
-    assert module.audit(manifest)["status"]=="CSFGW_IDENTITY_V2_PASS"
+    assert module.audit(manifest)["status"]=="CSFGW_IDENTITY_V8_PASS"
     bad=json.loads(json.dumps(manifest));bad["reader_seed_derivation"]="hash(candidate)"
     with pytest.raises(ValueError,match="W4_NO_GO"):module.audit(bad)
 
@@ -630,6 +734,244 @@ def test_w4_launcher_is_dual_gated_and_never_runs_pilot():
     for marker in ("W4_GRADIENT_PILOT_REQUEST","W4_OPTIMIZER_STEPS","IDEA_EVIDENCE_LEDGER",
                    "MECHANISM_EXTENSION_DECISION","W4_NO_GO","highest_level=W3"):
         assert marker in launcher
+
+
+def _oott_o2_module():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_oott_o2_seed_coupling_20260819.py"
+    spec=importlib.util.spec_from_file_location("oott_o2",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def _oott_o2_manifest(*, crn=True, conflict=False):
+    value={"schema_version":"oott-o2-seed-coupling-v1","o2_existing_gate_authorized":True,
+      "primary_checkpoint_seed_namespaces_disjoint":True,"checkpoint_specific_seed_namespaces":True,
+      "seeds_per_example_per_checkpoint":4,"within_checkpoint_seed_mean_before_example_contrast":True,
+      "independent_unit":"stable_example_id","seed_repeats_increase_independent_n":False,
+      "per_example_sign_certification_authorized":False,"coupling_selected_by_pilot_variance":False,
+      "coupling_selected_by_narrower_ci":False,"coupling_selected_by_direction":False,
+      "policy_marginal_estimand_changes_with_coupling":False,"optimizer_steps":0,"new_rollouts":False,
+      "primary_seed_namespaces":{"T25":[100,101,102,103],"T200":[200,201,202,203]},
+      "primary_seed_manifest_hash":"a"*64,"primary_crn_direction_conflict":conflict,
+      "crn_sensitivity":{"requested":crn}}
+    if crn:value["crn_sensitivity"].update({"corrected_per_trajectory_seeds":True,
+      "bci_status":"PASS_COUPLED","role":"implementation_coupling_sensitivity_only",
+      "natural_cross_policy_trajectory_identity":False,"individual_or_causal_paired_effect_authorized":False,
+      "namespace_prefrozen":True,"coupling_manifest_hash":"b"*64,"seed_namespace":[300,301,302,303]})
+    return value
+
+
+def test_oott_o2_seed_coupling_default_block_primary_and_crn_contract():
+    module=_oott_o2_module()
+    assert module.validate({"schema_version":"oott-o2-seed-coupling-v1",
+      "o2_existing_gate_authorized":False})["status"]=="O2_NOT_AUTHORIZED"
+    primary=module.validate(_oott_o2_manifest(crn=False))
+    assert primary["primary_role"]=="policy_marginal_estimand" and not primary["training_authorized"]
+    conflict=module.validate(_oott_o2_manifest(conflict=True))
+    assert conflict["classification"]=="COUPLING_SENSITIVE_STOCHASTIC_TRANSPORT"
+    bad=_oott_o2_manifest();bad["primary_seed_namespaces"]["T200"][0]=100
+    with pytest.raises(ValueError,match="namespaces overlap"):module.validate(bad)
+    bad=_oott_o2_manifest();bad["crn_sensitivity"]["seed_namespace"][0]=200
+    with pytest.raises(ValueError,match="overlaps primary"):module.validate(bad)
+    bad=_oott_o2_manifest();bad["coupling_selected_by_narrower_ci"]=True
+    with pytest.raises(ValueError,match="primary contract failed"):module.validate(bad)
+
+
+def test_oott_o2_exact_bernoulli_coupling_enumeration():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_oott_o2_seed_coupling_20260819.py"
+    spec=importlib.util.spec_from_file_location("oott_enum",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    result=module.enumerate_variances()
+    assert result["status"]=="PASS_EXACT_ENUMERATION"
+    assert result["difference_variance"]=={"comonotone":.16,"independent":.4,"countermonotone":.56}
+
+
+def _multiwrite_rows():
+    rows=[]
+    for example in ("e0","e1"):
+        rows.extend([
+          {"stable_example_id":example,"write_id":"good","eligible_write_count":2,"score":1.,
+           "y_factual":0.,"y_noop":1.,"pair_complete":True,"pair_qualified":True,"postbranch_missing":False},
+          {"stable_example_id":example,"write_id":"bad","eligible_write_count":2,"score":-1.,
+           "y_factual":0.,"y_noop":-1.,"pair_complete":True,"pair_qualified":True,"postbranch_missing":False}])
+    return rows
+
+
+def test_paired_write_actionability_v2_multiwrite_weights_curve_and_cluster_bootstrap():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/analyze_paired_write_harm_prioritization_20260819.py"
+    spec=importlib.util.spec_from_file_location("paired_actionability",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    result=module.metrics(_multiwrite_rows())
+    assert result["mean_commit_harm"]==0 and result["selection_opportunity"]==.5
+    assert result["curve"]["0.5"]["gain_vs_best_constant"]==.5
+    assert result["independent_examples"]==2 and result["eligible_writes"]==4
+    assert result["tie_break"].endswith("composite_example_write_key")
+    assert not result["raw_pool_probability_identified"] and result["raw_pool_policy_value"] is None
+    assert set(result["eligible_target_harmful_commit_probability"])=={"0.1","0.25","0.5"}
+    raw={"complete_target_to_r1_to_pair_ledger":True,"raw_target_includes_r0":True,
+      "raw_target_includes_construct_failures":True,"raw_target_includes_unpaired_rows":True,
+      "N_raw":192,"M_obs":48,"M_miss":24}
+    assert module.metrics(_multiwrite_rows(),raw_pool_ledger=raw)["raw_pool_event_selection_bound"]["upper"]==.375
+    bad_raw={**raw,"raw_target_includes_r0":False}
+    with pytest.raises(ValueError,match="RAW_POOL_DENOMINATOR_FALSE_CLAIM"):
+        module.metrics(_multiwrite_rows(),raw_pool_ledger=bad_raw)
+    assert module.bootstrap(_multiwrite_rows(),8,1)["cluster_unit"]=="stable_example_id"
+    bad=_multiwrite_rows();bad[0]["postbranch_missing"]=True
+    with pytest.raises(ValueError,match="100_percent_branch_closure"):module.metrics(bad)
+    bad=_multiwrite_rows();bad.pop()
+    with pytest.raises(ValueError,match="eligible_write_denominator"):module.metrics(bad)
+    legacy=[{"stable_example_id":"e0","score":1.,"y_factual":0.,"y_noop":1.,"valid":True}]
+    with pytest.raises(ValueError,match="write_id"):module.metrics(legacy)
+
+
+def test_certificate_commit_rollback_v3_multiwrite_weights_single_checkpoint_and_closure():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/analyze_certificate_gated_commit_rollback_20260819.py"
+    spec=importlib.util.spec_from_file_location("certificate_multiwrite",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    rows=[]
+    for row in _multiwrite_rows():
+        rows.append({"stable_example_id":row["stable_example_id"],"write_id":row["write_id"],
+          "checkpoint_hash":"a"*64,"eligible_write_count":2,"certificate_commit":row["write_id"]=="good",
+          "y_commit":row["y_noop"],"y_rollback":row["y_factual"],"pair_complete":True,
+          "pair_qualified":True,"postbranch_missing":False})
+    result=module.metrics(rows)
+    assert result["selection_opportunity"]==.5 and result["certificate_gain"]==.5
+    assert result["independent_examples"]==2 and result["eligible_writes"]==4
+    assert result["eligible_weight_coverage"]==1 and not result["writes_increase_independent_n"]
+    assert "eligible_target_harmful_commit_probability" in result
+    assert not result["raw_pool_probability_identified"] and result["raw_pool_policy_value"] is None
+    assert module.bootstrap(rows,8,1)["cluster_unit"]=="stable_example_id"
+    bad=[dict(row) for row in rows];bad[0]["checkpoint_hash"]="b"*64
+    with pytest.raises(ValueError,match="one_valid_checkpoint"):module.metrics(bad)
+    bad=[dict(row) for row in rows];bad[0]["pair_complete"]=False
+    with pytest.raises(ValueError,match="100_percent_branch_closure"):module.metrics(bad)
+
+
+def test_actionability_denominator_claim_validator_rejects_raw_pool_false_names():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_actionability_denominator_claims_20260819.py"
+    spec=importlib.util.spec_from_file_location("denominator_claims",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    safe={"eligible_target_harmful_commit_probability":.1,
+      "eligible_target_beneficial_rejection_probability":.2,"raw_pool_probability_identified":False,
+      "raw_pool_policy_value_identified":False,"raw_pool_policy_value":None}
+    assert module.validate(safe)["status"]=="ACTIONABILITY_DENOMINATOR_LABELS_PASS"
+    bad={**safe,"deployment_risk":.1}
+    with pytest.raises(ValueError,match="RAW_POOL_DENOMINATOR_FALSE_CLAIM"):module.validate(bad)
+    bad={**safe,"raw_pool_probability_identified":True}
+    with pytest.raises(ValueError,match="RAW_POOL_DENOMINATOR_FALSE_CLAIM"):module.validate(bad)
+
+
+def _closed_loop_adjudicator():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/adjudicate_closed_loop_actionability_v2_20260819.py"
+    spec=importlib.util.spec_from_file_location("closed_loop_v2",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def _closed_loop_manifest():
+    examples=[f"e{i}" for i in range(16)];policies=["GC","GF","GN","GS"]
+    rows=[{"stable_example_id":example,"policy":policy,"execution_status":"scientific_terminal",
+      "terminal_class":"complete","official_endpoint_value":.5,"retry_count":0,"retry_to_success":False,
+      "certificate_defined":True} for example in examples for policy in policies]
+    return {"schema_version":"closed-loop-commit-v4-terminal-IUT","closed_loop_existing_gate_authorized":True,
+      "intent_to_execute_primary":True,"common_valid_intersection_primary":False,
+      "intersection_diagnostic_only":True,"retry_to_success":False,
+      "infrastructure_failure_scientific_zero":False,"audit_size":16,
+      "policy_totality_and_attrition_handling":"adjudicator_v2_hard_gate","optimizer_steps":0,
+      "terminal_attribution_gate":"terminal_pairwise_IUT_and_regret",
+      "local_action_attribution_authorized":False,"new_local_interventions":False,
+      "clairvoyant_assignments_feed_selector_or_gate":False,
+      "package_selector_training_authorized":False,
+      "new_independent_selector_confirmation_authorized":False,
+      "new_rollouts":False,"assignment_manifest_hash":"a"*64,"assigned_stable_example_ids":examples,
+      "policies":policies,"executions":rows,"horizon_mode":"H_fixed","horizon":2,
+      "horizon_frozen_before_confirm32_policy_outcomes":True,
+      "horizon_freeze_basis":"plumbing_resource_failure_outcome_blind_claim_need_only",
+      "complete_frozen_horizon_executed":True,
+      "audit16_horizon_selected_by_policy_value_direction":False,"additional_resources_authorized":False,
+      "prefrozen_terminal_contrasts":["GC-GF","GC-GN","GC-GS"],"terminal_contrast_SESOI":0.,
+      "pairwise_interval_lower_bounds":{"GC-GF":0.,"GC-GN":0.,"GC-GS":0.},
+      "pairwise_interval_method_hash":"c"*64}
+
+
+def test_closed_loop_actionability_v2_totality_attrition_and_audit16():
+    module=_closed_loop_adjudicator()
+    assert module.adjudicate({"schema_version":"closed-loop-commit-v4-terminal-IUT",
+      "closed_loop_existing_gate_authorized":False})["status"]=="CLOSED_LOOP_NOT_AUTHORIZED"
+    passed=module.adjudicate(_closed_loop_manifest())
+    assert passed["point_value_authorized"] and passed["assigned_examples"]==16
+    missing=_closed_loop_manifest();missing["executions"].pop()
+    assert module.adjudicate(missing)["status"]=="AUDIT16_CONSTRUCTION_DIAGNOSTIC_ONLY"
+    undefined=_closed_loop_manifest();undefined["executions"][2]["certificate_defined"]=False
+    assert module.adjudicate(undefined)["status"]=="CERTIFICATE_POLICY_NOT_TOTAL"
+    fallback=_closed_loop_manifest();fallback["executions"][2]["certificate_defined"]=False
+    fallback["executions"][2]["certificate_fallback"]={"frozen_before_outcome":True,"action":"rollback",
+      "rule_hash":"b"*64,"applied":True}
+    assert module.adjudicate(fallback)["point_value_authorized"]
+    infra=_closed_loop_manifest();infra["executions"][0].update({"execution_status":"infrastructure_failure",
+      "official_endpoint_value":None,"failure_class":"OOM","incident_ledger_hash":"b"*64,
+      "state_preserved":True,"full_manifest_rerun_required":True,"old_ledger_retained":True,
+      "new_unique_experiment_name":"audit16_rerun2"})
+    result=module.adjudicate(infra)
+    assert result["status"].startswith("INFRASTRUCTURE_FAILURE") and not result["scientific_zero_imputed"]
+    retry=_closed_loop_manifest();retry["executions"][0]["retry_count"]=1
+    with pytest.raises(ValueError,match="retry-to-success"):module.adjudicate(retry)
+
+
+def test_closed_loop_terminal_attribution_v4_iut_oracle_regret_and_no_go():
+    module=_closed_loop_adjudicator();value=_closed_loop_manifest()
+    for row in value["executions"]:
+        row["official_endpoint_value"]={"GC":1.,"GF":.5,"GN":.4,"GS":.3}[row["policy"]]
+    value["pairwise_interval_lower_bounds"]={"GC-GF":.2,"GC-GN":.2,"GC-GS":.2}
+    value["terminal_contrast_SESOI"]=.1
+    result=module.adjudicate(value)
+    assert result["control_dominance_claim_authorized"]
+    assert result["GC_minus_max_control_point_summary"]==.5
+    assert result["V_fixed_star"]==1 and result["V_clair"]==1
+    assert result["Opportunity_package"]==0 and result["Regret_GC_clair"]==0
+    assert result["terminal_pairwise_contrasts"]["GC-GF"]["win_tie_loss"]==[16,0,0]
+    bad=_closed_loop_manifest();bad["pairwise_interval_lower_bounds"]["GC-GN"]=-.1
+    no_go=module.adjudicate(bad)
+    assert no_go["status"]=="CLOSED_LOOP_CONTROL_DOMINANCE_NO_GO"
+    assert not no_go["control_dominance_claim_authorized"]
+    bad=_closed_loop_manifest();bad["prefrozen_terminal_contrasts"]=["GC-GF"]
+    with pytest.raises(ValueError,match="terminal contrasts must be prefrozen"):module.adjudicate(bad)
+
+
+def test_closed_loop_oracle_semantics_fixed_vs_clairvoyant_exact_enumeration():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_closed_loop_oracle_semantics_20260819.py"
+    spec=importlib.util.spec_from_file_location("oracle_semantics",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    result=module.exact_enumeration()
+    assert result["V_fixed_star"]==.5 and result["V_clair"]==1
+    assert result["Opportunity_package"]==.5 and not result["fixed_policy_with_value_one_exists"]
+    manifest=_closed_loop_manifest();manifest["clairvoyant_assignments_feed_selector_or_gate"]=True
+    with pytest.raises(ValueError,match="intent-to-execute contract failed"):
+        _closed_loop_adjudicator().adjudicate(manifest)
+
+
+def test_closed_loop_horizon_selection_v3_fixed_selected_and_exact_bias_identity():
+    module=_closed_loop_adjudicator()
+    selected=_closed_loop_manifest();selected.update({"horizon_mode":"H_selected",
+      "confirm32_two_turn_outcome_accessed_before_third_turn":True,
+      "two_turn_primary_adjudication_prefrozen":True,
+      "third_turn_role":"outcome_triggered_selected_horizon_stress_description",
+      "third_turn_ordinary_unselected_ci_or_pvalue":False,"third_turn_confirmatory_upgrade":False,
+      "third_turn_positive_replaces_two_turn_negative":False,
+      "untouched_three_turn_confirmation_authorized":False})
+    result=module.adjudicate(selected)
+    assert result["status"]=="FINITE_TWO_TURN_ACTIONABILITY_WITH_SELECTED_THREE_TURN_DESCRIPTION"
+    assert result["primary_horizon"]==2 and not result["training_authorized"]
+    bad=_closed_loop_manifest();bad["audit16_horizon_selected_by_policy_value_direction"]=True
+    with pytest.raises(ValueError,match="H_fixed contract failed"):module.adjudicate(bad)
+    bad=selected.copy();bad["third_turn_confirmatory_upgrade"]=True
+    with pytest.raises(ValueError,match="H_selected contract failed"):module.adjudicate(bad)
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_closed_loop_horizon_selection_20260819.py"
+    spec=importlib.util.spec_from_file_location("horizon_selection",path)
+    audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)
+    exact=audit.exact_identity()
+    assert exact["status"]=="PASS_EXACT_TRUNCATED_NORMAL_IDENTITY"
+    assert exact["E_Z3_given_Z2_positive"]==pytest.approx(.79788456)
 
 
 def test_adaptive_stop_rule_v4_and_launcher_guard():

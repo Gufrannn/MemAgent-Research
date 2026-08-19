@@ -32,3 +32,15 @@ manifest:
   require_frozen_hash: true
 validator: validate_oott_stratum_timing_20260819.py
 resource: {new_rollout: false, new_training: false, unlocks_training: false, changes_completion_to_200: false}
+o2_checkpoint_seed_coupling:
+  current_status: O2_NOT_AUTHORIZED
+  primary: {checkpoint_seed_namespaces: independent_nonoverlapping, seeds_per_example_checkpoint: 4, aggregate: checkpoint_mean_then_example_contrast}
+  independent_unit: stable_example_id
+  seed_repeats_increase_n: false
+  CRN:
+    prerequisites: [corrected_per_trajectory_seeds, BCI_PASS_COUPLED, prefrozen_coupling_manifest, namespace_disjoint_from_primary]
+    role: implementation_coupling_sensitivity_only
+    natural_cross_policy_trajectory_identity: false
+    individual_or_causal_paired_effect: false
+  direction_conflict: COUPLING_SENSITIVE_STOCHASTIC_TRANSPORT
+  coupling_changes: Monte_Carlo_variance_only_not_policy_marginal_estimand

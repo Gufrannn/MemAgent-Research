@@ -1,0 +1,15 @@
+{
+  "schema_version": "oott-o2-seed-coupling-v1",
+  "o2_existing_gate_authorized": false,
+  "status": "O2_NOT_AUTHORIZED",
+  "optimizer_steps": 0,
+  "new_rollouts": false,
+  "queue_changed": false,
+  "required_if_future_gate_unlocks": {
+    "primary_seed_namespaces": "checkpoint_specific_disjoint_four_each",
+    "within_checkpoint_seed_mean_before_example_contrast": true,
+    "independent_unit": "stable_example_id",
+    "crn_role": "implementation_coupling_sensitivity_only",
+    "crn_namespace_must_not_overlap_primary": true
+  }
+}

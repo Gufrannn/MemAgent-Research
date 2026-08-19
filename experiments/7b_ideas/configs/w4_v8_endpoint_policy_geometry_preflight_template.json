@@ -1,0 +1,23 @@
+{
+  "schema_version": "counterfactual-gradient-witness-v8",
+  "status": "ENDPOINT_TARGET_AMBIGUOUS",
+  "template_only": true,
+  "training_authorized": false,
+  "optimizer_steps": 0,
+  "new_rollouts": false,
+  "endpoint_mode": "UNRESOLVED_FILL_COMPLETE_LEDGER_BEFORE_AUDIT",
+  "required_endpoint_parity_dimensions": [
+    "horizon", "future_policy", "suffix_contract", "reader", "answer_cell",
+    "answer_normalization", "reward_components", "reward_weights", "reward_scale",
+    "invalid_rule", "truncation_rule", "missing_rule", "row_weights",
+    "candidate_joinability", "score_mask_joinability"
+  ],
+  "policy_derivative_mode": "UNRESOLVED_DECLARE_L_OR_T",
+  "required_policy_node_roles": ["current_writer", "future_writer", "future_answer", "future_reader"],
+  "direction_adjudication_requested": false,
+  "gradient_geometry_mode": "none_no_direction_adjudication",
+  "raw_euclidean_cosine_role": "fixed_coordinate_secondary_diagnostic_only",
+  "raw_euclidean_cosine_parameterization_invariant": false,
+  "geometry_selected_after_endpoint": false,
+  "future_direction_modes_must_be_prefrozen": ["Fisher_tested_subspace", "optimizer_delivery"]
+}

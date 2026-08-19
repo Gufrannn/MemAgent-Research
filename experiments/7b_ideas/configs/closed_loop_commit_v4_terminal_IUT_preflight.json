@@ -1,0 +1,19 @@
+{
+  "schema_version": "closed-loop-commit-v4-terminal-IUT",
+  "closed_loop_existing_gate_authorized": false,
+  "status": "CLOSED_LOOP_NOT_AUTHORIZED",
+  "audit_size": 16,
+  "optimizer_steps": 0,
+  "new_rollouts": false,
+  "queue_changed": false,
+  "policy_totality_and_attrition_handling": "adjudicator_v2_hard_gate",
+  "terminal_attribution_gate": "terminal_pairwise_IUT_and_regret",
+  "prefrozen_terminal_contrasts": ["GC-GF", "GC-GN", "GC-GS"],
+  "local_action_attribution_authorized": false,
+  "new_local_interventions": false,
+  "clairvoyant_assignments_feed_selector_or_gate": false,
+  "package_selector_training_authorized": false,
+  "new_independent_selector_confirmation_authorized": false,
+  "horizon_mode": "H_fixed_REQUIRES_PREOUTCOME_FREEZE_IF_UNLOCKED",
+  "additional_resources_authorized": false
+}

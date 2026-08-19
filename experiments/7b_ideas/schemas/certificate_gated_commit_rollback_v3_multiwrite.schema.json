@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Certificate-gated commit/rollback v3 multi-write input row",
+  "type":"object",
+  "required":["stable_example_id","write_id","checkpoint_hash","eligible_write_count","certificate_commit","y_commit","y_rollback","pair_complete","pair_qualified","postbranch_missing"],
+  "properties":{
+    "stable_example_id":{"type":["string","integer"]},"write_id":{"type":["string","integer"]},
+    "checkpoint_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "eligible_write_count":{"type":"integer","minimum":1},"certificate_commit":{"type":"boolean"},
+    "y_commit":{"type":"number"},"y_rollback":{"type":"number"},
+    "pair_complete":{"const":true},"pair_qualified":{"const":true},"postbranch_missing":{"const":false}
+  },
+  "additionalProperties":true
+}

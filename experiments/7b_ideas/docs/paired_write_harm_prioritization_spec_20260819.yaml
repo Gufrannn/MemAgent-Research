@@ -1,55 +1,34 @@
-schema_version: paired-write-harm-prioritization-v1
+schema_version: paired-write-harm-prioritization-v2
 status: frozen_secondary_after_shapeA_v8_pass
-purpose: bridge_effect_modifier_to_finite_binary_action_value
-prerequisites:
-  shapeA_v8_all_core_gates: pass
-  stable_example_identity: pass
-  exact_factual_noop_shared_suffix: pass
-  outcome_independent_score_orientation: higher_means_more_commit_harm
-  semantic_pairing_specificity: pass
-unit:
-  iid: stable_example_id
-  exactly_one_row_per_id: true
-  forbidden_pseudo_replication: [arms, turns, seeds, tokens, folds, curve_cutpoints]
-inputs:
-  required: [stable_example_id, score, y_factual, y_noop, valid]
-definitions:
-  commit_harm: y_noop_minus_y_factual
-  prioritized_harm_curve: mean_harm_top_q_minus_population_mean_harm
-  area_name: AUPHC_paired_RATE_analogue_not_standard_RATE_estimator
-  policy: noop_on_top_q_else_commit
-  opportunity: mean_max_arm_minus_max_mean_arm
-  gain: policy_value_minus_best_constant_value
-  regret: oracle_value_minus_policy_value
+claim_name: myopic eligible-write actionability under a fixed shared-suffix protocol
+prerequisites: {shapeA_v8_all_core_gates: pass, exact_factual_noop_shared_suffix: pass, branch_closure: 1.0}
+decision_key: [stable_example_id, write_id]
+target_population: uniform_example_then_uniform_prefrozen_eligible_write
+weight:
+  row: 1/eligible_write_count
+  example_total: 1
+  postbranch_missing_reallocated: false
+  applies_to: [arm_means, best_constant, rowwise_oracle, myopic_value, gain, opportunity, regret, harm_mass, benefit_mass, coverage]
+independent_unit: stable_example_id
+bootstrap: {unit: stable_example_id, retain_all_writes: true, row_bootstrap: false}
 curve:
-  descriptive_q: [0.10, 0.25, 0.50]
-  tie_break: sha256_of_stable_example_id_outcome_blind
-  choose_best_q_on_confirmation: forbidden
-inference:
-  bootstrap_unit: stable_example_id
-  bootstrap_reps: 2000
-  interval: percentile_95
-  fold_level_tests: forbidden
-  cutpoint_level_tests: forbidden
-  score_permutation_is_exact_randomization_test: false
-hard_fail:
-  - duplicate_stable_example_id
-  - missing_or_nonfinite_required_value
-  - gain_exceeds_opportunity
-  - outcome_based_tie_break
-  - confirmation_threshold_selected_by_best_observed_gain
-claim_ceiling:
-  ranking_only: frozen_score_prioritizes_realized_paired_write_harm
-  policy_pass_privileged_score: finite_protocol_offline_actionability_ceiling
-  forbidden: [safe_per_update_guarantee, online_deployable_gate_without_P0_P1_score, global_optimal_policy, causal_mediation, new_RATE_or_uplift_method]
-execution:
-  adds_rollout: false
-  adds_training: false
-  analyzer: analyze_paired_write_harm_prioritization_20260819.py
-sequential_scope:
-  one_step_pass_authorizes_online_or_sequential_safety: false
-  required_existing_stress: 2_to_3_turn_closed_loop
-gate_ledger:
-  schema: paired_write_harm_gate.schema.json
-  fail_closed: true
-  never_unlocks_training: true
+  tie_break: outcome_blind_sha256_of_composite_example_write_key
+  q_axis: cumulative_eligible_weight_not_row_count
+  AUPHC: integrate_adjacent_eligible_weight_intervals
+  choose_best_q_on_confirmation: false
+closure:
+  eligible_write_count_matches_prefrozen_rows: required
+  complete_and_pair_qualified_fraction: 1.0
+  complete_case_or_weight_renormalization: forbidden
+forbidden: [one_example_one_row_contract, per_write_IID, row_bootstrap, sequential_gate_or_policy_value, closed_loop_value_from_single_write_potential_outcomes, average_within_example_before_rowwise_oracle]
+execution: {adds_rollout: false, adds_training: false, training_authorized: false}
+gate_ledger: {schema: paired_write_harm_gate.schema.json, never_unlocks_training: true}
+denominator_scope:
+  identified: uniform_example_then_uniform_R1_eligible_write
+  required_probability_names: [eligible_target_harmful_commit_probability, eligible_target_beneficial_rejection_probability]
+  raw_pool_probability_identified: false
+  raw_target_weight: 1/m_i^target
+  raw_target_includes: [R0, construct_failure, unpaired_rows]
+  complete_attrition_ledger_event_bound: "[M_obs/N_raw,(M_obs+M_miss)/N_raw]"
+  raw_policy_value_without_frozen_R0_fallback: undefined
+  violation: RAW_POOL_DENOMINATOR_FALSE_CLAIM

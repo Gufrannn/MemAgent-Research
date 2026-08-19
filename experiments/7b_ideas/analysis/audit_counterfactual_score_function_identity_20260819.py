@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""CPU identity audit for the CSFGW/W4 v2 score-function reference."""
+"""CPU identity audit for the W4 v8 control-variate reference."""
 from __future__ import annotations
 import argparse,json,math
 from pathlib import Path
 
 EXPECTED={
-  "schema_version":"counterfactual-score-function-identity-v2",
+  "schema_version":"counterfactual-score-function-identity-v8",
+  "exact_noop_role":"control_variate_not_new_action_value_target",
   "noop_coupling_frozen_before_candidate":True,
   "noop_coupling_exogenous_given_state":True,
   "reader_seed_derivation":"pre_candidate_state_coupling_manifest",
@@ -20,7 +21,7 @@ def _close(a,b,tol=1e-10):return all(abs(x-y)<=tol for x,y in zip(a,b))
 
 def audit(value):
     wrong={key:(value.get(key),expected) for key,expected in EXPECTED.items() if value.get(key)!=expected}
-    if wrong:_fail(f"v2 exogeneity/pre-tau freeze contract failed {wrong}")
+    if wrong:_fail(f"v8 exogeneity/pre-return freeze contract failed {wrong}")
     rows=value.get("candidates",[])
     if len(rows)<2:_fail("identity audit requires full candidate support")
     probabilities=[float(row["probability"]) for row in rows]
@@ -46,9 +47,11 @@ def audit(value):
     supplied=[float(x) for x in value.get("direct_commit_return_gradient",[])]
     if len(supplied)!=dimension or not _close(direct,supplied):_fail("direct commit-return gradient control mismatch")
     if not _close(cf,direct):_fail("constant-baseline score-function identity mismatch")
-    return {"status":"CSFGW_IDENTITY_V2_PASS","constant_baseline_control":True,
+    return {"status":"CSFGW_IDENTITY_V8_PASS","constant_baseline_control":True,
       "direct_commit_return_gradient_equal":True,"writer_mask_complete_including_stop":True,
       "pre_candidate_exogenous_coupling":True,"pre_tau_selection_freeze":True,
+      "exact_noop_role":"control_variate_not_new_or_truer_action_value_target",
+      "same_expected_writer_gradient":True,"algorithm_novelty":False,
       "highest_claim_level":"W3","w4_claim_authorized":False,"training_authorized":False,
       "optimizer_steps":0,"new_rollouts":False}
 
@@ -60,7 +63,7 @@ def self_test():
       "score_gradient":[-.5],"selected":True,"policy_controlled_token_kinds":["token","eos_or_stop"],
       "score_mask_token_kinds":["token","eos_or_stop"]}]
     base={**EXPECTED,"direct_commit_return_gradient":[.25],"candidates":rows}
-    assert audit(base)["status"]=="CSFGW_IDENTITY_V2_PASS"
+    assert audit(base)["status"]=="CSFGW_IDENTITY_V8_PASS"
     negatives=[]
     bad=json.loads(json.dumps(base));bad["candidates"][1]["noop_baseline"]=.5;negatives.append(bad)
     bad=json.loads(json.dumps(base));bad["tau_or_outcome_conditioned_selection"]=True;bad["candidates"][1]["selected"]=False;negatives.append(bad)
@@ -69,7 +72,7 @@ def self_test():
         try:audit(bad)
         except ValueError as exc:assert "W4_NO_GO" in str(exc)
         else:raise AssertionError("negative identity control passed")
-    print("counterfactual_score_function_identity_v2_self_test=ok")
+    print("counterfactual_score_function_identity_v8_self_test=ok")
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--manifest",type=Path);parser.add_argument("--self-test",action="store_true");args=parser.parse_args()

@@ -1,51 +1,54 @@
-schema_version: counterfactual-gradient-witness-v4
-reference:
-  on_policy_same_checkpoint_candidate: required
-  exact_noop_v2_same_candidate_E: required
-  noop_baseline_candidate_rng_cache_independent: required
-  noop_coupling_frozen_before_candidate: required
-  conditional_independence: U_independent_of_C_given_S
-  forbidden_reader_seed_derivation: [candidate_hash, candidate_length]
-  rng_advance_candidate_length_dependent: false
-  writer_token_mask_exact: required
-  writer_mask_includes: [all_policy_controlled_tokens, eos_or_stop_decision]
-  shared_suffix_endpoint_frozen: required
-selection:
-  validity_frozen_before_tau: true
-  truncation_frozen_before_tau: true
-  row_selection_frozen_before_tau: true
-  tau_or_outcome_conditioned_selection: false
-  PA_or_PB_bypass: false
-definition:
-  tau: Y_commit_minus_Y_retain
-  G_CF: tau_times_sum_writer_token_grad_log_pi_candidate_given_state
-  G_credit: actual_group_advantage_token_broadcast_without_clip_or_regularizers
-  G_task: actual_clipped_task_surrogate
-  G_reg: registered_KL_entropy_and_regularizers
-  G_total: G_task_plus_G_reg
-  additive_closure_required: true
-comparison_keys: [candidate, group, checkpoint, parameter_subspace]
-actual_graph_reconstruction: [group, bonus, logprob, clip, KL]
-credit_primary_outputs: [G_credit_vs_G_CF_alignment, captured_signed_ratio, credit_effect_weighted_silent_mass, credit_effect_weighted_opposing_mass]
-delivery_adjudication:
-  credit_aligned_task_silent_or_opposed: CLIP_OR_TRUST_REGION_DELIVERY_BOTTLENECK
-  task_aligned_total_opposed: REGULARIZATION_TRADEOFF
-coupling:
-  single_exogenous_shared_CRN:
-    aggregate_G_CF_MC_sample_valid: true
-    effect_sign_scope: realized_coupling_only
-    candidate_stable_help_harm: false
-  multiple_independent:
-    freeze_before_first_tau: [coupling_ids, count]
-    summarize_within_candidate: [mean_tau, dispersion, sign_stability]
-    inference_cluster: candidate
-  reader_repeats_increase_n: false
-  add_seed_after_first_tau: false
-  select_seed_by_sign: false
-forbidden_evidence: [gradient_difference_norm, gradient_norm_only, scalar_advantage_sign, single_parameter_delta]
-defaults: {optimizer_steps: 0, new_rollouts: false}
-sample_size:
-  pilot4: plumbing_only
-  minimum_independent_material_events_for_scientific_audit: 20
+schema_version: counterfactual-gradient-witness-v8
+authorization: {w4_claim: false, training: false, gradient_pilot: false, optimizer_step: false, algorithm_novelty: false}
+defaults: {optimizer_steps: 0, new_rollouts: false, policy_derivative_mode: L_frozen_future_policy}
+endpoint_parity:
+  required_dimensions: [horizon, future_policy, suffix_contract, reader, answer_cell, answer_normalization, reward_components, reward_weights, reward_scale, invalid_rule, truncation_rule, missing_rule, row_weights, candidate_joinability, score_mask_joinability]
+  missing_or_unknown: ENDPOINT_TARGET_AMBIGUOUS
+  all_equal_mode: CV_same_endpoint
+  any_difference_mode: OM_distinct_endpoint
+CV_same_endpoint:
+  exact_noop_role: control_variate_not_new_action_value_target
+  including_self_expected_scale: (n-1)/n
+  debias_factor: n/(n-1)
+  debiased_all_mean_equals_loo_per_batch: true
+  theoretical_null: E_group[G_credit_debiased-G_CF]=0
+  primary_outputs: [paired_cross_group_mean, paired_cross_group_variance]
+  MSE_requires: independent_many_action_or_replication_reference
+  stable_nonzero_mean_diagnoses: [endpoint_parity, IID, baseline_independence, selection, score_mask, loss_reconstruction]
+OM_distinct_endpoint:
+  legal_name: surrogate_objective_gradient_mismatch
+  forbidden_name: same_reward_credit_estimator_loss
+  RED_pass_required: true
+  outputs: [G_eval_minus_G_train_cluster_interval, endpoint_label_shuffle_null, equal_scale_component_ablation]
+  exact_noop_repairs_mismatch: false
+policy_derivative:
+  node_ledger_fields: [role, checkpoint, parameter_identity, shares_theta, semantics, token_span_and_EOS, mask_hash, actual_included, reference_included, arm_parity, stopgrad]
+  actual_reference_node_sets_match: required
+  L_frozen_future_policy:
+    future_nodes: frozen_pi_bar_stop_gradient
+    legal_label: frozen_future_local_writer_gradient
+    current_score_includes_EOS_stop: true
+  T_tied_recurrent_policy:
+    complete_theta_nodes_label: full_terminal_recurrent_policy_gradient
+    current_only_label: local_recurrent_semi_gradient
+    current_only_full_gradient_claim: false
+gradient_geometry:
+  raw_euclidean_full_sketch_rademacher:
+    role: fixed_coordinate_secondary_diagnostic_only
+    invertible_reparameterization_invariant: false
+    method_unlock: false
+  default: none_no_direction_adjudication
+  selection_time: before_endpoint_unblinding
+  Fisher_tested_subspace:
+    required: [parameter_block_hash, projection_hash, effective_rank, condition_number, relative_damping, eigen_cutoff, sensitivity_manifest_hash]
+    legal_claim: empirical_Fisher_tested_subspace_geometry
+  optimizer_delivery:
+    reconstruction: [Adam_moments, learning_rate, clip, weight_decay, accumulation, scaling]
+    state_mutation: false
+    output: g_endpoint_dot_DeltaTheta_actual
+    legal_claim: optimizer_delivery_evidence_not_pure_credit
+  coordinate_scale_artifact: euclidean_opposed_but_Fisher_or_delivery_not_opposed
+  delivery_conflict: not_automatic_credit_failure
+forbidden_evidence: [single_batch_alignment, captured_signed_ratio, silent_mass, opposed_mass, nonzero_gradient_norm, nonzero_gradient_rate, gradient_difference_norm, scalar_advantage_sign, single_parameter_delta, parameterization_invariant_raw_euclidean_cosine]
+sample_size: {pilot_independent_groups: 4, scientific_minimum_independent_groups: 20}
 failure: {status: W4_NO_GO, highest_level: W3}
-authorization: {w4_claim: false, training: false, gradient_pilot: false, optimizer_step: false}
