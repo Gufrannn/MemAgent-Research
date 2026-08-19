@@ -12,18 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import importlib.util
 import os
-from functools import partial
+import sys
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 import ray
 
 from verl import DataProto
 
 
-def get_custom_reward_fn(config):
-    import importlib.util
-    import sys
+@lru_cache(maxsize=None)
+def _load_custom_reward_callable(file_path: str, function_name: str):
+    module_digest = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:16]
+    module_name = f"_verl_custom_reward_{module_digest}"
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot create module spec for reward file '{file_path}'.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    if not hasattr(module, function_name):
+        raise AttributeError(f"Reward function '{function_name}' not found in '{file_path}'.")
+    return getattr(module, function_name)
 
+
+@dataclass(frozen=True)
+class FileRewardFunction:
+    """Pickle-safe lazy loader for file-backed custom reward functions."""
+
+    file_path: str
+    function_name: str
+    reward_kwargs: dict = field(default_factory=dict)
+
+    def __call__(self, *args, **kwargs):
+        raw_fn = _load_custom_reward_callable(self.file_path, self.function_name)
+        merged_kwargs = {**kwargs, **self.reward_kwargs}
+        return raw_fn(*args, **merged_kwargs)
+
+
+def get_custom_reward_fn(config):
     reward_fn_config = config.get("custom_reward_function") or {}
     file_path = reward_fn_config.get("path")
     if not file_path:
@@ -32,27 +62,15 @@ def get_custom_reward_fn(config):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Reward function file '{file_path}' not found.")
 
-    spec = importlib.util.spec_from_file_location("custom_module", file_path)
-    module = importlib.util.module_from_spec(spec)
     try:
-        sys.modules["custom_module"] = module
-        spec.loader.exec_module(module)
+        function_name = reward_fn_config.get("name")
+        _load_custom_reward_callable(file_path, function_name)
     except Exception as e:
         raise RuntimeError(f"Error loading module from '{file_path}': {e}") from e
 
-    function_name = reward_fn_config.get("name")
-    if not hasattr(module, function_name):
-        raise AttributeError(f"Reward function '{function_name}' not found in '{file_path}'.")
-
     print(f"using customized reward function '{function_name}' from '{file_path}'")
-    raw_fn = getattr(module, function_name)
-
     reward_kwargs = dict(reward_fn_config.get("reward_kwargs", {}))
-
-    # ThreadRewardManager forwards this callable through a Ray actor into a
-    # ProcessPoolExecutor. A nested closure is not serializable by Python's
-    # standard multiprocessing pickler; functools.partial is.
-    return partial(raw_fn, **reward_kwargs) if reward_kwargs else raw_fn
+    return FileRewardFunction(file_path, function_name, reward_kwargs)
 
 
 def load_reward_manager(config, tokenizer, num_examine, **reward_kwargs):
