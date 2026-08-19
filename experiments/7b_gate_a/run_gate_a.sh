@@ -51,8 +51,8 @@ IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
   echo "Visible GPU count, N_GPUS and FSDP_SIZE must match." >&2
   exit 48
 }
-[[ $N_GPUS -eq 2 || $N_GPUS -eq 4 || $N_GPUS -eq 8 ]] || {
-  echo "Gate A supports only an explicit 2, 4 or 8 GPU allocation." >&2
+[[ $N_GPUS -eq 2 || $N_GPUS -eq 4 || $N_GPUS -eq 6 || $N_GPUS -eq 8 ]] || {
+  echo "Gate A supports only an explicit 2, 4, 6 or 8 GPU allocation." >&2
   exit 48
 }
 
