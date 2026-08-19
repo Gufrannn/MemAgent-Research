@@ -29,6 +29,7 @@ When working with Megatron:
 import logging
 import os
 from contextlib import contextmanager
+from copy import copy
 from typing import Any, Dict, List, Union
 
 import numpy as np
@@ -282,9 +283,23 @@ class vLLMRollout(BaseRollout):
             prepared_time = time.time()
             if torch.distributed.get_rank() == 0:
                 print(f"prepare time: {prepared_time - start_time}")
+            request_seeds = non_tensor_batch.pop("request_seeds", None)
+            effective_sampling_params = self.sampling_params
+            if request_seeds is not None:
+                if len(request_seeds) != len(vllm_inputs):
+                    raise ValueError(
+                        f"request_seeds must align with vLLM inputs: {len(request_seeds)} != {len(vllm_inputs)}"
+                    )
+                effective_sampling_params = []
+                for request_seed in request_seeds:
+                    request_sampling_params = copy(self.sampling_params)
+                    request_sampling_params.seed = int(request_seed)
+                    effective_sampling_params.append(request_sampling_params)
+                non_tensor_batch["rollout_request_seed"] = np.asarray(request_seeds, dtype=np.uint64)
+
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
-                sampling_params=self.sampling_params,
+                sampling_params=effective_sampling_params,
                 use_tqdm=False,
             )
 

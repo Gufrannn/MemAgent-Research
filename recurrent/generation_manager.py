@@ -15,12 +15,14 @@ import logging
 from contextlib import contextmanager
 from typing import Dict, List, Tuple, Type
 
+import numpy as np
 import torch
 from codetiming import Timer
 
 from verl import DataProto
 
 from .interface import RAgent, RConfig
+from .research.trajectory_seeding import derive_turn_request_seeds
 from .utils import (chat_template, create_attention_mask, create_position_ids,
                     graceful_padding, indexing_proto,
                     pad_tensor_list_to_length)
@@ -85,6 +87,10 @@ class LLMGenerationManager:
         Use "Hello" as padding, insert padding data into batch so that data 
         """
         bsz = input_ids.shape[0]
+        meta_info = dict(meta_info)
+        request_seeds = meta_info.pop("request_seeds", None)
+        if request_seeds is not None and len(request_seeds) != bsz:
+            raise ValueError(f"request_seeds must align with active requests: {len(request_seeds)} != {bsz}")
 
         group_nums = self.world_size
         remainder = bsz % group_nums
@@ -105,12 +111,20 @@ class LLMGenerationManager:
             input_ids = padding_by_index(input_ids, padding_token_ids, padding_index)
             attention_masks = padding_by_index(attention_masks, padding_attention_masks, padding_index)
             position_ids = padding_by_index(position_ids, padding_position_ids, padding_index)
+            if request_seeds is not None:
+                request_seeds = [
+                    int(request_seeds[int(index)]) if int(index) >= 0 else 0
+                    for index in padding_index
+                ]
 
+        non_tensors = None
+        if request_seeds is not None:
+            non_tensors = {"request_seeds": np.asarray(request_seeds, dtype=np.uint64)}
         batch = DataProto.from_dict(tensors={
             'input_ids': input_ids,
             'position_ids': position_ids,
             'attention_mask': attention_masks
-        }, meta_info=meta_info)
+        }, non_tensors=non_tensors, meta_info=meta_info)
         output_batch = self.actor_rollout_wg.generate_sequences(batch)
         if remainder:
             # 4. remove padding
@@ -128,11 +142,19 @@ class LLMGenerationManager:
         meta_info = gen_batch.meta_info #  do_sample, is_validate, eos/pad are stored in here.
         pad_token_id = self.tokenizer.pad_token_id
         self.agent.start(gen_batch, timing_raw)
+        trajectory_base_seeds = meta_info.get("trajectory_base_seeds")
+        recurrent_turn = 0
         # Main generation loop, agent should indicate whether to stop
         while not self.agent.done():
             with _timer('mt_prepare', timing_raw):
                 messages, meta_info_gen = self.agent.action()
                 meta_info_gen.update(meta_info)
+                if trajectory_base_seeds is not None:
+                    active_sample_indices = self.agent.sample_index_list[-1].tolist()
+                    meta_info_gen["request_seeds"] = derive_turn_request_seeds(
+                        trajectory_base_seeds, active_sample_indices, recurrent_turn
+                    )
+                    meta_info_gen["trajectory_seed_turn"] = recurrent_turn
                 # [len(x) for x in messages] == [len(x[x!=pad_token_id]) for x in input_ids]
                 # torch.all(attention_masks.sum(-1) == torch.tensor([len(x[x!=pad_token_id]) for x in input_ids]))
                 input_ids = pad_tensor_list_to_length(messages, 
@@ -150,6 +172,7 @@ class LLMGenerationManager:
                 gen_output = self.agent.update(gen_output)
                 gen_output_list.append(gen_output)
                 logger.info('agent update done')
+                recurrent_turn += 1
         final_mask, sample_index = self.agent.end()
         
         # OK, now we've got all we need in gen_output_list, and the final_mask indicates which one is final answer.

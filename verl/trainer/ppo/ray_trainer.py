@@ -281,6 +281,49 @@ def compute_1D_grpo_advantage(token_level_rewards: torch.Tensor,
                 scores[i] = scores[i] - id2mean[index[i]]
     return scores
 
+
+def _append_rollout_seed_audit(output_dir: str, records: list[dict[str, object]]) -> None:
+    """Append exact per-trajectory seeds without touching training semantics."""
+    if not records:
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "rollout_seed_audit.jsonl")
+    with open(path, "a", encoding="utf-8") as audit_file:
+        for record in records:
+            audit_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _to_python_list(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return list(value)
+
+
+def _build_validation_identities(test_batch, *, val_n: int, manifest_hash: str, seeds: list[int]):
+    """Build stable keys before recurrent pop/reorder; never used as metrics."""
+    if not manifest_hash:
+        return None
+    if "index" in test_batch.batch:
+        source_indices = _to_python_list(test_batch.batch["index"])
+    elif "index" in test_batch.non_tensor_batch:
+        source_indices = _to_python_list(test_batch.non_tensor_batch["index"])
+    else:
+        raise ValueError("strict evaluation identity requires dataset index; UUID/text fallback is forbidden")
+    if len(source_indices) != len(test_batch) or len(seeds) != len(test_batch):
+        raise ValueError("validation identity columns are not row-aligned")
+    runtime = test_batch.non_tensor_batch.get("sample_uuid")
+    runtime = _to_python_list(runtime) if runtime is not None else [None] * len(test_batch)
+    return {
+        "example_id": [str(index) for index in source_indices],
+        "source_order_index": [int(index) for index in source_indices],
+        "eval_manifest_hash": [str(manifest_hash)] * len(test_batch),
+        "replica_id": [row % int(val_n) for row in range(len(test_batch))],
+        "trajectory_seed": [int(seed) for seed in seeds],
+        "runtime_sample_uuid": runtime,
+    }
+
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
     with Timer(name=name, logger=None) as timer:
@@ -519,7 +562,7 @@ class RayPPOTrainer:
 
         self.train_dataloader = StatefulDataLoader(dataset=self.train_dataset,
                                                    batch_size=self.config.data.train_batch_size,
-                                                   num_workers=8,
+                                                   num_workers=self.config.data.get("dataloader_num_workers", 8),
                                                    drop_last=True,
                                                    collate_fn=collate_fn,
                                                    sampler=sampler)
@@ -549,7 +592,7 @@ class RayPPOTrainer:
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
-            num_workers=8,
+            num_workers=self.config.data.get("dataloader_num_workers", 8),
             drop_last=True,
             collate_fn=collate_fn,
             sampler=sampler,
@@ -558,7 +601,7 @@ class RayPPOTrainer:
         self.val_dataloader = StatefulDataLoader(
             dataset=self.val_dataset,
             batch_size=val_batch_size,
-            num_workers=8,
+            num_workers=self.config.data.get("dataloader_num_workers", 8),
             shuffle=False,
             drop_last=False,
             collate_fn=collate_fn,
@@ -583,7 +626,7 @@ class RayPPOTrainer:
             self.config.actor_rollout_ref.actor.optim.total_training_steps = total_training_steps
             self.config.critic.optim.total_training_steps = total_training_steps
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, identities=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
@@ -599,6 +642,12 @@ class RayPPOTrainer:
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
                 base_data[k] = v
+
+        if identities is not None:
+            for key, values in identities.items():
+                if len(values) != n:
+                    raise ValueError(f"identity column {key} has {len(values)} rows, expected {n}")
+                base_data[key] = values
 
         with open(filename, "w") as f:
             for i in range(n):
@@ -639,12 +688,36 @@ class RayPPOTrainer:
         sample_inputs = []
         sample_outputs = []
         sample_scores = []
+        sample_identities: dict[str, list] = defaultdict(list)
 
         for test_data in self.val_dataloader:
             test_batch = DataProto.from_single_dict(test_data)
 
             # repeat test batch
             test_batch = test_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True)
+            val_n = int(self.config.actor_rollout_ref.rollout.val_kwargs.n)
+            trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
+            validation_seed_records = None
+            if trajectory_seed_mode not in (None, "", "legacy_shared"):
+                from recurrent.research.trajectory_seeding import build_trajectory_seed_records
+
+                validation_seed_records = build_trajectory_seed_records(
+                    base_seed=int(self.config.actor_rollout_ref.rollout.get("seed", 0)),
+                    global_step=int(self.global_steps),
+                    batch_size=len(test_batch),
+                    rollout_n=val_n,
+                    mode=str(trajectory_seed_mode),
+                )
+            validation_seeds = (
+                [int(record["trajectory_seed"]) for record in validation_seed_records]
+                if validation_seed_records is not None else [0] * len(test_batch)
+            )
+            identity_batch = _build_validation_identities(
+                test_batch,
+                val_n=val_n,
+                manifest_hash=str(self.config.trainer.get("eval_manifest_hash", "")),
+                seeds=validation_seeds,
+            )
 
             # we only do validation on rule-based rm
             if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
@@ -683,6 +756,8 @@ class RayPPOTrainer:
                 "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
                 "validate": True,
             }
+            if validation_seed_records is not None:
+                test_gen_batch.meta_info["trajectory_base_seeds"] = validation_seeds
 
             print(f'test_gen_batch meta info: {test_gen_batch.meta_info}')
             ######
@@ -704,6 +779,16 @@ class RayPPOTrainer:
                 from recurrent.utils import final_batch
                 output_gen_batch, final_mask, sample_index = self.generation_manager.run_llm_loop(test_gen_batch, {})
                 test_output_gen_batch = final_batch(output_gen_batch, final_mask, sample_index)
+                if identity_batch is not None:
+                    final_source_index = sample_index[final_mask].detach().cpu().tolist()
+                    identity_batch = {
+                        key: [values[int(index)] for index in final_source_index]
+                        for key, values in identity_batch.items()
+                    }
+
+            if identity_batch is not None:
+                for key, values in identity_batch.items():
+                    sample_identities[key].extend(values)
 
             print('validation generation end')
             
@@ -738,6 +823,7 @@ class RayPPOTrainer:
                 scores=sample_scores,
                 reward_extra_infos_dict=reward_extra_infos_dict,
                 dump_path=val_data_dir,
+                identities=sample_identities or None,
             )
 
         for key_info, lst in reward_extra_infos_dict.items():
@@ -1069,6 +1155,29 @@ class RayPPOTrainer:
                             # Also, just as what happened in validate, we will always set n=1 in generation_kwargs.
                             batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                             gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                            trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
+                            if trajectory_seed_mode not in (None, "", "legacy_shared"):
+                                from recurrent.research.trajectory_seeding import build_trajectory_seed_records
+
+                                trajectory_seed_records = build_trajectory_seed_records(
+                                    base_seed=int(self.config.actor_rollout_ref.rollout.get("seed", 0)),
+                                    global_step=int(self.global_steps),
+                                    batch_size=len(gen_batch),
+                                    rollout_n=int(self.config.actor_rollout_ref.rollout.n),
+                                    mode=str(trajectory_seed_mode),
+                                )
+                                trajectory_base_seeds = [
+                                    int(record["trajectory_seed"]) for record in trajectory_seed_records
+                                ]
+                                gen_batch.meta_info["trajectory_base_seeds"] = trajectory_base_seeds
+                                batch.non_tensor_batch["rollout_trajectory_seed"] = np.asarray(
+                                    trajectory_base_seeds, dtype=np.uint64
+                                )
+                                for record in trajectory_seed_records:
+                                    record["uid"] = str(batch.non_tensor_batch["uid"][int(record["row"])])
+                                _append_rollout_seed_audit(
+                                    str(self.config.trainer.default_local_dir), trajectory_seed_records
+                                )
                             gen_batch_output, final_mask, sample_index = self.generation_manager.run_llm_loop(gen_batch, timing_raw)
 
                             assert final_mask.sum().item() == len(batch.batch), \
