@@ -46,3 +46,5 @@ IDEA_ARM=uniform_tie_rescue PHASE=fresh2 EXP=uniform_tie_s2026_fresh2 bash exper
 `uniform_tie_rescue` is AVSPO/DAPO-style, not an exact reproduction. CERC and Typed Boundary intentionally have no training command: CERC is a native-credit control and Typed Boundary is diagnostic-only.
 
 OOTT is also analysis-only. Before any OOTT stratum run, validate its frozen manifest with `analysis/validate_oott_stratum_timing_20260819.py`. P strata may screen preregistered heterogeneity; O strata are descriptive support/coverage maps that must retain the unstratified total contrast; Y strata go only to RED calibration/error analysis. None can unlock training.
+
+Shape A claims are fixed-reader by default when D and paired harm share a reader/scorer. Cross-reader matrices may only be derived from already-legitimate portability outputs generated for an independent mechanism reason; the suite never starts reader generation to strengthen wording. The reader-method schema enforces frozen readers/estimand/SESOI/censor rules, at least two competent readers, at least 24 common examples per cell, and no training/400/C256 unlock.

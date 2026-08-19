@@ -1,0 +1,50 @@
+schema_version: shapeA-reader-method-firewall-v1
+purpose: distinguish_fixed_reader_structural_prediction_from_cross_reader_robustness
+default_action:
+  new_generation: false
+  training_authorized: false
+  gpu_queue_changed: false
+  claim_scope_without_cross_reader_data: fixed_reader_only
+reuse_only_if:
+  - portability_selected_for_independent_mechanism_reason
+  - writer_reader_matrix_already_legitimate
+  - stable_ids_and_same_commit_boundary
+matrix:
+  defect_methods: preregistered_competent_readers
+  harm_methods: same_preregistered_competent_readers
+  cells: g_cross_fitted_incremental_prediction_D_reader_a_to_tau_reader_b
+  same_method: diagonal
+  cross_method: off_diagonal
+  resampling_unit: example
+  readers_are_iid_samples: false
+required_freeze_before_cross_reader_outcome:
+  - reader_set
+  - reference_D_definition
+  - grouped_cross_fitted_estimand_g
+  - SESOI_and_direction
+  - canonical_competence_floor
+  - censor_and_missingness_rules
+required_controls:
+  - defect_cross_reader_reliability_without_outcomes
+  - per_reader_gold_null_competence
+  - per_reader_parse_and_endpoint_concordance
+  - unrelated_target_negative_control
+  - marginal_pairing_sham
+minimum_complete:
+  competent_readers: 2
+  complete_same_examples_per_cell: 24
+  reader_dependent_missingness: forbidden
+adjudication:
+  diagonal_and_all_offdiagonal_direction_stable: FINITE_READER_ROBUST
+  diagonal_only: COMMON_METHOD_SUSPECT
+  defect_measure_noninvariant: DEFECT_MEASUREMENT_NONINVARIANT
+  outcome_reader_only: OUTCOME_METHOD_SPECIFIC
+  negative_controls_repeat_diagonal: COMMON_METHOD_NO_GO
+  one_competent_reader: FIXED_READER_ONLY
+scope:
+  finite_reader_robust_does_not_imply: [latent_true_state, policy_family_sufficiency, cross_architecture_generality, human_readability, deployable_gate]
+  local_reader_recalibration_primary: forbidden
+  cross_reader_null_result_proves_invariance: false
+  unlocks_method_training: false
+  unlocks_step400: false
+  unlocks_C256: false

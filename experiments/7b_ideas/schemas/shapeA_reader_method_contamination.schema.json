@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Shape A reader-method contamination audit manifest",
+  "type": "object",
+  "required": ["schema_version", "new_generation", "portability_selected_for_independent_reason", "reader_set_frozen", "reference_d_frozen", "estimand_g_frozen", "sesoi_direction_frozen", "censor_rules_frozen", "readers", "cells", "readers_are_iid_samples", "training_authorized", "unlocks_step400", "unlocks_C256"],
+  "properties": {
+    "schema_version": {"const": "shapeA-reader-method-firewall-v1"},
+    "new_generation": {"const": false},
+    "portability_selected_for_independent_reason": {"const": true},
+    "reader_set_frozen": {"const": true},
+    "reference_d_frozen": {"const": true},
+    "estimand_g_frozen": {"const": true},
+    "sesoi_direction_frozen": {"const": true},
+    "censor_rules_frozen": {"const": true},
+    "readers_are_iid_samples": {"const": false},
+    "reader_dependent_missingness": {"const": false},
+    "training_authorized": {"const": false},
+    "unlocks_step400": {"const": false},
+    "unlocks_C256": {"const": false},
+    "readers": {
+      "type": "array", "minItems": 2, "uniqueItems": true,
+      "items": {"type": "object", "required": ["reader_id", "competent", "reliable", "gold_null_control_pass", "parse_endpoint_concordance_pass"]}
+    },
+    "cells": {
+      "type": "array", "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["d_reader", "tau_reader", "common_stable_example_count", "direction_preregistered", "same_reference_d", "same_commit_boundary"],
+        "properties": {
+          "common_stable_example_count": {"type": "integer", "minimum": 24},
+          "direction_preregistered": {"const": true},
+          "same_reference_d": {"const": true},
+          "same_commit_boundary": {"const": true}
+        }
+      }
+    },
+    "adjudication": {"enum": ["FINITE_READER_ROBUST", "COMMON_METHOD_SUSPECT", "DEFECT_MEASUREMENT_NONINVARIANT", "OUTCOME_METHOD_SPECIFIC", "COMMON_METHOD_NO_GO", "FIXED_READER_ONLY"]}
+  },
+  "additionalProperties": true
+}
