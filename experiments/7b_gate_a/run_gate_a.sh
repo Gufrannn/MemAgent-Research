@@ -14,7 +14,7 @@ EXP=${EXP:-gate_a_qwen25_7b_seed2026}
 RUN_SEED=${RUN_SEED:-2026}
 TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-2}
 ROLLOUT_N=${ROLLOUT_N:-2}
-PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-4}
+PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-2}
 N_GPUS=${N_GPUS:-2}
 FSDP_SIZE=${FSDP_SIZE:-$N_GPUS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.55}
@@ -57,6 +57,22 @@ IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
   echo "Gate A supports only an explicit 2, 4, 6 or 8 GPU allocation." >&2
   exit 48
 }
+
+GLOBAL_ROLLOUT_BATCH_SIZE=$((TRAIN_BATCH_SIZE * ROLLOUT_N))
+GLOBAL_ROLLOUT_MINI_BATCH_SIZE=$((PPO_MINI_BATCH_SIZE * ROLLOUT_N))
+[[ $TRAIN_BATCH_SIZE -gt 0 && $ROLLOUT_N -gt 0 && $PPO_MINI_BATCH_SIZE -gt 0 ]] || {
+  echo "[GATE_A_BATCH_DIAG] batch sizes must be positive: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE" >&2
+  exit 50
+}
+[[ $((TRAIN_BATCH_SIZE % PPO_MINI_BATCH_SIZE)) -eq 0 ]] || {
+  echo "[GATE_A_BATCH_DIAG] invalid prompt mini-batch: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE (PPO_MINI_BATCH_SIZE counts prompts)" >&2
+  exit 51
+}
+[[ $((GLOBAL_ROLLOUT_MINI_BATCH_SIZE % N_GPUS)) -eq 0 ]] || {
+  echo "[GATE_A_BATCH_DIAG] rollout-expanded mini-batch is not divisible by data-parallel world size: PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N global_rollout_mini_batch_size=$GLOBAL_ROLLOUT_MINI_BATCH_SIZE N_GPUS=$N_GPUS FSDP_SIZE=$FSDP_SIZE" >&2
+  exit 52
+}
+echo "[GATE_A_BATCH_DIAG] configured global_batch_size=$GLOBAL_ROLLOUT_BATCH_SIZE prompt_mini_batch_size=$PPO_MINI_BATCH_SIZE global_rollout_mini_batch_size=$GLOBAL_ROLLOUT_MINI_BATCH_SIZE N_GPUS=$N_GPUS FSDP_SIZE=$FSDP_SIZE"
 
 for path in "$PYTHON" "$MODEL/config.json" "$TRAIN" "$VAL"; do
   [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 49; }

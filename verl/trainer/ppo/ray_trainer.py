@@ -1196,6 +1196,30 @@ class RayPPOTrainer:
                             #                 [      s1,       s2,       s3,       s4,       s1,       s3,       s3,       s1,       s2,       s3,       s4]
                             # We map info from original_sample to gen_batch_output now, e.x. in reward computation
 
+                            # Preserve stable trajectory identity on every recurrent turn.  DataProto indexing,
+                            # padding and dispatch then keep these columns aligned with the tensors they describe.
+                            source_rows = sample_index.detach().cpu().numpy()
+                            source_uids = np.asarray(batch.non_tensor_batch["uid"], dtype=object)
+                            gen_batch_output.batch["sample_index"] = sample_index.to(
+                                gen_batch_output.batch["responses"].device
+                            )
+                            if "rollout_trajectory_seed" in batch.non_tensor_batch:
+                                source_seeds = np.asarray(
+                                    batch.non_tensor_batch["rollout_trajectory_seed"], dtype=np.uint64
+                                )
+                                gen_batch_output.non_tensor_batch["trajectory_seed"] = source_seeds[source_rows]
+                                source_trajectory_ids = np.asarray(
+                                    [f"{uid}:{int(seed)}" for uid, seed in zip(source_uids, source_seeds)],
+                                    dtype=object,
+                                )
+                            else:
+                                source_trajectory_ids = np.asarray(
+                                    [f"{uid}:{row}" for row, uid in enumerate(source_uids)], dtype=object
+                                )
+                            gen_batch_output.non_tensor_batch["trajectory_id"] = source_trajectory_ids[
+                                source_rows
+                            ]
+
                             # Will be used in advantage computation.
                             gen_batch_output.batch['final_mask'] = final_mask
                             gen_batch_output.check_consistency()
@@ -1369,6 +1393,23 @@ class RayPPOTrainer:
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         wsz = self.actor_rollout_wg.world_size
                         if self.config.recurrent.enable:
+                            from recurrent.research.actor_batch import DIAG_PREFIX, validate_active_actor_batch
+
+                            active_batch_size = len(batch)
+                            response_valid_tokens = int(batch.batch["response_mask"].sum().item())
+                            validate_active_actor_batch(
+                                active_batch_size=active_batch_size,
+                                world_size=wsz,
+                                response_token_count=response_valid_tokens,
+                            )
+                            tensor_shapes = {
+                                key: tuple(value.shape) for key, value in batch.batch.items()
+                            }
+                            print(
+                                f"{DIAG_PREFIX} before actor dispatch: global_batch_size={len(batch)}, "
+                                f"active_batch_size={active_batch_size}, world_size={wsz}, "
+                                f"response_valid_tokens={response_valid_tokens}, tensor_shapes={tensor_shapes}"
+                            )
                             ########
                             # ADD: paddding for actor updating.
                             ########
@@ -1384,6 +1425,26 @@ class RayPPOTrainer:
                             else:
                                 # still need this to activate recurrent-related code in `update_actor`
                                 batch.batch['no_padding_mask'] = torch.ones(len(batch), dtype=torch.bool)
+
+                            local_batch_size = len(batch) // wsz
+                            per_rank_response_tokens = (
+                                batch.batch["response_mask"]
+                                .reshape(wsz, local_batch_size, -1)
+                                .sum(dim=(1, 2))
+                                .tolist()
+                            )
+                            if any(int(count) < 1 for count in per_rank_response_tokens):
+                                raise ValueError(
+                                    f"{DIAG_PREFIX} at least one actor rank has no trainable response tokens: "
+                                    f"per_rank_local_batch_size={local_batch_size}, "
+                                    f"per_rank_response_valid_tokens={per_rank_response_tokens}"
+                                )
+                            print(
+                                f"{DIAG_PREFIX} after actor padding: global_batch_size={len(batch)}, "
+                                f"active_batch_size={active_batch_size}, per_rank_local_batch_size={local_batch_size}, "
+                                f"per_rank_response_valid_tokens={per_rank_response_tokens}, "
+                                f"padding_samples={len(batch) - active_batch_size}"
+                            )
 
                         # update actor
                         with _timer("update_actor", timing_raw):

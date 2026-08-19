@@ -242,9 +242,16 @@ def td_split(td: TensorDict, sections: int) -> list[TensorDict]:
     split TensorDict in dim0, allows different sections, like torch.tensor_split and np.array_split
     used in workers/dp_actor to support variable length of batch size
     """
+    if sections < 1:
+        raise ValueError(
+            f"[GATE_A_BATCH_DIAG] invalid TensorDict split before torch.tensor_split: "
+            f"local_batch_size={len(td)}, computed_num_micro_batches/sections={sections}"
+        )
     if len(td) < sections:
-        print(f"error occurred when trying to split {td}")
-        raise ValueError(f"len(proto)={len(td)} < sections={sections}")        
+        raise ValueError(
+            f"[GATE_A_BATCH_DIAG] local batch is smaller than requested split count: "
+            f"local_batch_size={len(td)}, computed_num_micro_batches/sections={sections}"
+        )
     
     tensors_splitted = {k: torch.tensor_split(v, sections) for k, v in td.items()}
     return [TensorDict.from_dict({k: v[i] for k, v in tensors_splitted.items()}) for i in range(sections)]

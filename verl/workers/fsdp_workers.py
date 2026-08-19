@@ -126,11 +126,27 @@ class ActorRolloutRefWorker(Worker):
             #######
             # ADD: actor must aware how many steps are there in a batch, since we may have variant of batch sizes
             #######
-            update_steps_per_batch = self.config.actor.train_batch_size // self.config.actor.ppo_mini_batch_size
-            self.config.actor.ppo_mini_batch_size *= self.config.rollout.n
-            self.config.actor.ppo_mini_batch_size //= self.device_mesh.size() // self.ulysses_sequence_parallel_size
-            self.config.actor.train_batch_size = update_steps_per_batch * self.config.actor.ppo_mini_batch_size
-            assert self.config.actor.ppo_mini_batch_size > 0, f'ppo_mini_batch_size {self.config.actor.ppo_mini_batch_size} should be larger than 0 after normalization'
+            from recurrent.research.actor_batch import DIAG_PREFIX, build_actor_batch_plan
+
+            data_parallel_world_size = self.device_mesh.size() // self.ulysses_sequence_parallel_size
+            plan = build_actor_batch_plan(
+                train_batch_size=self.config.actor.train_batch_size,
+                rollout_n=self.config.rollout.n,
+                ppo_mini_batch_size=self.config.actor.ppo_mini_batch_size,
+                data_parallel_world_size=data_parallel_world_size,
+            )
+            self.config.actor.ppo_mini_batch_size = plan.local_mini_batch_size
+            self.config.actor.train_batch_size = plan.local_train_batch_size
+            print(
+                f"{DIAG_PREFIX} normalized actor batch: "
+                f"global_batch_size={plan.global_rollout_batch_size}, "
+                f"global_prompt_mini_batch_size={plan.global_prompt_mini_batch_size}, "
+                f"global_rollout_mini_batch_size={plan.global_rollout_mini_batch_size}, "
+                f"data_parallel_world_size={plan.data_parallel_world_size}, "
+                f"per_rank_mini_batch_size={plan.local_mini_batch_size}, "
+                f"computed_num_mini_batches={plan.update_steps_per_batch}, "
+                f"per_rank_train_batch_size={plan.local_train_batch_size}"
+            )
             # micro bsz
             if self.config.actor.ppo_micro_batch_size is not None:
                 self.config.actor.ppo_micro_batch_size //= self.device_mesh.size() // self.ulysses_sequence_parallel_size
