@@ -1099,12 +1099,27 @@ def test_closed_loop_v8_resource_modes_cost_suffix_fixed_budget_and_utility():
     assert "unconstrained_outcome_description" in result
 
 
-def test_behavioral_quotient_credit_compatibility_four_grid_and_GRPO_identity():
+def test_behavioral_quotient_credit_compatibility_interval_routes_coverage_and_GRPO_identity(tmp_path):
     path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_behavioral_quotient_credit_compatibility_20260819.py"
     spec=importlib.util.spec_from_file_location("bqcc",path)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.self_test()
-    result=module.audit_bqcc(module._manifest(.2,0.))
+    manifest,pairs,target=module._inputs((.2,.2),(0.,0.))
+    result=module.audit_bqcc(manifest,pairs,target)
     assert result["status"]=="PARTITION_CROSSING_GROUPING_ONLY_NO_GO"
+    partial,pairs,target=module._inputs(extra_unadmitted_examples=2)
+    assert module.audit_bqcc(partial,pairs,target)["claim_scope"]=="admitted_relation_stratum_only"
+    uncertain,pairs,target=module._inputs((0.,.2),(.5,.5))
+    verdict=module.audit_bqcc(uncertain,pairs,target)
+    assert verdict["status"]=="BQCC_INCONCLUSIVE_THRESHOLD_UNCERTAINTY"
+    assert not verdict["specific_defect_label_authorized"]
+    manifest_path=tmp_path/"MANIFEST.json";pairs_path=tmp_path/"PAIRS.jsonl"
+    target_path=tmp_path/"TARGET_LEDGER.jsonl"
+    manifest_path.write_text(json.dumps(uncertain))
+    pairs_path.write_text("\n".join(json.dumps(row) for row in pairs)+"\n")
+    target_path.write_text("\n".join(json.dumps(row) for row in target)+"\n")
+    loaded=module.audit_bqcc(json.loads(manifest_path.read_text()),module._read_jsonl(pairs_path),
+      module._read_jsonl(target_path))
+    assert loaded["status"]=="BQCC_INCONCLUSIVE_THRESHOLD_UNCERTAINTY"
     assert not result["shared_baseline_or_std_repairs_reward_tie"]
     assert not result["shared_baseline_or_std_removes_invariant_split"]
     assert result["cluster_unit"]=="stable_example_id" and not result["training_authorized"]

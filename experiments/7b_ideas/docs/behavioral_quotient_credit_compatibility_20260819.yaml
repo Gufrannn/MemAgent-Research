@@ -1,4 +1,4 @@
-schema_version: bqcc-v1
+schema_version: bqcc-v2-coverage-interval
 prerequisite: shapeA_structural_gate_passed
 role: unique_prioritized_RL_bridge_after_ShapeA
 axes:
@@ -10,16 +10,28 @@ shared_baseline_or_std_repairs_tie_or_split: false
 absolute_advantage_sign_is_reference_set_dependent: true
 metrics: [InvariantSplitMass, NecessaryTieMass, NecessaryWrongMass, context_reference_set_sign_flips]
 canonical_manifest_sha256: required
+inputs: [PAIRS.jsonl, TARGET_LEDGER.jsonl, MANIFEST.json]
+ledger_hashes: [pairs_sha256, target_ledger_sha256]
+join: target_to_admitted_to_analyzed_exact_key_closure
+infrastructure_failure: blocks_point_verdict
 actual_advantage_identity: {equation: delta_A_equals_delta_R_over_s, aggregation: maximum_pair_error_before_example_averaging}
 cluster_unit: stable_example_id
 aggregation: pair_to_example_mean_then_example_cluster_bootstrap
 pair_or_path_increases_independent_n: false
 routing:
+  LOW_CERTIFIED: bootstrap_95_upper_le_frozen_max_defect
+  HIGH_ESTABLISHED: bootstrap_95_lower_gt_frozen_threshold
+  THRESHOLD_UNCERTAIN: interval_crosses_threshold
   low_split_low_merge: FINITE_QUOTIENT_COMPATIBLE
   high_split_low_merge: NUISANCE_SPECIFICITY_FAILURE
   low_split_high_merge: REWARD_ALIASING_REGROUPING_CANNOT_REPAIR
   high_split_high_merge: PARTITION_CROSSING_GROUPING_ONLY_NO_GO
+  any_uncertain: BQCC_INCONCLUSIVE_THRESHOLD_UNCERTAINTY
   identity_failure: IMPLEMENTATION_IDENTITY_FAILURE
+coverage:
+  run_gate_equals_population_identification_gate: false
+  full_target_scope_requires: 100_percent_I_and_N_pair_and_example_coverage_or_prefrozen_validated_missingness_partial_ID
+  otherwise_claim_scope: admitted_relation_stratum_only
 gradient_delivery:
   inferred_from_BQCC: false
   order: [G_credit, G_task, G_total, Delta_theta_actual]

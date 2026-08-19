@@ -1,0 +1,6 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","title":"BQCC PAIRS.jsonl row","type":"object",
+  "required":["stable_example_id","pair_id","path_id","pair_type","analysis_status","reward_left","reward_right","group_baseline","group_scale","actual_advantage_left","actual_advantage_right"],
+  "properties":{"stable_example_id":{"type":["string","integer"]},"pair_id":{"type":["string","integer"]},"path_id":{"type":["string","integer"]},"pair_type":{"enum":["invariant","necessary"]},"analysis_status":{"const":"analyzed"},"group_scale":{"type":"number","exclusiveMinimum":0},"frozen_expected_direction":{"enum":[-1,1]}},
+  "additionalProperties":true
+}

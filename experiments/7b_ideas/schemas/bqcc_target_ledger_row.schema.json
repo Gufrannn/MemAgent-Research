@@ -1,0 +1,6 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","title":"BQCC TARGET_LEDGER.jsonl row","type":"object",
+  "required":["stable_example_id","pair_id","path_id","pair_type","target_relation","admitted","admission_reason","infrastructure_failure"],
+  "properties":{"stable_example_id":{"type":["string","integer"]},"pair_id":{"type":["string","integer"]},"path_id":{"type":["string","integer"]},"pair_type":{"enum":["invariant","necessary"]},"target_relation":{"const":true},"admitted":{"type":"boolean"},"admission_reason":{"type":"string","minLength":1},"infrastructure_failure":{"type":"boolean"}},
+  "additionalProperties":true
+}
