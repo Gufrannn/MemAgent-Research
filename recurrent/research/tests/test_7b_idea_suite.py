@@ -8,8 +8,8 @@ import importlib.util
 from recurrent.research.cerc_native_credit import validate_native_credit
 from recurrent.research.idea_admissibility import ELIGIBLE, NO_METHOD, PENDING, adjudicate, require_arm
 from recurrent.research.exact_noop_v2 import (E_LABEL,H_LABEL,P_LABEL,ExactNoopV2ReplayBuilder,
-    build_arm_record,classify_estimand,materialize_proposal)
-from recurrent.research.counterfactual_gradient_witness import capture_w4_event
+    build_arm_record,build_vg_record,classify_estimand,materialize_proposal)
+from recurrent.research.counterfactual_gradient_witness import capture_w4_event,vector_hash
 from recurrent.research.ncr_certified_routing import generic_auxiliary, route_ncr
 from recurrent.research.typed_boundary_prompt import ARMS, build_prompts
 
@@ -150,13 +150,25 @@ def test_shape_a_full_transcript_semantic_is_inductive_bias(tmp_path):
 def test_estimand_equivalence_auditor_and_fail_closed_guards():
     path = Path(__file__).parents[3] / "experiments/7b_ideas/analysis/audit_shapeA_estimand_equivalence_20260819.py"
     spec = importlib.util.spec_from_file_location("shape_a_audit", path); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    rows = [{"stable_example_id": f"e{i}", "d_star": float(i), "y_noop": 1 + i, "y_factual": 2 + 3*i} for i in range(8)]
+    rows=[]
+    for i,writes in enumerate((1,2,3,1,2,3,1,2)):
+        for j in range(writes):
+            d=float(i)+j/10;rows.append({"stable_example_id":f"e{i}","write_id":f"w{j}",
+              "d_star":d,"y_commit":1+i+j,"y_retain":2+3*d})
     result = module.audit(rows)
     assert result["algebraically_equivalent"] and not result["claim_authorized"] and not result["p_values_emitted"]
+    assert result["independent_n"]==8 and result["write_rows"]==15
+    assert result["weight"]=="1/m_i" and not result["stacked_is_second_evidence"]
     with pytest.raises(ValueError, match="unique"): module.audit(rows + [rows[0]])
-    with pytest.raises(ValueError, match=r"\[2,128\]"): module.audit(rows * 17)
+    too_many=[{"stable_example_id":f"x{i}","write_id":"w0","d_star":i,
+      "y_commit":0,"y_retain":i+1} for i in range(129)]
+    with pytest.raises(ValueError, match=r"\[2,128\]"): module.audit(too_many)
     with pytest.raises(ValueError, match="rank deficient"):
         module.audit([{**row, "d_star": 1} for row in rows])
+    with pytest.raises(ValueError,match="write_id"):module.audit([{k:v for k,v in row.items() if k!="write_id"} for row in rows])
+    with pytest.raises(ValueError,match="row-level independence/HC3"):module.audit([dict(row,row_level_hc3=True) for row in rows])
+    oof=module.aggregate_oof_loss([dict(row,oof_loss=float(index)) for index,row in enumerate(rows)])
+    assert oof["independent_n"]==8 and oof["aggregation"]=="within_example_1_over_m_then_across_examples"
 
 
 def test_outcome_blind_provenance_preflight_four_classes_and_mismatch():
@@ -334,9 +346,16 @@ def test_memory_r2_collision_and_dual_launcher_firewall():
 
 def _e_proposal():
     return materialize_proposal(stable_id="e1",turn=2,upstream_state_hash="a"*64,
-      candidate_token_ids=[10,20],suffix_hash="b"*64,writer_seed=7,
+      candidate_token_ids=[10,20],writer_seed=7,
       reader_seed_or_coupling_id="coupled-reader-1",endpoint_version="em-v1",
-      old_memory_token_hash="c"*64)
+      old_memory_token_hash="c"*64,estimand_mode="EH",
+      mode_contract={"exogenous_suffix_contract_hash":"b"*64,"future_policy_hash":"d"*64,"horizon":3})
+
+
+def _build_e_record(proposal,arm,endpoint):
+    return build_arm_record(proposal,arm=arm,output_token_ids=[1 if arm=="commit" else 2],
+      endpoint_value=endpoint,realized_trajectory_hash=("e" if arm=="commit" else "f")*64,
+      future_hash_chain=[("1" if arm=="commit" else "2")*64])
 
 
 def _exact_noop_validator():
@@ -358,14 +377,17 @@ def test_p_h_e_estimands_are_mutually_exclusive_and_not_selected_by_outcome():
 
 def test_exact_noop_v2_materializes_once_and_never_reruns_writer():
     builder=ExactNoopV2ReplayBuilder(_e_proposal())
-    commit=builder.record_endpoint(arm="commit",output_token_ids=[1],endpoint_value=1.0)
-    retain=builder.record_endpoint(arm="retain",output_token_ids=[2],endpoint_value=0.0)
+    commit=builder.record_endpoint(arm="commit",output_token_ids=[1],endpoint_value=1.0,
+      realized_trajectory_hash="e"*64,future_hash_chain=["1"*64])
+    retain=builder.record_endpoint(arm="retain",output_token_ids=[2],endpoint_value=0.0,
+      realized_trajectory_hash="f"*64,future_hash_chain=["2"*64])
     assert commit["candidate_memory_token_hash"]==retain["candidate_memory_token_hash"]
     assert commit["loaded_memory_token_hash"]==commit["candidate_memory_token_hash"]
     assert retain["loaded_memory_token_hash"]!=retain["candidate_memory_token_hash"]
     assert len(builder.complete_pair())==2
     with pytest.raises(ValueError,match="no last-write-wins"):
-        builder.record_endpoint(arm="commit",output_token_ids=[3],endpoint_value=.5)
+        builder.record_endpoint(arm="commit",output_token_ids=[3],endpoint_value=.5,
+          realized_trajectory_hash="3"*64,future_hash_chain=["4"*64])
     with pytest.raises(ValueError,match="writer ran"):
         ExactNoopV2ReplayBuilder(_e_proposal()).record_endpoint(
           arm="commit",output_token_ids=[1],endpoint_value=1,writer_ran=True)
@@ -373,16 +395,16 @@ def test_exact_noop_v2_materializes_once_and_never_reruns_writer():
 
 def test_exact_noop_v2_join_fails_closed_on_duplicates_missing_and_pair_mismatch():
     module=_exact_noop_validator();proposal=_e_proposal()
-    rows=[build_arm_record(proposal,arm="commit",output_token_ids=[1],endpoint_value=1),
-      build_arm_record(proposal,arm="retain",output_token_ids=[2],endpoint_value=0)]
+    rows=[_build_e_record(proposal,"commit",1),_build_e_record(proposal,"retain",0)]
     result=module.validate(rows)
     assert result["status"]=="E_QUALIFIED" and result["pair_count"]==1
     assert not result["state_level_writer_policy_risk_identified"]
     assert not result["training_authorized"] and not result["select_best_estimand"]
-    invalid=[rows+[dict(rows[0])],[{k:v for k,v in rows[0].items() if k!="suffix_hash"},rows[1]]]
-    for key in ("suffix_hash","endpoint_version","reader_seed_or_coupling_id"):
+    invalid=[rows+[dict(rows[0])],[{k:v for k,v in rows[0].items() if k!="exogenous_suffix_contract_hash"},rows[1]],
+      [dict(rows[0],suffix_hash="9"*64),rows[1]]]
+    for key in ("exogenous_suffix_contract_hash","future_policy_hash","horizon","endpoint_version","reader_seed_or_coupling_id"):
         mismatch=[dict(rows[0]),dict(rows[1])]
-        mismatch[1][key]="d"*64 if key=="suffix_hash" else "different"
+        mismatch[1][key]=4 if key=="horizon" else ("9"*64 if key in {"exogenous_suffix_contract_hash","future_policy_hash"} else "different")
         invalid.append(mismatch)
     for bad in invalid:
         with pytest.raises(ValueError,match="E_QUALIFICATION_FAIL"):module.validate(bad)
@@ -396,6 +418,48 @@ def test_exact_noop_v2_is_mandatory_in_evidence_and_launcher(tmp_path):
     assert "EXACT_NOOP_V2_MANIFEST" in launcher
     assert "validate_exact_noop_v2_manifest_20260819.py" in launcher
     assert "legacy replay is ineligible" in launcher
+    assert "--require-shape-a-e" in launcher
+
+
+def test_horizon_estimands_eh_allows_endogenous_divergence_but_not_ambiguous_suffix():
+    module=_exact_noop_validator();rows=[_build_e_record(_e_proposal(),"commit",.2),
+      _build_e_record(_e_proposal(),"retain",.7)]
+    result=module.validate(rows)
+    assert result["estimand_mode"]=="EH"
+    assert result["estimand"]=="regime-conditional total execution effect of one update"
+    assert not result["realized_trajectory_is_pair_key"]
+    assert rows[0]["realized_trajectory_hash"]!=rows[1]["realized_trajectory_hash"]
+    bad=[dict(rows[0],suffix_hash="8"*64),rows[1]]
+    with pytest.raises(ValueError,match="LEGACY_SUFFIX_SEMANTICS_AMBIGUOUS"):module.validate(bad)
+
+
+def test_vg_is_closed_loop_value_not_shape_a_execution_effect():
+    module=_exact_noop_validator()
+    rows=[build_vg_record(stable_id=f"e{i}",common_initial_state_hash="a"*64,
+      fixed_policy_hash="b"*64,horizon=3,endpoint_version="f1-v1",endpoint_value=.5,
+      realized_trajectory_hash=f"{i+10:064x}",future_hash_chain=["c"*64]) for i in range(4)]
+    result=module.validate(rows)
+    assert result["status"]=="VG_QUALIFIED_CLOSED_LOOP_VALUE" and result["closed_loop_policy_value"]
+    assert not result["shape_a_execution_effect_qualified"]
+
+
+def test_shape_a_horizon_primary_freeze_and_selection_failures():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_shapeA_horizon_primary_20260819.py"
+    spec=importlib.util.spec_from_file_location("shape_horizon",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    config=json.loads((Path(__file__).parents[3]/"experiments/7b_ideas/configs/shapeA_horizon_primary_freeze.json").read_text())
+    result=module.validate(config)
+    assert result["status"]=="SHAPEA_EH_PRIMARY_FROZEN" and not result["outcomes_read"]
+    for key,value in (("estimand_mode","E0"),("endpoint","terminal_EM"),
+      ("b0_candidate_descendants",True),("horizon_rows_increase_n",True),
+      ("endpoint_estimand_subset_selection_after_results",True),
+      ("delete_negative_or_invalid_rows_after_results",True)):
+        bad=dict(config);bad[key]=value
+        with pytest.raises(ValueError,match="HORIZON_ENDPOINT_SELECTION_INVALID"):module.validate(bad)
+    bad=dict(config);bad["f1_commit"]=.8
+    with pytest.raises(ValueError,match="HORIZON_ENDPOINT_SELECTION_INVALID"):module.validate(bad)
+    launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
+    assert "SHAPEA_HORIZON_PRIMARY_MANIFEST" in launcher
 
 
 def _w4_validator():
@@ -405,29 +469,41 @@ def _w4_validator():
     return module
 
 
-def _w4_manifest(n=20):
+def _w4_manifest(n=20,*,coupling_ids=("u0",),credit=(.5,0.),task=(.5,0.),reg=(0.,0.),total=(.5,0.)):
     events=[]
     for i in range(n):
         candidate=f"{i+1000:064x}";pair=f"{i+2000:064x}"
-        events.append(capture_w4_event(stable_id=f"e{i}",group_id=f"g{i}",candidate_hash=candidate,
-          pair_key_hash=pair,checkpoint_hash="a"*64,subspace_hash="b"*64,
-          y_commit=1.0,y_retain=0.0,writer_token_score_gradients=[[1.0,0.0],[0.0,1.0]],
-          writer_token_mask=[True,True],policy_controlled_token_kinds=["token","eos_or_stop"],
-          actual_grpo_writer_gradient=[.5,0.0],
-          actual_candidate_hash=candidate,actual_group_id=f"g{i}",actual_checkpoint_hash="a"*64,
-          actual_subspace_hash="b"*64))
-    return {"schema_version":"counterfactual-gradient-witness-v2",
+        for coupling_index,coupling_id in enumerate(coupling_ids):
+          events.append(capture_w4_event(stable_id=f"e{i}",group_id=f"g{i}",candidate_hash=candidate,
+            pair_key_hash=pair,checkpoint_hash="a"*64,subspace_hash="b"*64,reader_coupling_id=coupling_id,
+            y_commit=1.0+.1*coupling_index,y_retain=0.0,
+            writer_token_score_gradients=[[1.0,0.0],[0.0,1.0]],writer_token_mask=[True,True],
+            policy_controlled_token_kinds=["token","eos_or_stop"],credit_writer_gradient=list(credit),
+            task_writer_gradient=list(task),regularizer_writer_gradient=list(reg),total_writer_gradient=list(total),
+            loss_graph_hash="d"*64,actual_candidate_hash=candidate,actual_group_id=f"g{i}",
+            actual_checkpoint_hash="a"*64,actual_subspace_hash="b"*64))
+    multiple=len(coupling_ids)>1
+    return {"schema_version":"counterfactual-gradient-witness-v4",
       "on_policy_same_checkpoint_candidate":True,"exact_noop_v2_qualified":True,
       "exact_noop_v2_manifest_hash":"c"*64,"noop_baseline_candidate_independent":True,
       "noop_rng_independent":True,"noop_cache_independent":True,"writer_token_mask_exact":True,
       "noop_coupling_frozen_before_candidate":True,"noop_coupling_exogenous_given_state":True,
+      "factual_retain_shared_crn":True,
       "reader_seed_derivation":"pre_candidate_state_coupling_manifest",
-      "rng_advance_candidate_length_dependent":False,"validity_frozen_before_tau":True,
+      "rng_advance_candidate_length_dependent":False,"coupling_plan_frozen_before_first_tau":True,
+      "seeds_added_after_first_tau":False,"seed_selected_by_sign":False,
+      "reader_repeats_increase_independent_n":False,"candidate_clustered_inference":True,
+      "coupling_mode":"prefrozen_multiple_independent_crn" if multiple else "single_exogenous_crn",
+      "frozen_reader_coupling_ids":list(coupling_ids),"expected_couplings_per_candidate":len(coupling_ids),
+      "validity_frozen_before_tau":True,
       "truncation_frozen_before_tau":True,"row_selection_frozen_before_tau":True,
       "tau_or_outcome_conditioned_selection":False,
       "shared_suffix_endpoint_frozen":True,"actual_group_reconstructable":True,
       "actual_bonus_reconstructable":True,"actual_logprob_reconstructable":True,
       "actual_clip_reconstructable":True,"actual_kl_reconstructable":True,
+      "same_loss_graph_decomposition":True,"gradient_components_reconstructable":True,
+      "credit_uses_actual_group_advantage":True,"credit_token_broadcast_exact":True,
+      "credit_clip_disabled":True,"credit_regularizers_disabled":True,"gradient_additivity_atol":1e-8,
       "optimizer_steps":0,"new_rollouts":False,"material_effect_threshold":.1,
       "evidence_basis":["alignment","captured_signed_ratio","effect_weighted_mass"],"events":events}
 
@@ -437,6 +513,9 @@ def test_w4_capture_metrics_pilot_and_scientific_minimum():
     result=module.validate(_w4_manifest(20))
     assert result["status"]=="W4_CAPTURE_QUALIFIED_ANALYSIS_ONLY"
     assert result["independent_material_events"]==20 and result["highest_claim_level"]=="W3"
+    assert result["coupling_scope"]=="realized_coupling_only"
+    assert "realized_coupling_credit_effect_weighted_opposing_mass" in result
+    assert not result["candidate_stable_help_harm_authorized"]
     assert not result["w4_claim_authorized"] and not result["training_authorized"]
     assert module.validate(_w4_manifest(4))["status"]=="W4_PLUMBING_ONLY"
 
@@ -451,13 +530,42 @@ def test_w4_fail_closed_reference_reconstruction_and_forbidden_shortcuts():
       ("tau_or_outcome_conditioned_selection",True),
       ("actual_group_reconstructable",False),("actual_bonus_reconstructable",False),
       ("actual_logprob_reconstructable",False),("actual_clip_reconstructable",False),
-      ("actual_kl_reconstructable",False),("optimizer_steps",1),("new_rollouts",True)):
+      ("actual_kl_reconstructable",False),("gradient_components_reconstructable",False),
+      ("same_loss_graph_decomposition",False),("seeds_added_after_first_tau",True),
+      ("seed_selected_by_sign",True),("reader_repeats_increase_independent_n",True),
+      ("optimizer_steps",1),("new_rollouts",True)):
         bad=_w4_manifest();bad[key]=value
         with pytest.raises(ValueError,match="W4_NO_GO.*highest_level=W3"):module.validate(bad)
     bad=_w4_manifest();bad["evidence_basis"]=["gradient_difference_norm"]
     with pytest.raises(ValueError,match="forbidden evidence basis"):module.validate(bad)
     bad=_w4_manifest();bad["events"][0]["actual_group_id"]="wrong"
     with pytest.raises(ValueError,match="candidate/group/checkpoint/subspace mismatch"):module.validate(bad)
+
+
+def test_w4_v3_graph_decomposition_and_delivery_attribution():
+    module=_w4_validator()
+    regularized=_w4_manifest(4,credit=(1.,0.),task=(1.,0.),reg=(-2.,0.),total=(-1.,0.))
+    result=module.validate(regularized)
+    assert result["delivery_adjudication_counts"]=={"REGULARIZATION_TRADEOFF":4}
+    assert all(row["credit_alignment"]>0 and row["total_alignment_sign"]<0 for row in result["event_metrics"])
+    bottleneck=module.validate(_w4_manifest(4,credit=(1.,0.),task=(-1.,0.),reg=(0.,0.),total=(-1.,0.)))
+    assert bottleneck["delivery_adjudication_counts"]=={"CLIP_OR_TRUST_REGION_DELIVERY_BOTTLENECK":4}
+    bad=_w4_manifest(4);bad["events"][0]["total_writer_gradient"]=[2.,0.]
+    bad["events"][0]["total_gradient_hash"]=vector_hash([2.,0.])
+    with pytest.raises(ValueError,match=r"G_total != G_task \+ G_reg"):module.validate(bad)
+
+
+def test_w4_v4_single_vs_prefrozen_multiple_coupling_reporting():
+    module=_w4_validator()
+    single=module.validate(_w4_manifest(4))
+    assert single["aggregate_g_cf_mc_sample_valid"] and single["independent_candidates"]==4
+    assert single["reader_coupling_rows"]==4 and not single["reader_repeats_increase_independent_n"]
+    multiple=module.validate(_w4_manifest(4,coupling_ids=("u0","u1","u2")))
+    assert multiple["independent_candidates"]==4 and multiple["reader_coupling_rows"]==12
+    assert multiple["coupling_scope"]=="prefrozen_candidate_mean"
+    assert all(row["within_candidate_tau_dispersion"] is not None and row["coupling_sign_stability"]==1 for row in multiple["event_metrics"])
+    bad=_w4_manifest(4);bad["evidence_basis"].append("candidate_stable_help_harm")
+    with pytest.raises(ValueError,match="single coupling cannot support"):module.validate(bad)
 
 
 def test_csfgw_v2_score_function_identity_positive_and_three_negative_controls():

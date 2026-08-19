@@ -4,7 +4,7 @@
 
 NCR is the only conditional method candidate. Its ledger must certify candidate-free Shape A T0 (`P2_raw^T0` versus `+D_pre^audit`), exact linked same-write keys, real-GRPO exact-tie coverage, parameter-independent frozen readout, writer-only routing, bitwise unchanged non-tie advantage, gradient safety, and wins over QA-only plus all registered information/compute-matched baselines. T1 candidate gates may not leak into T0. “Temporal” is reserved for update-local claims.
 
-Exact replay uses the v2 held-fixed contract. `P` is same-anchor policy rerollout credit, `H` is the candidate-aware privileged updated-versus-old answerability proxy, and `E` is the same-materialized-candidate commit-versus-retain shared-suffix execution effect; they are different estimands and may not be selected after inspecting outcomes. `E` does not identify state-level writer-policy risk. The proposal is materialized exactly once and neither execution arm reruns the writer. Every E join uses all eight frozen keys and rejects duplicates rather than overwriting them. Legacy replay without these fields is ineligible for Shape A and all non-Original launchers.
+Exact replay uses the horizon-explicit held-fixed contract. `P` is same-anchor policy rerollout credit and `H` is a candidate-aware privileged proxy; E records must additionally declare E0, EH, or EF, while VG is a separate closed-loop value object. Shape A accepts only EH: its join freezes the exogenous future chunks/order/budget contract, future policy, and horizon while allowing arm-specific realized trajectories to diverge. The proposal is materialized once and neither execution arm reruns the writer. Ambiguous legacy `suffix_hash`, missing mode fields, and duplicate joins fail closed.
 
 CERC is a native-credit control and permanently rejects cross-variant grouping. Typed Boundary is a five-arm prompt diagnostic only because of the MemTX collision. Target-aligned repair is a concept placeholder with no launcher and may never stack with NCR.
 
@@ -37,6 +37,7 @@ NCR and its registered baselines require one adjudicated evidence ledger and one
 export IDEA_EVIDENCE_LEDGER=/audit/frozen_evidence.jsonl
 export IDEA_REWARD_MANIFEST=/audit/frozen_trajectory_scores.jsonl
 export EXACT_NOOP_V2_MANIFEST=/audit/exact_noop_v2_pairs.jsonl
+export SHAPEA_HORIZON_PRIMARY_MANIFEST=$PWD/experiments/7b_ideas/configs/shapeA_horizon_primary_freeze.json
 export IDEA_MANIFEST_HASH=<64-hex-sha256>
 export NCR_FROZEN_READOUT_HASH=<64-hex-sha256>
 export IDEA_LAMBDA=0.1
@@ -60,4 +61,4 @@ HiMPO directly collides with T1 local updated-vs-previous target-answerability c
 
 Memory-R2 directly collides with generic blocked within-state credit, same-anchor session rerollout, global/local LoGo-GRPO, CERC-as-method, and 8→16→32 curriculum claims. Its rerollouts regenerate the extractor candidate and manager action; they are not exact discard of one frozen materialized candidate. The NCR ledger and training hook enforce non-equivalence. Memory-R2-like requests require both the evidence ledger and single-extension router, then still fail closed because LoGo-GRPO implementation and long training are currently unauthorized.
 
-W4 counterfactual gradient witness code is capture/validation infrastructure only. It compares the exact-E score-function reference with the reconstructed actual full-GRPO writer gradient at the same candidate/group/checkpoint/subspace, and reports alignment plus effect-weighted silent/opposing mass. The launcher rejects every W4 gradient-pilot or optimizer-step request; neither a capture nor its validator authorizes training or a W4 claim.
+W4 counterfactual gradient witness code is capture/validation infrastructure only. Credit evidence compares `G_CF` only with reconstructed `G_credit`; clipped task, regularizer, and total gradients are separately captured with additive closure. Single-reader-coupling mass is labeled realized-coupling only; prefrozen repeats aggregate within candidate and never increase n. The launcher rejects every W4 gradient-pilot or optimizer-step request; neither capture nor validation authorizes training or a W4 claim.

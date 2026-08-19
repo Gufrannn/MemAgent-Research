@@ -10,7 +10,7 @@ estimands:
     privileged: true
   E:
     label: E_SAME_CANDIDATE_EXECUTION_EFFECT
-    held_fixed: [upstream_state, materialized_candidate, suffix, writer_seed, reader_seed_or_coupling_id, endpoint_version]
+    held_fixed: [upstream_state, materialized_candidate, writer_seed, reader_seed_or_coupling_id, endpoint_version]
     intervention: commit_vs_retain
     state_level_writer_policy_risk_identified: false
 rules:
@@ -21,7 +21,10 @@ rules:
   writer_runs_after_materialization: 0
   legacy_replay_eligible: false
 e_join:
-  pair_keys: [stable_id, turn, upstream_state_hash, candidate_memory_token_hash, suffix_hash, writer_seed, reader_seed_or_coupling_id, endpoint_version]
+  base_pair_keys: [stable_id, turn, upstream_state_hash, candidate_memory_token_hash, writer_seed, reader_seed_or_coupling_id, endpoint_version]
+  EH_pair_keys: [exogenous_suffix_contract_hash, future_policy_hash, horizon]
+  realized_trajectory_is_pair_key: false
+  legacy_suffix_hash_allowed: false
   arm_fields: [arm, loaded_memory_token_hash, output_token_ids_hash, endpoint_value]
   exact_arms: [commit, retain]
   duplicate_policy: E_QUALIFICATION_FAIL_NO_LAST_WRITE_WINS

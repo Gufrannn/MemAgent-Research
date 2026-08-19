@@ -1,17 +1,19 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "title":"Exact same-materialized-candidate commit/retain E record",
+  "title":"Horizon-explicit exact-NOOP replay record",
   "type":"object",
-  "required":["stable_id","turn","upstream_state_hash","candidate_memory_token_hash","suffix_hash","writer_seed","reader_seed_or_coupling_id","endpoint_version","arm","loaded_memory_token_hash","output_token_ids_hash","endpoint_value","candidate_materialization_count","writer_runs_after_materialization","estimand"],
+  "required":["estimand_mode","stable_id","endpoint_version","endpoint_value"],
   "properties":{
-    "stable_id":{"type":"string","minLength":1},"turn":{"type":"integer","minimum":0},
-    "upstream_state_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"candidate_memory_token_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
-    "suffix_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"writer_seed":{"type":"integer"},
-    "reader_seed_or_coupling_id":{"type":"string","minLength":1},"endpoint_version":{"type":"string","minLength":1},
-    "arm":{"enum":["commit","retain"]},"loaded_memory_token_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
-    "output_token_ids_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"endpoint_value":{"type":"number"},
-    "candidate_materialization_count":{"const":1},"writer_runs_after_materialization":{"const":0},
-    "estimand":{"const":"E_SAME_CANDIDATE_EXECUTION_EFFECT"}
+    "estimand_mode":{"enum":["E0","EH","EF","VG"]},"stable_id":{"type":"string","minLength":1},
+    "endpoint_version":{"type":"string","minLength":1},"endpoint_value":{"type":"number"},
+    "suffix_hash":false
   },
+  "allOf":[
+    {"if":{"properties":{"estimand_mode":{"enum":["E0","EH","EF"]}}},"then":{"required":["turn","upstream_state_hash","candidate_memory_token_hash","writer_seed","reader_seed_or_coupling_id","arm","loaded_memory_token_hash","output_token_ids_hash","candidate_materialization_count","writer_runs_after_materialization","estimand"],"properties":{"arm":{"enum":["commit","retain"]},"candidate_materialization_count":{"const":1},"writer_runs_after_materialization":{"const":0},"estimand":{"const":"E_SAME_CANDIDATE_EXECUTION_EFFECT"}}}},
+    {"if":{"properties":{"estimand_mode":{"const":"E0"}}},"then":{"required":["immediate_probe_contract_hash"]}},
+    {"if":{"properties":{"estimand_mode":{"const":"EH"}}},"then":{"required":["exogenous_suffix_contract_hash","future_policy_hash","horizon","realized_trajectory_hash","future_hash_chain","endogenous_future_fields","allow_arm_trajectory_divergence"],"properties":{"horizon":{"type":"integer","minimum":1},"allow_arm_trajectory_divergence":{"const":true},"endogenous_future_fields":{"const":["prompts","candidates","memory_states","decisions"]}}}},
+    {"if":{"properties":{"estimand_mode":{"const":"EF"}}},"then":{"required":["forced_realized_suffix_hash","horizon"]}},
+    {"if":{"properties":{"estimand_mode":{"const":"VG"}}},"then":{"required":["common_initial_state_hash","fixed_policy_hash","horizon","realized_trajectory_hash","future_hash_chain","closed_loop_fixed_policy","policy_generated_all_actions"],"properties":{"closed_loop_fixed_policy":{"const":true},"policy_generated_all_actions":{"const":true}}}}
+  ],
   "additionalProperties":true
 }

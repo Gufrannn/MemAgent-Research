@@ -1,0 +1,16 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"W4 v4 coupling-aware analysis-only report",
+  "type":"object",
+  "required":["status","highest_claim_level","w4_claim_authorized","training_authorized","independent_candidates","reader_coupling_rows","reader_repeats_increase_independent_n","aggregate_g_cf_mc_sample_valid","coupling_scope","candidate_stable_help_harm_authorized","credit_primary_only","event_metrics"],
+  "properties":{
+    "status":{"enum":["W4_PLUMBING_ONLY","W4_CAPTURE_QUALIFIED_ANALYSIS_ONLY"]},
+    "highest_claim_level":{"const":"W3"},"w4_claim_authorized":{"const":false},"training_authorized":{"const":false},
+    "independent_candidates":{"type":"integer","minimum":4},"reader_coupling_rows":{"type":"integer","minimum":4},
+    "reader_repeats_increase_independent_n":{"const":false},"aggregate_g_cf_mc_sample_valid":{"const":true},
+    "coupling_scope":{"enum":["realized_coupling_only","prefrozen_candidate_mean"]},
+    "candidate_stable_help_harm_authorized":{"type":"boolean"},"credit_primary_only":{"const":true},
+    "event_metrics":{"type":"array","items":{"type":"object"}}
+  },
+  "additionalProperties":true
+}

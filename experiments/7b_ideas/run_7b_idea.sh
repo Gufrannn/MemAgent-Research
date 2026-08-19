@@ -18,6 +18,7 @@ IDEA_EVIDENCE_LEDGER=${IDEA_EVIDENCE_LEDGER:-}
 IDEA_RUN_LEDGER=${IDEA_RUN_LEDGER:-$WORK_ROOT/idea_run_ledger.jsonl}
 IDEA_REWARD_AUDIT=${IDEA_REWARD_AUDIT:-$OUT/reward_tuple_audit.jsonl}
 EXACT_NOOP_V2_MANIFEST=${EXACT_NOOP_V2_MANIFEST:-}
+SHAPEA_HORIZON_PRIMARY_MANIFEST=${SHAPEA_HORIZON_PRIMARY_MANIFEST:-}
 STOP_RULE_MANIFEST=${STOP_RULE_MANIFEST:-}
 
 if [[ ${W4_GRADIENT_PILOT_REQUEST:-0} == 1 || ${W4_OPTIMIZER_STEPS:-0} != 0 ]]; then
@@ -51,14 +52,17 @@ if [[ "$IDEA_ARM" != qa_only_original ]]; then
   : "${IDEA_MANIFEST_HASH:?Non-Original arms require IDEA_MANIFEST_HASH}"
   [[ ${#IDEA_MANIFEST_HASH} -eq 64 ]] || { echo "NO_METHOD: IDEA_MANIFEST_HASH must be SHA-256" >&2; exit 67; }
   [[ -n "$EXACT_NOOP_V2_MANIFEST" && -f "$EXACT_NOOP_V2_MANIFEST" ]] || { echo "E_QUALIFICATION_FAIL: Non-Original arms require EXACT_NOOP_V2_MANIFEST; legacy replay is ineligible" >&2; exit 75; }
-  PYTHONPATH="$CODE${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" "$SCRIPT_DIR/analysis/validate_exact_noop_v2_manifest_20260819.py" --manifest "$EXACT_NOOP_V2_MANIFEST" \
+  PYTHONPATH="$CODE${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" "$SCRIPT_DIR/analysis/validate_exact_noop_v2_manifest_20260819.py" --manifest "$EXACT_NOOP_V2_MANIFEST" --require-shape-a-e \
     || { echo "E_QUALIFICATION_FAIL: exact-NOOP v2 replay preflight failed" >&2; exit 76; }
+  [[ -n "$SHAPEA_HORIZON_PRIMARY_MANIFEST" && -f "$SHAPEA_HORIZON_PRIMARY_MANIFEST" ]] || { echo "HORIZON_ENDPOINT_SELECTION_INVALID: missing outcome-blind Shape A primary freeze" >&2; exit 82; }
+  "$PYTHON" "$SCRIPT_DIR/analysis/validate_shapeA_horizon_primary_20260819.py" --manifest "$SHAPEA_HORIZON_PRIMARY_MANIFEST" \
+    || { echo "HORIZON_ENDPOINT_SELECTION_INVALID: Shape A horizon/endpoint primary preflight failed" >&2; exit 83; }
   if [[ "$IDEA_ARM" == ncr_certified_routing || "$IDEA_ARM" == generic_frozen_judge_tournament || "$IDEA_ARM" == information_matched_raw_judge ]]; then
     : "${NCR_FROZEN_READOUT_HASH:?This arm requires a frozen readout SHA-256}"
     [[ ${#NCR_FROZEN_READOUT_HASH} -eq 64 ]] || { echo "NO_METHOD: frozen readout hash must be SHA-256" >&2; exit 68; }
   fi
 fi
-export IDEA_ARM IDEA_EVIDENCE_LEDGER IDEA_REWARD_MANIFEST IDEA_REWARD_AUDIT IDEA_MANIFEST_HASH NCR_FROZEN_READOUT_HASH EXACT_NOOP_V2_MANIFEST
+export IDEA_ARM IDEA_EVIDENCE_LEDGER IDEA_REWARD_MANIFEST IDEA_REWARD_AUDIT IDEA_MANIFEST_HASH NCR_FROZEN_READOUT_HASH EXACT_NOOP_V2_MANIFEST SHAPEA_HORIZON_PRIMARY_MANIFEST
 cd "$CODE"
 PREFLIGHT_ARGS=(--arm "$IDEA_ARM")
 [[ -z "$IDEA_EVIDENCE_LEDGER" ]] || PREFLIGHT_ARGS+=(--evidence-ledger "$IDEA_EVIDENCE_LEDGER")

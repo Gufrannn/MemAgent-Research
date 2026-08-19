@@ -1,0 +1,27 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Shape A sole EH terminal normalized-F1 primary freeze",
+  "type":"object",
+  "required":["schema_version","outcomes_accessed","estimand_mode","endpoint","harm_definition","primary_test","b0_covariates","b0_candidate_descendants","b0_post_outcome_fields","secondary_endpoints","EF_role","VG_role","independent_unit","turns_or_writes_increase_n","reader_repeats_increase_n","horizon_rows_increase_n","crossfit_cluster","bootstrap_cluster","analysis_row_key","write_id_required","write_weight","stable_example_total_weight","stacked_arm_coding","stacked_fixed_effect","stacked_second_evidence","interval_cluster","oof_loss_aggregation","row_level_hc3","endpoint_estimand_subset_selection_after_results","delete_negative_or_invalid_rows_after_results","training_authorized","scientific_outcome_read_authorized"],
+  "properties":{
+    "schema_version":{"const":"shapeA-horizon-primary-v1"},"outcomes_accessed":{"const":false},
+    "estimand_mode":{"const":"EH"},"endpoint":{"const":"terminal_continuous_normalized_f1"},
+    "harm_definition":{"const":"F1_retain_minus_F1_commit"},
+    "primary_test":{"const":"heldout_B0_plus_D_star_vs_B0_continuous_prediction_increment"},
+    "b0_covariates":{"const":["checkpoint","turn_type","support_position","length","horizon","truncation_validity","prefrozen_difficulty"]},
+    "b0_candidate_descendants":{"const":false},"b0_post_outcome_fields":{"const":false},
+    "secondary_endpoints":{"const":["E0_immediate_normalized_f1","E0_immediate_probe","terminal_EM","grounding","distribution_divergence","terminal_minus_immediate"]},
+    "EF_role":{"const":"construct_only"},"VG_role":{"const":"independent_closed_loop_study"},
+    "independent_unit":{"const":"stable_example_id"},"turns_or_writes_increase_n":{"const":false},
+    "reader_repeats_increase_n":{"const":false},"horizon_rows_increase_n":{"const":false},
+    "crossfit_cluster":{"const":"stable_example_id"},"bootstrap_cluster":{"const":"stable_example_id"},
+    "analysis_row_key":{"const":["stable_example_id","write_id"]},"write_id_required":{"const":true},
+    "write_weight":{"const":"1/m_i"},"stable_example_total_weight":{"const":1.0},
+    "stacked_arm_coding":{"const":{"commit":0,"retain":1}},"stacked_fixed_effect":{"const":"write_pair"},
+    "stacked_second_evidence":{"const":false},"interval_cluster":{"const":"stable_example_id"},
+    "oof_loss_aggregation":{"const":"within_example_1_over_m_then_across_examples"},"row_level_hc3":{"const":false},
+    "endpoint_estimand_subset_selection_after_results":{"const":false},"delete_negative_or_invalid_rows_after_results":{"const":false},
+    "training_authorized":{"const":false},"scientific_outcome_read_authorized":{"const":false}
+  },
+  "additionalProperties":false
+}

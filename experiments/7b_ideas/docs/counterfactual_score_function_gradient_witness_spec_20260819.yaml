@@ -1,4 +1,4 @@
-schema_version: counterfactual-gradient-witness-v2
+schema_version: counterfactual-gradient-witness-v4
 reference:
   on_policy_same_checkpoint_candidate: required
   exact_noop_v2_same_candidate_E: required
@@ -19,10 +19,29 @@ selection:
 definition:
   tau: Y_commit_minus_Y_retain
   G_CF: tau_times_sum_writer_token_grad_log_pi_candidate_given_state
-  G_E: actual_complete_GRPO_loss_graph_writer_gradient
+  G_credit: actual_group_advantage_token_broadcast_without_clip_or_regularizers
+  G_task: actual_clipped_task_surrogate
+  G_reg: registered_KL_entropy_and_regularizers
+  G_total: G_task_plus_G_reg
+  additive_closure_required: true
 comparison_keys: [candidate, group, checkpoint, parameter_subspace]
 actual_graph_reconstruction: [group, bonus, logprob, clip, KL]
-outputs: [alignment, captured_signed_ratio, effect_weighted_silent_mass, effect_weighted_opposing_mass]
+credit_primary_outputs: [G_credit_vs_G_CF_alignment, captured_signed_ratio, credit_effect_weighted_silent_mass, credit_effect_weighted_opposing_mass]
+delivery_adjudication:
+  credit_aligned_task_silent_or_opposed: CLIP_OR_TRUST_REGION_DELIVERY_BOTTLENECK
+  task_aligned_total_opposed: REGULARIZATION_TRADEOFF
+coupling:
+  single_exogenous_shared_CRN:
+    aggregate_G_CF_MC_sample_valid: true
+    effect_sign_scope: realized_coupling_only
+    candidate_stable_help_harm: false
+  multiple_independent:
+    freeze_before_first_tau: [coupling_ids, count]
+    summarize_within_candidate: [mean_tau, dispersion, sign_stability]
+    inference_cluster: candidate
+  reader_repeats_increase_n: false
+  add_seed_after_first_tau: false
+  select_seed_by_sign: false
 forbidden_evidence: [gradient_difference_norm, gradient_norm_only, scalar_advantage_sign, single_parameter_delta]
 defaults: {optimizer_steps: 0, new_rollouts: false}
 sample_size:
