@@ -2,7 +2,8 @@
 set -euo pipefail
 
 WORK_ROOT=${WORK_ROOT:-/data/cw/memagent_work}
-CODE=${CODE:-$WORK_ROOT/code/MemAgent}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CODE=${CODE:-$(cd -- "$SCRIPT_DIR/../.." && pwd)}
 MODEL=${MODEL:-$WORK_ROOT/models/Qwen2.5-7B-Instruct}
 TRAIN=${TRAIN:-$WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet}
 VAL=${VAL:-$WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet}
@@ -60,8 +61,10 @@ for path in "$PYTHON" "$MODEL/config.json" "$TRAIN" "$VAL"; do
   [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 49; }
 done
 
-mkdir -p "$OUT" "$WORK_ROOT/logs/gate_a" "$WORK_ROOT/cache/ray"
-RAY_TMP="$WORK_ROOT/cache/ray/${EXP}_${PHASE}_$$"
+mkdir -p "$OUT" "$WORK_ROOT/logs/gate_a"
+# Ray appends a long session/socket suffix. Keep the base below /tmp so the
+# resulting AF_UNIX socket path stays under Linux's 107-byte limit.
+RAY_TMP="/tmp/mga_${UID}_${PHASE}_$$"
 mkdir -p "$RAY_TMP"
 cd "$CODE"
 
