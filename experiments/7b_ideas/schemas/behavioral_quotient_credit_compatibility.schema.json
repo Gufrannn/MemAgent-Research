@@ -1,0 +1,28 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Behavioral-Quotient Credit Compatibility manifest",
+  "type":"object",
+  "required":["schema_version","canonical_manifest_sha256","controlled_pair_ledger_generated","shapeA_structural_gate_passed","role","credit_funnel_is_naturally_nested_quotient_chain","pair_or_path_increases_independent_n","blocked_pair_centering_authorized_for_invariant_nuisance","tie_epsilon","split_mass_threshold","merge_mass_threshold","identity_tolerance","min_examples_per_relation","bootstrap_iterations","bootstrap_seed","context_sign_flip_discovery_frozen","controlled_pairs","optimizer_steps","new_rollouts","training_authorized","second_contribution_authorized"],
+  "properties":{
+    "schema_version":{"const":"bqcc-v1"},
+    "canonical_manifest_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "controlled_pair_ledger_generated":{"const":true},
+    "shapeA_structural_gate_passed":{"const":true},
+    "role":{"const":"unique_prioritized_RL_bridge_after_ShapeA"},
+    "credit_funnel_is_naturally_nested_quotient_chain":{"const":false},
+    "pair_or_path_increases_independent_n":{"const":false},
+    "blocked_pair_centering_authorized_for_invariant_nuisance":{"const":false},
+    "tie_epsilon":{"type":"number","minimum":0},
+    "split_mass_threshold":{"type":"number","minimum":0},
+    "merge_mass_threshold":{"type":"number","minimum":0},
+    "identity_tolerance":{"type":"number","minimum":0},
+    "min_examples_per_relation":{"type":"integer","minimum":1},
+    "bootstrap_iterations":{"type":"integer","minimum":200},
+    "bootstrap_seed":{"type":"integer"},
+    "context_sign_flip_discovery_frozen":{"const":true},
+    "controlled_pairs":{"type":"array","minItems":2,"items":{"type":"object","required":["stable_example_id","pair_id","path_id","pair_type","reward_left","reward_right","group_baseline","group_scale","actual_advantage_left","actual_advantage_right"],"properties":{"pair_type":{"enum":["invariant","necessary"]},"group_scale":{"type":"number","exclusiveMinimum":0},"frozen_expected_direction":{"enum":[-1,1]}}}},
+    "optimizer_steps":{"const":0},"new_rollouts":{"const":false},
+    "training_authorized":{"const":false},"second_contribution_authorized":{"const":false}
+  },
+  "additionalProperties":true
+}

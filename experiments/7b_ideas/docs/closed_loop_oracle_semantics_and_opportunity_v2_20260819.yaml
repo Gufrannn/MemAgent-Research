@@ -1,0 +1,17 @@
+schema_version: closed-loop-oracle-opportunity-v2
+parent_adjudicator: closed-loop-commit-v8-resource-mode
+role: orthogonal_auxiliary_not_terminal_pairwise_IUT_gate
+failure_status_suffix: WITH_ORACLE_OPPORTUNITY_INVALID
+failure_can_veto_terminal_pairwise_IUT: false
+modes:
+  D: deterministic_pointwise_package_oracle
+  S: crossfit_conditional_policy_mean_MC_feasibility
+  F: seed_manifest_hindsight_envelope_only
+S_requirements:
+  raw_pointwise_max_role: coupling_dependent_hindsight_luck_envelope
+  assignment_evaluation_seed_folds_independent: true
+  plugin_max_winners_curse_acknowledged: true
+  within_example_MC_reported: true
+  audit16_K4_scope: luck_envelope_coupling_MC_feasibility_only
+  stable_per_example_oracle_labels_authorized: false
+resources: {new_rollouts: false, optimizer_steps: 0, training: false}

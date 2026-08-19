@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Closed-loop v4 terminal-IUT adjudicator with totality v2 and horizon v3."""
+"""Closed-loop v8 resource-mode adjudicator with terminal pairwise IUT."""
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from recurrent.research.closed_loop_composition import audit_composition_gap  # noqa: E402
+from recurrent.research.closed_loop_randomness import audit_randomness_estimand  # noqa: E402
+from recurrent.research.closed_loop_oracle import audit_oracle_opportunity  # noqa: E402
+from recurrent.research.closed_loop_resources import audit_resource_mode  # noqa: E402
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SCIENTIFIC_TERMINALS = {"complete", "scientific_invalid", "truncation", "parser_failure", "natural_stop"}
@@ -49,7 +56,7 @@ def _horizon_contract(value):
 
 
 def adjudicate(value):
-    if value.get("schema_version") != "closed-loop-commit-v4-terminal-IUT":
+    if value.get("schema_version") != "closed-loop-commit-v8-resource-mode":
         _fail("schema version mismatch")
     if value.get("closed_loop_existing_gate_authorized") is not True:
         return {"status": "CLOSED_LOOP_NOT_AUTHORIZED", "point_value_authorized": False,
@@ -59,12 +66,23 @@ def adjudicate(value):
                 "intersection_diagnostic_only": True, "retry_to_success": False,
                 "infrastructure_failure_scientific_zero": False, "audit_size": 16,
                 "policy_totality_and_attrition_handling": "adjudicator_v2_hard_gate",
-                "terminal_attribution_gate": "terminal_pairwise_IUT_and_regret",
+                "terminal_attribution_gate": "terminal_pairwise_IUT",
+                "oracle_auxiliary_gate": "oracle_semantics_and_opportunity",
+                "oracle_failure_can_veto_terminal_IUT": False,
+                "resource_axis_role": "prefrozen_resource_estimand_and_cost_qualification",
+                "resource_mode_frozen_before_outcome": True,
+                "raw_QA_IUT_equals_equal_budget_or_practical_advantage": False,
                 "local_action_attribution_authorized": False,
                 "new_local_interventions": False,
                 "clairvoyant_assignments_feed_selector_or_gate": False,
                 "package_selector_training_authorized": False,
                 "new_independent_selector_confirmation_authorized": False,
+                "composition_gap_role": "orthogonal_transport_diagnostic_not_actionability_gate",
+                "composition_gap_can_veto_terminal_IUT": False,
+                "composition_gap_can_rescue_terminal_IUT": False,
+                "randomness_axis_role": "orthogonal_execution_estimand",
+                "randomness_mode_frozen_before_outcome": True,
+                "seed_or_replicate_increases_scientific_n": False,
                 "optimizer_steps": 0, "new_rollouts": False}
     wrong = {key: (value.get(key), expected) for key, expected in required.items() if value.get(key) != expected}
     if wrong: _fail(f"intent-to-execute contract failed {wrong}")
@@ -132,6 +150,59 @@ def adjudicate(value):
                 "scientific_zero_imputed": False, "old_ledger_retained": True,
                 "training_authorized": False, "policy_totality_and_attrition_handling_pass": False}
     values = {policy: sum(by_policy[policy]) / len(assigned) for policy in policies}
+    randomness_manifest = value.get("randomness_manifest")
+    primary_mode = value.get("randomness_primary_mode")
+    if (primary_mode not in {"D", "S", "F"} or not isinstance(randomness_manifest, dict) or
+            randomness_manifest.get("primary_mode") != primary_mode or
+            randomness_manifest.get("mode_frozen_before_outcome") is not True):
+        randomness_report = {"status": "RANDOMNESS_ESTIMAND_INVALID",
+                             "reason": "frozen_primary_mode_or_manifest_missing_or_mismatched",
+                             "training_authorized": False}
+    else:
+        randomness_report = audit_randomness_estimand(randomness_manifest)
+    if primary_mode == "D" and randomness_report["status"] in {
+            "DETERMINISTIC_PROTOCOL_PRIMARY", "STOCHASTIC_NONTRANSPORT"}:
+        if randomness_manifest.get("stochastic_sensitivity_requested") is True:
+            observed = values["GC"] - max(values[control] for control in ("GF", "GN", "GS"))
+            declared = randomness_manifest.get("deterministic_gc_minus_best_control")
+            if not isinstance(declared, (int, float)) or not math.isclose(
+                    float(declared), observed, rel_tol=0.0, abs_tol=1e-12):
+                randomness_report = {"status": "RANDOMNESS_ESTIMAND_INVALID",
+                                     "reason": "deterministic_sensitivity_contrast_not_joined_to_terminal_ledger",
+                                     "training_authorized": False}
+    elif primary_mode == "S" and randomness_report["status"] == "SEED_MARGINAL_STOCHASTIC_POLICY_VALUE_QUALIFIED":
+        means = {(row["stable_example_id"], row["policy"]): row["replicate_mean_endpoint"]
+                 for row in randomness_report["policy_example_replicate_means"]}
+        exact_join = set(means) == expected and all(math.isclose(
+            means[key], terminal_values[key], rel_tol=0.0, abs_tol=1e-12) for key in expected)
+        if not exact_join:
+            randomness_report = {"status": "STOCHASTIC_POLICY_MEAN_INVALID",
+                                 "reason": "replicate_means_do_not_biject_execution_ledger",
+                                 "policy_mean_identified": False, "training_authorized": False}
+    valid_randomness_statuses = {"DETERMINISTIC_PROTOCOL_PRIMARY", "STOCHASTIC_NONTRANSPORT",
+                                 "SEED_MARGINAL_STOCHASTIC_POLICY_VALUE_QUALIFIED",
+                                 "SINGLE_FROZEN_SEED_REALIZED_SCREENING_ONLY"}
+    if randomness_report["status"] not in valid_randomness_statuses:
+        status = ("STOCHASTIC_POLICY_MEAN_INVALID" if primary_mode == "S"
+                  else "RANDOMNESS_ESTIMAND_INVALID")
+        return {"status": status, "randomness_estimand_audit": randomness_report,
+                "point_value_authorized": False, "control_dominance_claim_authorized": False,
+                "training_authorized": False, "new_rollouts_authorized": False,
+                "queue_changed": False}
+    resource_manifest = value.get("resource_manifest")
+    primary_resource_mode = value.get("primary_resource_mode")
+    if (primary_resource_mode not in {"A", "B"} or not isinstance(resource_manifest, dict) or
+            resource_manifest.get("primary_resource_mode") != primary_resource_mode or
+            resource_manifest.get("mode_frozen_before_outcome") is not True):
+        resource_report = {"status": ("FIXED_BUDGET_POLICY_VALUE_INVALID"
+                                      if primary_resource_mode == "B" else "COST_UNQUALIFIED"),
+                           "reason": "frozen_primary_resource_mode_or_manifest_missing_or_mismatched",
+                           "fixed_budget_policy_value_authorized": False,
+                           "training_authorized": False}
+    else:
+        resource_report = audit_resource_mode(resource_manifest, terminal_values=terminal_values,
+                                              assigned=[str(item) for item in assigned],
+                                              policies=[str(item) for item in policies])
     contrasts = value.get("prefrozen_terminal_contrasts")
     if contrasts != ["GC-GF", "GC-GN", "GC-GS"]:
         _fail("terminal contrasts must be prefrozen as GC-GF, GC-GN, GC-GS")
@@ -154,16 +225,18 @@ def adjudicate(value):
                           "negative_terminal_effect_mass": sum(max(-effect, 0.0) for effect in effects) / len(effects),
                           "interval_lower_bound": float(lower[name]),
                           "passes_shared_SESOI_interval_gate": float(lower[name]) >= float(sesoi)}
-    v_fixed_star = max(values.values())
-    best_fixed_policy = max(sorted(values), key=lambda policy: values[policy])
-    v_clair = sum(max(terminal_values[(str(stable_id), policy)] for policy in policies)
-                  for stable_id in assigned) / len(assigned)
+    oracle_manifest = value.get("oracle_opportunity_manifest")
+    if isinstance(oracle_manifest, dict):
+        oracle_report = audit_oracle_opportunity(
+            oracle_manifest, primary_mode=primary_mode, terminal_values=terminal_values,
+            assigned=[str(item) for item in assigned], policies=[str(item) for item in policies])
+    else:
+        oracle_report = {"status": "ORACLE_OPPORTUNITY_INVALID",
+                         "reason": "oracle_opportunity_manifest_missing",
+                         "can_veto_terminal_pairwise_IUT": False, "training_authorized": False}
     terminal_report = {"terminal_pairwise_contrasts": pairwise,
-                       "V_fixed_star": v_fixed_star, "best_fixed_policy": best_fixed_policy,
-                       "V_clair": v_clair, "V_clair_role": "clairvoyant_sample_upper_bound_not_executable_policy",
-                       "Opportunity_package": v_clair - v_fixed_star,
-                       "Regret_GC_clair": v_clair - values["GC"],
-                       "Regret_GC_clair_role": "descriptive_clairvoyant_gap_not_regret_to_best_fixed",
+                       "oracle_semantics_and_opportunity": oracle_report,
+                       "oracle_auxiliary_can_veto_terminal_pairwise_IUT": False,
                        "clairvoyant_assignments_feed_selector_or_gate": False,
                        "package_selector_training_authorized": False,
                        "GC_minus_max_control_point_summary": min(pairwise[name]["mean_terminal_contrast"]
@@ -174,12 +247,81 @@ def adjudicate(value):
                        "terminal_attribution_scope": "complete_policy_package_total_difference_only",
                        "prohibited_local_attributions": ["harmful_commit", "beneficial_rejection", "turn_local_credit",
                          "rollback_caused_rescue", "certificate_decision_mediated_gain"]}
+    composition_requested = value.get("composition_gap_requested")
+    if not isinstance(composition_requested, bool):
+        _fail("composition_gap_requested must be boolean")
+    if composition_requested:
+        composition_manifest = value.get("composition_gap_manifest")
+        if not isinstance(composition_manifest, dict):
+            composition_report = {"status": "COMPOSITION_GAP_NOT_IDENTIFIED",
+                                  "reason": "composition_gap_manifest_missing", "outcomes_read": False,
+                                  "feedback_claim_authorized": False, "actionability_gate": False,
+                                  "training_authorized": False}
+        else:
+            composition_report = audit_composition_gap(composition_manifest)
+            if composition_report["status"] == "COMPOSITION_GAP_QUALIFIED":
+                composition_rows = {str(row["stable_example_id"]): row for row in composition_manifest["rows"]}
+                exact_join = set(composition_rows) == {str(item) for item in assigned}
+                if exact_join:
+                    for stable_id in assigned:
+                        row = composition_rows[str(stable_id)]
+                        actual_gc = terminal_values[(str(stable_id), "GC")]
+                        actual_control = max(terminal_values[(str(stable_id), control)]
+                                             for control in ("GF", "GN", "GS"))
+                        if (float(row["direct_gc_terminal"]) != actual_gc or
+                                float(row["best_control_terminal"]) != actual_control):
+                            exact_join = False; break
+                if not exact_join:
+                    composition_report = {"status": "COMPOSITION_GAP_NOT_IDENTIFIED",
+                                          "reason": "direct_GC_or_control_rows_do_not_biject_terminal_IUT_ledger",
+                                          "outcomes_read": False, "feedback_claim_authorized": False,
+                                          "actionability_gate": False, "training_authorized": False}
+    else:
+        composition_report = {"status": "COMPOSITION_GAP_NOT_REQUESTED",
+                              "feedback_claim_authorized": False, "actionability_gate": False,
+                              "training_authorized": False}
+    terminal_report.update({"composition_transport_audit": composition_report,
+                            "composition_gap_orthogonal_to_actionability": True,
+                            "composition_gap_can_veto_terminal_IUT": False,
+                            "composition_gap_can_rescue_terminal_IUT": False,
+                            "randomness_estimand_audit": randomness_report,
+                            "randomness_status": randomness_report["status"],
+                            "randomness_axis_role": "orthogonal_execution_estimand",
+                            "seed_or_replicate_increases_scientific_n": False,
+                            "resource_mode_audit": resource_report,
+                            "terminal_IUT_scope": "current_protocol_raw_QA_not_equal_budget_utility_or_cost_advantage",
+                            "raw_QA_IUT_equals_equal_budget_or_practical_advantage": False})
+    if primary_resource_mode == "B" and resource_report["status"] != "FIXED_BUDGET_POLICY_VALUE_QUALIFIED":
+        return {"status": "FIXED_BUDGET_POLICY_VALUE_INVALID",
+                "unconstrained_outcome_description": {"policy_values": values,
+                                                       "terminal_pairwise_contrasts": pairwise},
+                "fixed_budget_policy_value_authorized": False,
+                "control_dominance_claim_authorized": False,
+                "training_authorized": False, **horizon, **terminal_report}
+    cost_unqualified = primary_resource_mode == "A" and resource_report["status"] != "ACCURACY_FIRST_RESOURCE_LEDGER_QUALIFIED"
+    if primary_mode == "F":
+        status = "SINGLE_FROZEN_SEED_REALIZED_SCREENING_ONLY"
+        if cost_unqualified: status += "_WITH_COST_UNQUALIFIED"
+        return {"status": status, "policy_values": values, "point_value_authorized": True,
+                "confirmatory_claim_authorized": False,
+                "control_dominance_claim_authorized": False,
+                "training_authorized": False, **horizon, **terminal_report}
     if not all(row["passes_shared_SESOI_interval_gate"] for row in pairwise.values()):
-        return {"status": "CLOSED_LOOP_CONTROL_DOMINANCE_NO_GO", "policy_values": values,
+        status = "CLOSED_LOOP_CONTROL_DOMINANCE_NO_GO"
+        if cost_unqualified: status += "_WITH_COST_UNQUALIFIED"
+        return {"status": status, "policy_values": values,
                 "point_value_authorized": True, "control_dominance_claim_authorized": False,
                 "training_authorized": False, **horizon, **terminal_report}
-    status = ("CLOSED_LOOP_INTENT_TO_EXECUTE_POINT_VALUE_QUALIFIED" if horizon["horizon_mode"] == "H_fixed"
-              else "FINITE_TWO_TURN_ACTIONABILITY_WITH_SELECTED_THREE_TURN_DESCRIPTION")
+    if (composition_report["status"] == "COMPOSITION_GAP_QUALIFIED" and
+            composition_report.get("myopic_nontransport") is True):
+        status = "CLOSED_LOOP_ACTIONABILITY_WITH_MYOPIC_NONTRANSPORT"
+    else:
+        status = ("CLOSED_LOOP_INTENT_TO_EXECUTE_POINT_VALUE_QUALIFIED" if horizon["horizon_mode"] == "H_fixed"
+                  else "FINITE_TWO_TURN_ACTIONABILITY_WITH_SELECTED_THREE_TURN_DESCRIPTION")
+    if oracle_report["status"] == "ORACLE_OPPORTUNITY_INVALID":
+        status += "_WITH_ORACLE_OPPORTUNITY_INVALID"
+    if cost_unqualified:
+        status += "_WITH_COST_UNQUALIFIED"
     report = {"status": status,
             "policy_values": values, "assigned_examples": 16, "execution_cells": len(seen),
             "fallback_mass_by_policy": dict(fallback_weight),
@@ -194,16 +336,41 @@ def adjudicate(value):
 
 def self_test():
     examples = [f"e{i}" for i in range(16)]; policies = ["GC", "GF", "GN", "GS"]
-    base = {"schema_version": "closed-loop-commit-v4-terminal-IUT", "closed_loop_existing_gate_authorized": True,
+    base = {"schema_version": "closed-loop-commit-v8-resource-mode", "closed_loop_existing_gate_authorized": True,
             "intent_to_execute_primary": True, "common_valid_intersection_primary": False,
             "intersection_diagnostic_only": True, "retry_to_success": False,
             "infrastructure_failure_scientific_zero": False, "audit_size": 16,
             "policy_totality_and_attrition_handling": "adjudicator_v2_hard_gate",
-            "terminal_attribution_gate": "terminal_pairwise_IUT_and_regret",
+            "terminal_attribution_gate": "terminal_pairwise_IUT",
+            "oracle_auxiliary_gate": "oracle_semantics_and_opportunity",
+            "oracle_failure_can_veto_terminal_IUT": False,
+            "resource_axis_role": "prefrozen_resource_estimand_and_cost_qualification",
+            "resource_mode_frozen_before_outcome": True,
+            "primary_resource_mode": "A",
+            "raw_QA_IUT_equals_equal_budget_or_practical_advantage": False,
             "local_action_attribution_authorized": False, "new_local_interventions": False,
             "clairvoyant_assignments_feed_selector_or_gate": False,
             "package_selector_training_authorized": False,
             "new_independent_selector_confirmation_authorized": False,
+            "composition_gap_role": "orthogonal_transport_diagnostic_not_actionability_gate",
+            "composition_gap_can_veto_terminal_IUT": False,
+            "composition_gap_can_rescue_terminal_IUT": False,
+            "composition_gap_requested": False,
+            "randomness_axis_role": "orthogonal_execution_estimand",
+            "randomness_mode_frozen_before_outcome": True,
+            "randomness_primary_mode": "D",
+            "seed_or_replicate_increases_scientific_n": False,
+            "randomness_manifest": {"schema_version": "closed-loop-randomness-estimand-v1",
+              "primary_mode": "D", "mode_frozen_before_outcome": True,
+              "estimand": "temperature0_deterministic_protocol_value", "temperature": 0,
+              "deterministic_protocol_frozen": True, "deterministic_protocol_hash": "d" * 64,
+              "stochastic_sensitivity_requested": False, "optimizer_steps": 0, "new_rollouts": False},
+            "oracle_opportunity_manifest": {"schema_version": "closed-loop-oracle-opportunity-v2",
+              "role": "orthogonal_auxiliary_not_terminal_pairwise_IUT_gate",
+              "failure_can_veto_terminal_pairwise_IUT": False,
+              "seed_or_replicate_increases_scientific_n": False,
+              "primary_mode": "D", "deterministic_pointwise_package_oracle_authorized": True,
+              "optimizer_steps": 0, "new_rollouts": False},
             "optimizer_steps": 0, "new_rollouts": False, "assignment_manifest_hash": "a" * 64,
             "assigned_stable_example_ids": examples, "policies": policies,
             "horizon_mode": "H_fixed", "horizon": 2,
@@ -220,6 +387,18 @@ def self_test():
              "terminal_class": "complete", "official_endpoint_value": .5, "retry_count": 0,
              "retry_to_success": False, "certificate_defined": True}
             for stable_id in examples for policy in policies]
+    resource_rows = [{"stable_example_id": stable_id, "policy": policy,
+      "cumulative_calls": 1, "input_tokens": 10, "generated_tokens": 5, "context_tokens": 15,
+      "walltime_seconds": .1, "fallback_used": False, "certificate_readout_calls": 0,
+      "policy_induced_memory_tokens": 0} for stable_id in examples for policy in policies]
+    base["resource_manifest"] = {"schema_version": "closed-loop-resource-mode-v1",
+      "mode_frozen_before_outcome": True, "primary_resource_mode": "A",
+      "estimand": "accuracy_first_current_protocol_raw_QA",
+      "raw_QA_IUT_equals_equal_budget_or_practical_advantage": False,
+      "writer_proposal_parity_solves_certificate_or_memory_cost_parity": False,
+      "utility_reporting_requested": False, "posthoc_lambda_sweep": False,
+      "gain_per_token_only_reporting": False, "certificate_practical_gain_claim_requested": False,
+      "resource_ledger": resource_rows, "optimizer_steps": 0, "new_rollouts": False}
     assert adjudicate({**base, "executions": rows})["point_value_authorized"]
     assert adjudicate({**base, "executions": rows[:-1]})["status"] == "AUDIT16_CONSTRUCTION_DIAGNOSTIC_ONLY"
     undefined = [dict(row) for row in rows]; undefined[2]["certificate_defined"] = False
@@ -229,7 +408,7 @@ def self_test():
       "state_preserved": True, "full_manifest_rerun_required": True, "old_ledger_retained": True,
       "new_unique_experiment_name": "audit16_rerun_2"})
     assert adjudicate({**base, "executions": infra})["status"].startswith("INFRASTRUCTURE_FAILURE")
-    print("closed_loop_commit_v4_terminal_IUT_self_test=ok")
+    print("closed_loop_commit_v8_resource_mode_self_test=ok")
 
 
 def main():

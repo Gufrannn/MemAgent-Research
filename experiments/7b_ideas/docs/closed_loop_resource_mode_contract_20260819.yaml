@@ -1,0 +1,17 @@
+schema_version: closed-loop-resource-mode-v1
+parent_adjudicator: closed-loop-commit-v8-resource-mode
+mode_frozen_before_outcome: required
+terminal_IUT_scope: current_protocol_raw_QA_not_equal_budget_utility_or_cost_advantage
+modes:
+  A:
+    estimand: accuracy_first_current_protocol_raw_QA
+    incomplete_cost_status_suffix: WITH_COST_UNQUALIFIED
+    cost_failure_can_delete_raw_IUT: false
+  B:
+    estimand: fixed_budget_policy_value
+    invalid_status: FIXED_BUDGET_POLICY_VALUE_INVALID
+    unconstrained_outcome_role: description_only_not_fixed_budget_value
+required_costs: [cumulative_calls, input_tokens, generated_tokens, context_tokens, walltime_seconds, fallback_used, certificate_readout_calls, policy_induced_memory_tokens]
+utility: {lambda_frozen_from_use_case: required, normalization_hash: required, posthoc_lambda_sweep: false, gain_per_token_only: false}
+practical_certificate_claim: {matched_control: content_random_or_sham, same_calls: true, same_token_envelope: true}
+resources: {new_rollouts: false, optimizer_steps: 0, training: false}

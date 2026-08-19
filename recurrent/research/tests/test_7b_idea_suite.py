@@ -873,16 +873,49 @@ def _closed_loop_manifest():
     rows=[{"stable_example_id":example,"policy":policy,"execution_status":"scientific_terminal",
       "terminal_class":"complete","official_endpoint_value":.5,"retry_count":0,"retry_to_success":False,
       "certificate_defined":True} for example in examples for policy in policies]
-    return {"schema_version":"closed-loop-commit-v4-terminal-IUT","closed_loop_existing_gate_authorized":True,
+    resource_rows=[{"stable_example_id":example,"policy":policy,"cumulative_calls":1,
+      "input_tokens":10,"generated_tokens":5,"context_tokens":15,"walltime_seconds":.1,
+      "fallback_used":False,"certificate_readout_calls":0,"policy_induced_memory_tokens":0}
+      for example in examples for policy in policies]
+    return {"schema_version":"closed-loop-commit-v8-resource-mode","closed_loop_existing_gate_authorized":True,
       "intent_to_execute_primary":True,"common_valid_intersection_primary":False,
       "intersection_diagnostic_only":True,"retry_to_success":False,
       "infrastructure_failure_scientific_zero":False,"audit_size":16,
       "policy_totality_and_attrition_handling":"adjudicator_v2_hard_gate","optimizer_steps":0,
-      "terminal_attribution_gate":"terminal_pairwise_IUT_and_regret",
+      "terminal_attribution_gate":"terminal_pairwise_IUT",
+      "oracle_auxiliary_gate":"oracle_semantics_and_opportunity",
+      "oracle_failure_can_veto_terminal_IUT":False,
       "local_action_attribution_authorized":False,"new_local_interventions":False,
       "clairvoyant_assignments_feed_selector_or_gate":False,
       "package_selector_training_authorized":False,
       "new_independent_selector_confirmation_authorized":False,
+      "composition_gap_role":"orthogonal_transport_diagnostic_not_actionability_gate",
+      "composition_gap_can_veto_terminal_IUT":False,"composition_gap_can_rescue_terminal_IUT":False,
+      "composition_gap_requested":False,
+      "randomness_axis_role":"orthogonal_execution_estimand",
+      "randomness_mode_frozen_before_outcome":True,"randomness_primary_mode":"D",
+      "seed_or_replicate_increases_scientific_n":False,
+      "randomness_manifest":{"schema_version":"closed-loop-randomness-estimand-v1",
+        "primary_mode":"D","mode_frozen_before_outcome":True,
+        "estimand":"temperature0_deterministic_protocol_value","temperature":0,
+        "deterministic_protocol_frozen":True,"deterministic_protocol_hash":"d"*64,
+        "stochastic_sensitivity_requested":False,"optimizer_steps":0,"new_rollouts":False},
+      "oracle_opportunity_manifest":{"schema_version":"closed-loop-oracle-opportunity-v2",
+        "primary_mode":"D","role":"orthogonal_auxiliary_not_terminal_pairwise_IUT_gate",
+        "failure_can_veto_terminal_pairwise_IUT":False,
+        "seed_or_replicate_increases_scientific_n":False,
+        "deterministic_pointwise_package_oracle_authorized":True,"optimizer_steps":0,"new_rollouts":False},
+      "resource_axis_role":"prefrozen_resource_estimand_and_cost_qualification",
+      "resource_mode_frozen_before_outcome":True,"primary_resource_mode":"A",
+      "raw_QA_IUT_equals_equal_budget_or_practical_advantage":False,
+      "resource_manifest":{"schema_version":"closed-loop-resource-mode-v1",
+        "primary_resource_mode":"A","mode_frozen_before_outcome":True,
+        "estimand":"accuracy_first_current_protocol_raw_QA",
+        "raw_QA_IUT_equals_equal_budget_or_practical_advantage":False,
+        "writer_proposal_parity_solves_certificate_or_memory_cost_parity":False,
+        "utility_reporting_requested":False,"posthoc_lambda_sweep":False,
+        "gain_per_token_only_reporting":False,"certificate_practical_gain_claim_requested":False,
+        "resource_ledger":resource_rows,"optimizer_steps":0,"new_rollouts":False},
       "new_rollouts":False,"assignment_manifest_hash":"a"*64,"assigned_stable_example_ids":examples,
       "policies":policies,"executions":rows,"horizon_mode":"H_fixed","horizon":2,
       "horizon_frozen_before_confirm32_policy_outcomes":True,
@@ -896,7 +929,7 @@ def _closed_loop_manifest():
 
 def test_closed_loop_actionability_v2_totality_attrition_and_audit16():
     module=_closed_loop_adjudicator()
-    assert module.adjudicate({"schema_version":"closed-loop-commit-v4-terminal-IUT",
+    assert module.adjudicate({"schema_version":"closed-loop-commit-v8-resource-mode",
       "closed_loop_existing_gate_authorized":False})["status"]=="CLOSED_LOOP_NOT_AUTHORIZED"
     passed=module.adjudicate(_closed_loop_manifest())
     assert passed["point_value_authorized"] and passed["assigned_examples"]==16
@@ -918,7 +951,7 @@ def test_closed_loop_actionability_v2_totality_attrition_and_audit16():
     with pytest.raises(ValueError,match="retry-to-success"):module.adjudicate(retry)
 
 
-def test_closed_loop_terminal_attribution_v4_iut_oracle_regret_and_no_go():
+def test_closed_loop_terminal_attribution_v8_iut_oracle_and_no_go():
     module=_closed_loop_adjudicator();value=_closed_loop_manifest()
     for row in value["executions"]:
         row["official_endpoint_value"]={"GC":1.,"GF":.5,"GN":.4,"GS":.3}[row["policy"]]
@@ -927,8 +960,9 @@ def test_closed_loop_terminal_attribution_v4_iut_oracle_regret_and_no_go():
     result=module.adjudicate(value)
     assert result["control_dominance_claim_authorized"]
     assert result["GC_minus_max_control_point_summary"]==.5
-    assert result["V_fixed_star"]==1 and result["V_clair"]==1
-    assert result["Opportunity_package"]==0 and result["Regret_GC_clair"]==0
+    oracle=result["oracle_semantics_and_opportunity"]
+    assert oracle["V_fixed_star"]==1 and oracle["V_pointwise_package_oracle"]==1
+    assert oracle["Opportunity_package"]==0
     assert result["terminal_pairwise_contrasts"]["GC-GF"]["win_tie_loss"]==[16,0,0]
     bad=_closed_loop_manifest();bad["pairwise_interval_lower_bounds"]["GC-GN"]=-.1
     no_go=module.adjudicate(bad)
@@ -936,6 +970,58 @@ def test_closed_loop_terminal_attribution_v4_iut_oracle_regret_and_no_go():
     assert not no_go["control_dominance_claim_authorized"]
     bad=_closed_loop_manifest();bad["prefrozen_terminal_contrasts"]=["GC-GF"]
     with pytest.raises(ValueError,match="terminal contrasts must be prefrozen"):module.adjudicate(bad)
+
+
+def _composition_manifest(examples, *, direct=1., splice=0., control=.5):
+    contract={name:f"{index+100:064x}" for index,name in enumerate(("initial_manifest_hash",
+      "checkpoint_hash","writer_reader_contract_hash","horizon_contract_hash",
+      "endpoint_definition_hash","missing_rule_hash"))}
+    rows=[{"stable_example_id":example,"direct_source_row_hash":f"{index+10:064x}",
+      "splice_row_hash":f"{index+40:064x}","direct_gc_terminal":direct,
+      "splice_terminal":splice,"best_control_terminal":control} for index,example in enumerate(examples)]
+    return {"schema_version":"closed-loop-composition-gap-v1",
+      "gap_direction":"V_splice_minus_V_direct_GC","complete_per_example_bijection":True,
+      "splice_algorithm_frozen_before_outcome":True,"source_rows_frozen_before_outcome":True,
+      "composition_gap_actionability_gate":False,"composition_gap_rescues_terminal_IUT":False,
+      "feedback_claim_authorized":False,"optimizer_steps":0,"new_rollouts":False,
+      "direct_contract":dict(contract),"splice_contract":dict(contract),"splice_algorithm_hash":"a"*64,
+      "prefrozen_source_row_hashes":[row["direct_source_row_hash"] for row in rows],
+      "composition_transport_SESOI":.5,"rows":rows}
+
+
+def test_closed_loop_composition_gap_qualification_metrics_and_contract_mismatch():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_closed_loop_composition_gap_qualification_20260819.py"
+    spec=importlib.util.spec_from_file_location("composition_gap",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.self_test()
+    qualified=module.audit_composition_gap(module._manifest((1.,-1.)))
+    assert qualified["signed_mean_composition_gap"]==0
+    assert qualified["composition_gap_MAE_error_mass"]==1
+    mismatch=module._manifest((.6,.6));mismatch["splice_contract"]["endpoint_definition_hash"]="f"*64
+    result=module.audit_composition_gap(mismatch)
+    assert result["status"]=="COMPOSITION_GAP_NOT_IDENTIFIED" and not result["outcomes_read"]
+
+
+def test_closed_loop_v8_composition_is_orthogonal_to_terminal_iut():
+    module=_closed_loop_adjudicator();value=_closed_loop_manifest()
+    for row in value["executions"]:
+        row["official_endpoint_value"]=1. if row["policy"]=="GC" else .5
+    value["pairwise_interval_lower_bounds"]={"GC-GF":.2,"GC-GN":.2,"GC-GS":.2}
+    value["terminal_contrast_SESOI"]=.1;value["composition_gap_requested"]=True
+    value["composition_gap_manifest"]=_composition_manifest(value["assigned_stable_example_ids"])
+    result=module.adjudicate(value)
+    assert result["status"]=="CLOSED_LOOP_ACTIONABILITY_WITH_MYOPIC_NONTRANSPORT"
+    assert result["control_dominance_claim_authorized"]
+    assert result["composition_transport_audit"]["direction_reversal"]
+    invalid=json.loads(json.dumps(value))
+    invalid["composition_gap_manifest"]["splice_contract"]["endpoint_definition_hash"]="f"*64
+    result=module.adjudicate(invalid)
+    assert result["status"]=="CLOSED_LOOP_INTENT_TO_EXECUTE_POINT_VALUE_QUALIFIED"
+    assert result["composition_transport_audit"]["status"]=="COMPOSITION_GAP_NOT_IDENTIFIED"
+    failed=json.loads(json.dumps(value));failed["pairwise_interval_lower_bounds"]["GC-GN"]=-.1
+    result=module.adjudicate(failed)
+    assert result["status"]=="CLOSED_LOOP_CONTROL_DOMINANCE_NO_GO"
+    assert result["composition_transport_audit"]["myopic_nontransport"]
 
 
 def test_closed_loop_oracle_semantics_fixed_vs_clairvoyant_exact_enumeration():
@@ -948,6 +1034,87 @@ def test_closed_loop_oracle_semantics_fixed_vs_clairvoyant_exact_enumeration():
     manifest=_closed_loop_manifest();manifest["clairvoyant_assignments_feed_selector_or_gate"]=True
     with pytest.raises(ValueError,match="intent-to-execute contract failed"):
         _closed_loop_adjudicator().adjudicate(manifest)
+
+
+def test_closed_loop_v6_randomness_estimand_and_addressed_requests():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_closed_loop_randomness_estimand_20260819.py"
+    spec=importlib.util.spec_from_file_location("closed_loop_randomness",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.self_test()
+    enum_path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_closed_loop_randomness_20260819.py"
+    enum_spec=importlib.util.spec_from_file_location("closed_loop_randomness_enum",enum_path)
+    enum=importlib.util.module_from_spec(enum_spec);enum_spec.loader.exec_module(enum)
+    exact=enum.exact_enumeration()
+    assert exact["seed_marginal_difference"]==pytest.approx(.2)
+    assert set(exact["single_seed_differences"].values())=={0,1}
+    assert list(exact["sequential_tape_turn2"].values())==[1,0]
+    assert list(exact["addressed_turn2"].values())==[1,1]
+    value=_closed_loop_manifest()
+    for row in value["executions"]:
+        row["official_endpoint_value"]=1. if row["policy"]=="GC" else .5
+    value["pairwise_interval_lower_bounds"]={"GC-GF":.2,"GC-GN":.2,"GC-GS":.2}
+    value["randomness_manifest"].update({"stochastic_sensitivity_requested":True,
+      "deterministic_gc_minus_best_control":.5,"stochastic_gc_minus_best_control":-.1})
+    result=_closed_loop_adjudicator().adjudicate(value)
+    assert result["control_dominance_claim_authorized"]
+    assert result["randomness_status"]=="STOCHASTIC_NONTRANSPORT"
+    assert result["randomness_estimand_audit"]["deterministic_terminal_IUT_preserved"]
+
+
+def test_closed_loop_v7_oracle_is_orthogonal_and_stochastic_max_is_luck():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_closed_loop_oracle_opportunity_v2_20260819.py"
+    spec=importlib.util.spec_from_file_location("closed_loop_oracle_v2",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.self_test()
+    enum_path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_closed_loop_oracle_randomness_20260819.py"
+    enum_spec=importlib.util.spec_from_file_location("closed_loop_oracle_enum",enum_path)
+    enum=importlib.util.module_from_spec(enum_spec);enum_spec.loader.exec_module(enum)
+    exact=enum.exact_enumeration()
+    assert exact["two_identical_Bernoulli_half_true_selection_opportunity"]==0
+    assert exact["two_policy_independent_draw_pointwise_max"]==.75
+    assert exact["two_policy_common_random_draw_pointwise_max"]==.5
+    assert exact["four_policy_independent_draw_pointwise_max"]==.9375
+    value=_closed_loop_manifest();value["oracle_opportunity_manifest"]={}
+    result=_closed_loop_adjudicator().adjudicate(value)
+    assert result["control_dominance_claim_authorized"]
+    assert result["status"].endswith("WITH_ORACLE_OPPORTUNITY_INVALID")
+
+
+def test_closed_loop_v8_resource_modes_cost_suffix_fixed_budget_and_utility():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_closed_loop_resource_mode_20260819.py"
+    spec=importlib.util.spec_from_file_location("closed_loop_resources",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.self_test()
+    enum_path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_closed_loop_resource_mode_20260819.py"
+    enum_spec=importlib.util.spec_from_file_location("closed_loop_resource_enum",enum_path)
+    enum=importlib.util.module_from_spec(enum_spec);enum_spec.loader.exec_module(enum)
+    exact=enum.exact_example()
+    assert exact["raw_GC_minus_control"]==pytest.approx(.02)
+    assert exact["utility_prefers_control"] and not exact["GC_executable_under_fixed_budget"]
+    value=_closed_loop_manifest();value["resource_manifest"]["resource_ledger"].pop()
+    result=_closed_loop_adjudicator().adjudicate(value)
+    assert result["control_dominance_claim_authorized"]
+    assert result["status"].endswith("WITH_COST_UNQUALIFIED")
+    fixed=_closed_loop_manifest();fixed["primary_resource_mode"]="B"
+    fixed["resource_manifest"]["primary_resource_mode"]="B"
+    result=_closed_loop_adjudicator().adjudicate(fixed)
+    assert result["status"]=="FIXED_BUDGET_POLICY_VALUE_INVALID"
+    assert "unconstrained_outcome_description" in result
+
+
+def test_behavioral_quotient_credit_compatibility_four_grid_and_GRPO_identity():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/audit_behavioral_quotient_credit_compatibility_20260819.py"
+    spec=importlib.util.spec_from_file_location("bqcc",path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.self_test()
+    result=module.audit_bqcc(module._manifest(.2,0.))
+    assert result["status"]=="PARTITION_CROSSING_GROUPING_ONLY_NO_GO"
+    assert not result["shared_baseline_or_std_repairs_reward_tie"]
+    assert not result["shared_baseline_or_std_removes_invariant_split"]
+    assert result["cluster_unit"]=="stable_example_id" and not result["training_authorized"]
+    enum_path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/enumerate_bqcc_gradient_delivery_boundary_20260819.py"
+    enum_spec=importlib.util.spec_from_file_location("bqcc_delivery",enum_path)
+    enum=importlib.util.module_from_spec(enum_spec);enum_spec.loader.exec_module(enum)
+    exact=enum.exact_examples()
+    assert exact["positive_A_ratio_1_3_delivery"]==0
+    assert exact["negative_A_ratio_0_7_delivery"]==0
+    assert exact["unclipped_ratio_1_1_delivery"]==1.1
 
 
 def test_closed_loop_horizon_selection_v3_fixed_selected_and_exact_bias_identity():

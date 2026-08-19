@@ -6,4 +6,4 @@ Policy-induced scientific invalidity, truncation, parser failure, and natural st
 
 OOM, server, identity, and data failures are infrastructure failures, not scientific zeroes. The incident state and old ledger are retained, point-value reporting stops, and the entire frozen manifest must be rerun under a new unique experiment name after repair. Audit16 requires `16/16 × all policies` execution parity; even `15/16` is construction diagnostic only. Every assigned example-policy cell must contain exactly one scientific terminal or infrastructure failure. This is the hard `policy_totality_and_attrition_handling` gate in adjudicator v2.
 
-Terminal interpretation is additionally governed by v4 `terminal_pairwise_IUT_and_regret`: GC/GF/GN/GS are complete policy packages, not localized commit/rollback actions. See the terminal-attribution contract.
+Terminal interpretation is additionally governed by v7 `terminal_pairwise_IUT`: GC/GF/GN/GS are complete policy packages, not localized commit/rollback actions. Oracle/opportunity is an orthogonal auxiliary and cannot veto a passed terminal IUT. See the terminal-attribution contract.

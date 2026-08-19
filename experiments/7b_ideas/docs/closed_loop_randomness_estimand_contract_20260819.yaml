@@ -1,0 +1,16 @@
+schema_version: closed-loop-randomness-estimand-v1
+parent_adjudicator: closed-loop-commit-v8-resource-mode
+mode_frozen_before_outcome: required
+modes:
+  D: {estimand: temperature0_deterministic_protocol_value, stochastic_reversal: STOCHASTIC_NONTRANSPORT}
+  S: {estimand: seed_marginal_stochastic_policy_value, invalid_status: STOCHASTIC_POLICY_MEAN_INVALID}
+  F: {estimand: single_frozen_seed_realization, role: screening_only}
+S_gates:
+  policy_specific_independent_nonoverlapping_seed_namespaces: required
+  within_policy_example_K_mean_before_example_comparison: required
+  seed_or_replicate_increases_scientific_n: false
+  CRN: corrected_seed_and_BCI_PASS_COUPLED_disjoint_sensitivity_only
+address_key: H(experiment,mode,policy_or_CRN,example,replicate,turn,component,request_role)
+required_request_roles_per_turn: [writer, certificate, terminal_reader]
+sequential_PRNG_position_is_trajectory_identity: false
+resources: {new_rollouts: false, optimizer_steps: 0, training: false}

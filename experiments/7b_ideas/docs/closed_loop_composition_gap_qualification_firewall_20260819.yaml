@@ -1,0 +1,21 @@
+schema_version: closed-loop-composition-gap-v1
+parent_adjudicator: closed-loop-commit-v8-resource-mode
+role: orthogonal_single_step_to_closed_loop_composition_transport
+actionability:
+  decided_by: terminal_pairwise_IUT
+  composition_gap_can_veto: false
+  composition_gap_can_rescue: false
+qualification:
+  contract_parity: [initial_manifest, checkpoint, writer_reader, horizon, endpoint, missing_rule]
+  complete_per_example_bijection: required
+  splice_algorithm_frozen_before_outcome: true
+  source_rows_frozen_before_outcome: true
+  mismatch_status: COMPOSITION_GAP_NOT_IDENTIFIED
+metrics:
+  gap_direction: V_splice_minus_V_direct_GC
+  required: [signed_mean_composition_gap, composition_gap_MAE_error_mass]
+  zero_mean_implies_zero_error: false
+adjudication:
+  direct_IUT_pass_and_splice_reversal_or_large_error: CLOSED_LOOP_ACTIONABILITY_WITH_MYOPIC_NONTRANSPORT
+  feedback_claim_without_qualification: forbidden
+resources: {new_rollouts: false, optimizer_steps: 0, training: false, selector_training: false}

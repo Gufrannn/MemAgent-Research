@@ -1,0 +1,28 @@
+schema_version: bqcc-v1
+prerequisite: shapeA_structural_gate_passed
+role: unique_prioritized_RL_bridge_after_ShapeA
+axes:
+  invariant: minimize_or_decrease_reward_split_within_controlled_pairs
+  necessary: preserve_frozen_direction_separation_across_target_changing_pairs
+credit_funnel_is_naturally_nested_quotient_chain: false
+GRPO_identity: delta_advantage_equals_delta_reward_divided_by_positive_scale
+shared_baseline_or_std_repairs_tie_or_split: false
+absolute_advantage_sign_is_reference_set_dependent: true
+metrics: [InvariantSplitMass, NecessaryTieMass, NecessaryWrongMass, context_reference_set_sign_flips]
+canonical_manifest_sha256: required
+actual_advantage_identity: {equation: delta_A_equals_delta_R_over_s, aggregation: maximum_pair_error_before_example_averaging}
+cluster_unit: stable_example_id
+aggregation: pair_to_example_mean_then_example_cluster_bootstrap
+pair_or_path_increases_independent_n: false
+routing:
+  low_split_low_merge: FINITE_QUOTIENT_COMPATIBLE
+  high_split_low_merge: NUISANCE_SPECIFICITY_FAILURE
+  low_split_high_merge: REWARD_ALIASING_REGROUPING_CANNOT_REPAIR
+  high_split_high_merge: PARTITION_CROSSING_GROUPING_ONLY_NO_GO
+  identity_failure: IMPLEMENTATION_IDENTITY_FAILURE
+gradient_delivery:
+  inferred_from_BQCC: false
+  order: [G_credit, G_task, G_total, Delta_theta_actual]
+  BQCC_pass_and_G_task_silent: trust_region_delivery_bottleneck_not_reward_failure
+  large_total_gradient_repairs_BQCC_failure: false
+resources: {new_rollouts: false, optimizer_steps: 0, training: false, second_contribution: false}
