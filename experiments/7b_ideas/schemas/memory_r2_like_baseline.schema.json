@@ -1,0 +1,19 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Memory-R2 collision and future matched-baseline manifest",
+  "type":"object",
+  "required":["candidate_unique_and_all_evidence_passed","proposed_claims","evidence_ledger_passed","single_extension_router_decision","implementation_authorized","training_authorized","long_training_authorized"],
+  "properties":{
+    "candidate_unique_and_all_evidence_passed":{"type":"boolean"},
+    "proposed_claims":{"type":"array","items":{"type":"string"}},
+    "evidence_ledger_passed":{"type":"boolean"},
+    "single_extension_router_decision":{"enum":["SELECT_ONE","PENDING_NO_EXTENSION","NO_MECHANISM_EXTENSION","AMBIGUOUS_NO_EXTENSION"]},
+    "implementation_authorized":{"const":false},
+    "training_authorized":{"const":false},
+    "long_training_authorized":{"const":false},
+    "candidate_method":{"$ref":"#/$defs/budget"},
+    "memory_r2_like_baseline":{"$ref":"#/$defs/budget"}
+  },
+  "$defs":{"budget":{"type":"object","required":["writer_mask","local_group_size","reward_information","rollout_budget","token_budget","scale"]}},
+  "additionalProperties":true
+}

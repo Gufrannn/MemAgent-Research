@@ -43,8 +43,11 @@ def apply_idea_arm(*, trajectory_qa_advantage: torch.Tensor, batch, reward_batch
             "updated_vs_previous_oracle_target_answerability",
             "hindsight_filtered_updated_vs_previous_answerability",
             "memory_token_only_local_counterfactual_answerability",
+            "same_anchor_session_local_rerollout",
+            "blocked_within_state_group_relative_advantage",
+            "global_local_logo_grpo_credit",
         }:
-            raise ValueError("NO_METHOD: local answerability credit is directly covered by HiMPO")
+            raise ValueError("NO_METHOD: local memory credit is directly covered by HiMPO or Memory-R2")
         if arm != "ncr_certified_routing" and set(row) & FORBIDDEN_OUTCOME_FIELDS:
             raise ValueError("NO_METHOD: generic baseline contains BOT/NOOP labels")
         rows.append(row)

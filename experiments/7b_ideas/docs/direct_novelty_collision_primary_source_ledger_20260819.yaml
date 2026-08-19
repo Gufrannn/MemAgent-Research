@@ -1,8 +1,13 @@
 schema_version: direct-novelty-collision-ledger-v1
 verified_at_utc: 2026-08-19T11:18:09Z
-record_count: 16
+record_count: 17
 policy: {primary_source_only: true, version_pin_required: true, preprint_status_visible: true}
 records:
+  - id: 2605.21768v1
+    alias: Memory-R2
+    full_text_verified: true
+    collision: [memory_actions_change_effective_environment, global_GRPO_across_diverged_memory_states, same_anchor_session_local_rerollout, global_local_group_relative_objective, short_to_long_session_curriculum]
+    residual_not_established: [same_materialized_candidate_commit_vs_exact_discard, outcome_independent_structural_effect_modification, linked_actual_GRPO_estimator_witness]
   - {id: 2506.02125v1, alias: DHR, collision: [question_trained_history_representation, future_derived_privileged_QA, generic_QA_auxiliary]}
   - {id: 2605.12978v1, alias: Useful_Memories_Faulty, collision: [generic_update_harm, noop_retain, consolidation_gate]}
   - {id: 2605.23723v1, alias: MemAudit, collision: [post_failure_counterfactual_attribution, structural_anomaly_after_outcome]}

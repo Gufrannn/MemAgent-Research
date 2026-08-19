@@ -18,6 +18,7 @@ def eligible_row():
         "beats_qa_only", "beats_generic_qa", "beats_generic_judge",
         "beats_information_matched_raw_judge", "beats_generic_tie_rescue")}
     gates.update({"himpo_non_equivalence": True, "himpo_like_baseline_matched": True})
+    gates.update({"memory_r2_non_equivalence": True, "memory_r2_like_baseline_matched": True})
     return {"event_id": "e1", "timestamp": "2026-08-19T00:00:00Z", "candidate": "ncr_certified_routing",
             "status": "eligible", "gates": gates,
             "shape_a": {"t0_formula": "P2_raw^T0 vs P2_raw^T0+D_pre^audit", "t1_leaks_into_t0": False},
@@ -312,3 +313,16 @@ def test_himpo_t1_columns_hard_fail_in_t0_manifest():
     for column in ("candidate_text","m_t","new_vs_old_answerability","updated_vs_previous_utility"):
         with pytest.raises(ValueError,match="leaked into T0"):
             module.validate({"analysis_phase":"T0_SHAPEA","candidate_accessed":False,"feature_columns":[column]})
+
+
+def test_memory_r2_collision_and_dual_launcher_firewall():
+    path=Path(__file__).parents[3]/"experiments/7b_ideas/analysis/validate_memory_r2_collision_and_baseline_20260819.py"
+    spec=importlib.util.spec_from_file_location("memory_r2",path); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    for claim in ("generic_blocked_within_state_comparison","same_anchor_local_rerollout","CERC_as_method","short_to_long_session_curriculum_as_method"):
+        with pytest.raises(ValueError,match="Memory-R2 direct collision"):
+            module.validate({"proposed_claims":[claim]})
+    assert module.validate({})["status"]=="PENDING_NO_BASELINE_IMPLEMENTATION"
+    launcher=(Path(__file__).parents[3]/"experiments/7b_ideas/run_7b_idea.sh").read_text()
+    assert "MEMORY_R2_BASELINE_REQUEST" in launcher
+    assert "IDEA_EVIDENCE_LEDGER" in launcher and "MECHANISM_EXTENSION_DECISION" in launcher
+    assert "LoGo-GRPO implementation and training are not authorized" in launcher

@@ -23,6 +23,7 @@ NCR_GATES = (
     "beats_qa_only", "beats_generic_qa", "beats_generic_judge",
     "beats_information_matched_raw_judge", "beats_generic_tie_rescue",
     "himpo_non_equivalence", "himpo_like_baseline_matched",
+    "memory_r2_non_equivalence", "memory_r2_like_baseline_matched",
 )
 
 

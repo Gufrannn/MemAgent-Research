@@ -18,6 +18,14 @@ IDEA_EVIDENCE_LEDGER=${IDEA_EVIDENCE_LEDGER:-}
 IDEA_RUN_LEDGER=${IDEA_RUN_LEDGER:-$WORK_ROOT/idea_run_ledger.jsonl}
 IDEA_REWARD_AUDIT=${IDEA_REWARD_AUDIT:-$OUT/reward_tuple_audit.jsonl}
 
+if [[ ${MEMORY_R2_BASELINE_REQUEST:-0} == 1 ]]; then
+  [[ -n ${IDEA_EVIDENCE_LEDGER:-} && -f ${IDEA_EVIDENCE_LEDGER:-/nonexistent} ]] || { echo "PENDING_EVIDENCE_NO_SELECTION: Memory-R2-like request requires evidence ledger" >&2; exit 71; }
+  [[ -n ${MECHANISM_EXTENSION_DECISION:-} && -f ${MECHANISM_EXTENSION_DECISION:-/nonexistent} ]] || { echo "PENDING_NO_EXTENSION: Memory-R2-like request requires single-extension router decision" >&2; exit 72; }
+  "$PYTHON" -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x.get("decision")=="SELECT_ONE" and not x.get("training_authorized", True)' "$MECHANISM_EXTENSION_DECISION" || { echo "NO_MECHANISM_EXTENSION: router did not select exactly one outcome-blind extension" >&2; exit 73; }
+  echo "NO_METHOD: Memory-R2-like/LoGo-GRPO implementation and training are not authorized" >&2
+  exit 74
+fi
+
 if [[ ${MECHANISM_EXTENSION_REQUEST:-none} != none ]]; then
   echo "PENDING_NO_EXTENSION: training launcher never starts mechanism extensions; run the outcome-blind extension adjudicator first" >&2
   exit 70
