@@ -1,0 +1,10 @@
+valid_independent_n_min: 24
+spearman: {point_min: 0.60, bootstrap95_lower_min: 0.30}
+icc_A1: {point_min: 0.50, bootstrap95_lower_strict_gt: 0}
+validity_agreement: {overall_min: 0.90, per_role_checkpoint_min: 0.80}
+top_quartile_jaccard_min: 0.40
+deterministic_rerun: MEASUREMENT_NOT_IDENTIFIED
+non_isomorphic_replicas: MEASUREMENT_NOT_IDENTIFIED
+reader_repeats_increase_n: false
+failure_status: [MEASUREMENT_INCOMPLETE, MEASUREMENT_NOT_IDENTIFIED]
+failure_authorizes: {theory_no_go: false, training: false, deployment: false}

@@ -1365,12 +1365,13 @@ class RayPPOTrainer:
                             advantage_scalar = compute_1D_grpo_advantage(token_level_rewards=reward_tensor, 
                                                                          index=reward_batch.non_tensor_batch['uid'],
                                                                          use_adv=self.config.algorithm.grpo_use_adv)
-                            advantage_scalar = advantage_scalar[sample_index]
-
-                            # apply adv to non-mask tokens
-                            response_length = batch.batch['responses'].size(-1)
-                            eos_mask = batch.batch['response_mask']
-                            advantages = advantage_scalar.unsqueeze(-1).tile([1, response_length]) * eos_mask
+                            # Unified, fail-closed 7B idea hook. Original is an exact no-op;
+                            # every auxiliary arm must pass the shared evidence ledger.
+                            from recurrent.research.idea_router import apply_idea_arm
+                            advantages = apply_idea_arm(
+                                trajectory_qa_advantage=advantage_scalar, batch=batch, reward_batch=reward_batch,
+                                reward_tensor=reward_tensor, sample_index=sample_index,
+                            )
                             batch.batch['advantages'] = advantages
                             batch.batch['returns'] = advantages                             
                             # turns of a sample will have the same final reward, now we mapping turns to samples

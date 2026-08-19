@@ -1,0 +1,20 @@
+version: 2026-08-19
+fold_level_tests: forbidden
+repeated_cv_is_independent_replication: false
+restricted_d_permutation: artifact_sensitivity_not_exact_crt
+central_evidence:
+  rule: A_AND_B_AND_C
+  A: [partial_slope, partial_R2, HC3]
+  B: per_example_paired_OOF_loss_magnitude
+  C: [structural_sham, sensitivity, algebraic_equivalence_audit]
+  selection_among_layers: forbidden
+arm_x_d_in_maxT: false
+false_positive_counterexamples:
+  - pure_difficulty
+  - p2_redundancy
+  - role_prevalence
+  - single_outlier
+  - heteroskedasticity_only
+  - fold_accident
+  - regularization_suppression
+  - coarse_permutation_artifact

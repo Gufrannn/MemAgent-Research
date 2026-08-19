@@ -1,0 +1,3 @@
+# D* semantic measurement identifiability
+
+Two genuinely independent, isomorphic semantic replicas need at least 24 valid independent examples. Frozen conjunction: Spearman at least .60 with example-bootstrap 95% lower at least .30; ICC(A,1) at least .50 with lower above zero; validity agreement at least .90 overall and .80 within every role×checkpoint; top-quartile Jaccard at least .40. Deterministic reruns and non-isomorphic replicas are `MEASUREMENT_NOT_IDENTIFIED`; reader repeats do not increase n. Failure yields only `MEASUREMENT_INCOMPLETE`/`NOT_IDENTIFIED` and authorizes neither theory No-Go, training, nor deployment. Reliable D* must still beat P2 marginal and semantic-pairing nulls.

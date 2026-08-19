@@ -1,0 +1,10 @@
+version: 2026-08-19
+fixed_claim: "preregistered relational compression of the same audit transcript predicts commit-vs-discard effect beyond frozen direction-blind marginal summaries and matched pairing shams."
+forbidden_claims: ["same-information adds information", "structural information gain", "I(tau;D|R,M)>0"]
+semantic_classes: [M_RELATIONAL_COMPRESSION, F_DETERMINISTIC_INDUCTIVE_BIAS, A_ACCESS_MISMATCH_NO_GO, UNKNOWN_PROVENANCE_NO_GO]
+provenance_file: D_input_provenance.json
+outcome_free_audit: [residual_variance_ratio, condition_number, VIF, role_overlap]
+outcome_free_interpretation: model_class_representation_audit_not_mutual_information
+cpu_sensitivity: [full_transcript_frozen_random_projection, matched_pairing_sham]
+missing_outputs: not_available_existing_outputs_insufficient
+expand_rollout: false

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["cells", "roles", "targets", "masks", "normalization", "baseline_retained_fields", "baseline_discarded_fields", "deterministically_reconstructable", "d_access_tier", "baseline_access_tier", "query_budget", "token_budget", "gpu_budget", "semantic_class"],
+  "properties": {
+    "semantic_class": {"enum": ["M_RELATIONAL_COMPRESSION", "F_DETERMINISTIC_INDUCTIVE_BIAS", "A_ACCESS_MISMATCH_NO_GO", "UNKNOWN_PROVENANCE_NO_GO"]},
+    "cells": {"type": "array"}, "roles": {"type": "array"}, "targets": {"type": "array"}, "masks": {"type": "array"},
+    "baseline_retained_fields": {"type": "array"}, "baseline_discarded_fields": {"type": "array"},
+    "deterministically_reconstructable": {"type": "boolean"}, "query_budget": {"type": "number"},
+    "token_budget": {"type": "number"}, "gpu_budget": {"type": "number"}
+  }
+}

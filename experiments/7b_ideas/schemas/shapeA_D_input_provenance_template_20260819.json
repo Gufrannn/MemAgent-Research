@@ -1,0 +1,19 @@
+{
+  "d_response_cells": [],
+  "d_role_metadata": [],
+  "d_target_metadata": [],
+  "d_structural_ops": [],
+  "d_normalization": "FILL_BEFORE_OUTCOME",
+  "d_human_oracle_labels": [],
+  "baseline_visible_cells": [],
+  "baseline_visible_metadata": [],
+  "baseline_marginal_summaries": [],
+  "baseline_discarded_relational_structure": [],
+  "baseline_contains_full_transcript_metadata": false,
+  "d_deterministically_reconstructable": true,
+  "d_object": "FILL",
+  "baseline_object": "FILL",
+  "d_budget": {"queries": 0, "tokens": 0, "gpu": 0},
+  "baseline_budget": {"queries": 0, "tokens": 0, "gpu": 0},
+  "expected_classification": "M_RELATIONAL_COMPRESSION"
+}

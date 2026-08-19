@@ -1,0 +1,8 @@
+{
+  "qa_only_original": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 1},
+  "ncr_certified_routing": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa+frozen_secondary", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 2},
+  "generic_qa_aux": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa+generic_qa", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 2},
+  "generic_frozen_judge_tournament": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa+frozen_judge", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 2},
+  "information_matched_raw_judge": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa+raw_judge", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 2},
+  "uniform_tie_rescue": {"questions": "hotpotqa_project_parquet", "scorer": "dense_qa+uniform_direction", "rollout_n": 16, "max_prompt": 8192, "max_response": 1024, "forward_budget": 2, "note": "AVSPO/DAPO-style baseline; not an exact reproduction"}
+}

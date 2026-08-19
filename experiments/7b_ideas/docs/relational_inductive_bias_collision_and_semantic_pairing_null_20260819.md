@@ -1,0 +1,5 @@
+# Relational-inductive-bias collision and semantic pairing null
+
+Generic relational aggregation over marginal summaries is not novel and does not establish obligation semantics. From the same audit response tensor, generate exactly 2,000 legal but semantically wrong role/target pairings while preserving values, missingness, pair/direction counts, max/MAD nonlinearity, one-dimensional output, access tier, and query/token/GPU budgets. Identity, invalid, cross-permission, and outcome-conditioned mappings are forbidden. Seed, allowed edges, generator SHA, and folds are frozen before B128; every sham uses the real-D pipeline.
+
+`SPE = Delta_real - q95(Delta_sham)`. Only `Delta_real > SESOI`, `SPE > 0`, and stable leave-role/checkpoint checks support obligation-semantic relational compression. If `Delta_real > 0` but `SPE <= 0`, report generic relational compression and obligation-specific Shape A No-Go. This is C-layer falsification, neither an exact CRT p-value nor a second primary. Do not switch to a GNN, Set Transformer, or learned pairing on the same B128.

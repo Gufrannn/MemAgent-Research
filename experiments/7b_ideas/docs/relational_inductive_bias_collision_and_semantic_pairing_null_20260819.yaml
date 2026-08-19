@@ -1,0 +1,13 @@
+version: 2026-08-19
+k: 2000
+preserve: [response_values, missingness, pair_count, direction_count, max_mad_nonlinearity, one_dimensional_output, access_tier, query_budget, token_budget, gpu_budget]
+forbid: [identity, invalid, cross_permission, outcome_conditioned_mapping]
+freeze_before_B128: [seed, allowed_edges, generator_sha, folds]
+same_pipeline_as_real_D: true
+SPE: Delta_real-q95_Delta_sham
+semantic_go: [Delta_real_gt_SESOI, SPE_gt_0, leave_role_stable, checkpoint_stable]
+generic_only: [Delta_real_gt_0, SPE_le_0]
+exact_CRT_p_value: false
+second_primary: false
+layer: C_falsification
+same_B128_model_rescue_forbidden: [GNN, Set_Transformer, learned_pairing]

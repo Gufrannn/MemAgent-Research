@@ -1,0 +1,17 @@
+version: 2026-08-19
+independent_unit: stable_example_id
+max_independent_n: 128
+repeats_do_not_increase_n: [arms, turns, seeds, tokens]
+primary_representation: paired_tau
+stacked_role: implementation_consistency_audit_only
+count_paired_and_stacked_as_one: true
+select_more_significant_representation: false
+primary_models:
+  b_raw: "tau~P2_raw_T0"
+  b_struct: "tau~P2_raw_T0+D_star"
+d_star_dimensions: 1
+outer_grouped_folds: 4
+model_capacity: low_capacity_linear
+rare_harm_rule:
+  threshold: 20
+  below_threshold_forbid_primary: [multivariable_logistic, AUROC]

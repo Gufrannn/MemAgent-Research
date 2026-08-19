@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MemAgent 7B append-only evidence ledger row",
+  "type": "object",
+  "required": ["event_id", "timestamp", "candidate", "status", "gates", "shape_a", "shape_a_contract"],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "minLength": 1},
+    "candidate": {"enum": ["ncr_certified_routing", "cerc_native_credit", "typed_boundary_prompt_control", "target_aligned_repair"]},
+    "status": {"enum": ["pending", "ineligible", "eligible"]},
+    "gates": {"type": "object", "additionalProperties": {"type": "boolean"}},
+    "shape_a": {
+      "type": "object",
+      "properties": {
+        "t0_formula": {"const": "P2_raw^T0 vs P2_raw^T0+D_pre^audit"},
+        "t1_leaks_into_t0": {"const": false},
+        "temporal_claim_scope": {"enum": ["update-local", "episode-level"]}
+      }
+    },
+    "shape_a_contract": {
+      "type": "object",
+      "required": ["independent_unit", "max_independent_n", "primary_representation", "stacked_role", "count_paired_and_stacked_as_one", "select_more_significant_representation", "b_raw", "b_struct", "d_star_dimensions", "outer_grouped_folds", "model_capacity", "harm_events", "multivariable_logistic_primary", "auroc_primary"],
+      "properties": {
+        "independent_unit": {"const": "stable_example_id"},
+        "max_independent_n": {"const": 128},
+        "primary_representation": {"const": "paired_tau"},
+        "stacked_role": {"const": "implementation_consistency_audit_only"},
+        "count_paired_and_stacked_as_one": {"const": true},
+        "select_more_significant_representation": {"const": false},
+        "b_raw": {"const": "tau~P2_raw_T0"},
+        "b_struct": {"const": "tau~P2_raw_T0+D_star"},
+        "d_star_dimensions": {"const": 1},
+        "outer_grouped_folds": {"const": 4},
+        "model_capacity": {"const": "low_capacity_linear"},
+        "arms_increase_independent_n": {"const": false},
+        "turns_increase_independent_n": {"const": false},
+        "seeds_increase_independent_n": {"const": false},
+        "tokens_increase_independent_n": {"const": false},
+        "harm_events": {"type": "integer", "minimum": 0},
+        "multivariable_logistic_primary": {"type": "boolean"},
+        "auroc_primary": {"type": "boolean"}
+      }
+    }
+  },
+  "additionalProperties": true
+}
