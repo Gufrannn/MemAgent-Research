@@ -11,11 +11,11 @@ PYTHON=${PYTHON:-$WORK_ROOT/.venv/bin/python}
 PHASE=${PHASE:-fresh}
 EXP=${EXP:-gate_a_qwen25_7b_seed2026}
 RUN_SEED=${RUN_SEED:-2026}
-TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-8}
+TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-2}
 ROLLOUT_N=${ROLLOUT_N:-2}
-PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-8}
-N_GPUS=${N_GPUS:-8}
-FSDP_SIZE=${FSDP_SIZE:-8}
+PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-4}
+N_GPUS=${N_GPUS:-2}
+FSDP_SIZE=${FSDP_SIZE:-$N_GPUS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.55}
 OUT=$WORK_ROOT/logs/memory_agent/$EXP
 
@@ -42,12 +42,17 @@ case "$PHASE" in
   *) echo "PHASE must be fresh or resume" >&2; exit 46 ;;
 esac
 
-[[ ${CUDA_VISIBLE_DEVICES:-} == "0,1,2,3,4,5,6,7" ]] || {
-  echo "Set CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 only after all eight GPUs are confirmed free." >&2
+[[ -n ${CUDA_VISIBLE_DEVICES:-} ]] || {
+  echo "CUDA_VISIBLE_DEVICES must explicitly name the GPUs already confirmed free." >&2
   exit 47
 }
-[[ $N_GPUS -eq 8 && $FSDP_SIZE -eq 8 ]] || {
-  echo "This pre-registered Gate A script requires 8 GPUs and FSDP size 8." >&2
+IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
+[[ ${#VISIBLE_GPUS[@]} -eq $N_GPUS && $FSDP_SIZE -eq $N_GPUS ]] || {
+  echo "Visible GPU count, N_GPUS and FSDP_SIZE must match." >&2
+  exit 48
+}
+[[ $N_GPUS -eq 2 || $N_GPUS -eq 4 || $N_GPUS -eq 8 ]] || {
+  echo "Gate A supports only an explicit 2, 4 or 8 GPU allocation." >&2
   exit 48
 }
 
