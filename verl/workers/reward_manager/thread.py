@@ -29,6 +29,15 @@ from verl.utils.reward_score import _default_compute_score
 logger = logging.getLogger(__file__)
 logger.setLevel('INFO')
 
+
+def _run_cloudpickled_reward(method_payload, kwargs):
+    """Execute a Ray-cloudpickled reward callable inside a process worker."""
+    from ray import cloudpickle
+
+    method = cloudpickle.loads(method_payload)
+    return method(**kwargs)
+
+
 @ray.remote
 class RewardActor:
     def __init__(self, preload_test_file) -> None:
@@ -55,11 +64,17 @@ class RewardActor:
         if self.tests and preload_test_key:
             # ground_truth will be a uid when preload_test_file is enabled
             kwargs[preload_test_key] = self.tests[kwargs[preload_test_key]]
-        fut = self.executor.submit(method, **kwargs)
+        from ray import cloudpickle
+
+        method_payload = cloudpickle.dumps(method)
+        fut = self.executor.submit(_run_cloudpickled_reward, method_payload, kwargs)
         return i, await asyncio.wrap_future(fut)
     
     def batch_reward(self, method, args: list[tuple[int, dict]], **const):
         logger.info(f"actor enter") # monitor TTFT
+        from ray import cloudpickle
+
+        method_payload = cloudpickle.dumps(method)
         futures = []
         for i, kwargs in args:
             all_kwargs = {**const, **kwargs}
@@ -67,7 +82,7 @@ class RewardActor:
             if self.tests and preload_test_key:
                 # ground_truth will be a uid when preload_test_file is enabled
                 all_kwargs[preload_test_key] = self.tests[kwargs[preload_test_key]]
-            fut = self.executor.submit(method, **all_kwargs)
+            fut = self.executor.submit(_run_cloudpickled_reward, method_payload, all_kwargs)
             futures.append((i,fut))
         for i in range(len(futures)):
             idx, fut = futures[i]
