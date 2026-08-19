@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Paired write-harm secondary gate ledger",
+  "type": "object",
+  "required": ["schema_version", "shapeA_v8_primary", "shapeA_evidence_hash", "exact_paired_replay", "paired_replay_hash", "threshold_frozen_outside_confirmation", "threshold_manifest_hash", "adds_rollout", "adds_training"],
+  "properties": {
+    "schema_version": {"const": "paired-write-harm-gate-v1"},
+    "shapeA_v8_primary": {"const": "pass"},
+    "shapeA_evidence_hash": {"type": "string", "minLength": 1},
+    "exact_paired_replay": {"const": "pass"},
+    "paired_replay_hash": {"type": "string", "minLength": 1},
+    "threshold_frozen_outside_confirmation": {"const": true},
+    "threshold_manifest_hash": {"type": "string", "minLength": 1},
+    "adds_rollout": {"const": false},
+    "adds_training": {"const": false}
+  },
+  "additionalProperties": false
+}
