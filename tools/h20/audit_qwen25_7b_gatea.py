@@ -27,7 +27,7 @@ def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def component_inventory(step_dir: Path) -> tuple[list[dict], list[str]]:
+def component_inventory(step_dir: Path, expected_world_size: int) -> tuple[list[dict], list[str]]:
     inventory = checkpoint_inventory(step_dir) if step_dir.is_dir() else []
     names = [item["path"] for item in inventory if item["size"] > 0]
     missing = []
@@ -36,10 +36,13 @@ def component_inventory(step_dir: Path) -> tuple[list[dict], list[str]]:
         "optim": "optim",
         "extra": "extra_state",
     }
+    expected_ranks = list(range(expected_world_size))
     for component, prefix in component_prefixes.items():
-        pattern = re.compile(rf"^actor/{prefix}_world_size_4_rank_(\d+)\.pt$")
+        pattern = re.compile(
+            rf"^actor/{prefix}_world_size_{expected_world_size}_rank_(\d+)\.pt$"
+        )
         ranks = sorted(int(match.group(1)) for name in names if (match := pattern.match(name)))
-        if ranks != [0, 1, 2, 3]:
+        if ranks != expected_ranks:
             missing.append(f"{component}_ranks_{ranks}")
     if "data.pt" not in names:
         missing.append("data")
@@ -175,8 +178,14 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         manifest["training"]["rollout_n"],
     )
 
-    step2_inventory, step2_missing = component_inventory(fresh_dir / "global_step_2")
-    step3_inventory, step3_missing = component_inventory(resume_dir / "global_step_3") if phase == "final" else ([], [])
+    expected_world_size = int(manifest["gpu"]["world_size"])
+    step2_inventory, step2_missing = component_inventory(
+        fresh_dir / "global_step_2", expected_world_size
+    )
+    step3_inventory, step3_missing = (
+        component_inventory(resume_dir / "global_step_3", expected_world_size)
+        if phase == "final" else ([], [])
+    )
     a2_failures = [f"step2 missing {item}" for item in step2_missing]
     if phase == "final":
         a2_failures.extend(f"step3 missing {item}" for item in step3_missing)

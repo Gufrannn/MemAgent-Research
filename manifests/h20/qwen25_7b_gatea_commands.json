@@ -2,6 +2,11 @@
   "schema_version": 1,
   "manifest": "manifests/h20/qwen25_7b_gatea_seed2026.yaml",
   "ledger_schema": "gate_a_execution_ledger.schema.json",
+  "contract": {
+    "kind": "formal_gate_a",
+    "physical_gpus": [6, 7],
+    "world_size": 2
+  },
   "required_environment": ["WORK_ROOT", "REPO_DIR"],
   "working_directory": "${REPO_DIR}",
   "commands": {

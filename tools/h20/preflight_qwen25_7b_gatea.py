@@ -76,11 +76,13 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
         failures.append(f"branch mismatch: {branch} != {manifest['branch']}")
     if status:
         failures.append(f"Git worktree is not clean: {status.splitlines()}")
-    if subprocess.run(
-        ["git", "-C", str(repo), "merge-base", "--is-ancestor", manifest["base_commit"], head],
-        check=False,
-    ).returncode:
-        failures.append(f"HEAD does not contain base commit {manifest['base_commit']}")
+    for commit_key in ("base_commit", "derived_from_commit"):
+        expected_ancestor = manifest.get(commit_key)
+        if not expected_ancestor or subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", expected_ancestor, head],
+            check=False,
+        ).returncode:
+            failures.append(f"HEAD does not contain {commit_key} {expected_ancestor}")
 
     missing_git = [path for path in REQUIRED_GIT_OBJECTS if not (repo / path).is_file()]
     untracked_git = [
@@ -98,14 +100,14 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
 
     gpu = manifest["gpu"]
     if gpu != {
-        "declared_whitelist": [4, 5, 6, 7],
-        "visible_devices": "4,5,6,7",
-        "world_size": 4,
-        "fsdp_size": 4,
-        "trainer_gpus": 4,
+        "declared_whitelist": [6, 7],
+        "visible_devices": "6,7",
+        "world_size": 2,
+        "fsdp_size": 2,
+        "trainer_gpus": 2,
         "tensor_parallel_size": 1,
     }:
-        failures.append(f"GPU/FSDP configuration is not the frozen four-rank shape: {gpu}")
+        failures.append(f"GPU/FSDP configuration is not the frozen physical-6,7 two-rank shape: {gpu}")
     backend = manifest["backend"]
     if backend != {
         "rollout": "vllm",
@@ -168,6 +170,9 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
         "ledger_schema"
     ) != "gate_a_execution_ledger.schema.json":
         failures.append("ledger schema Git object name drifted")
+    expected_contract = {"kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2}
+    if manifest.get("contract") != expected_contract or commands.get("contract") != expected_contract:
+        failures.append("formal two-GPU command/manifest contract drifted")
     json.loads((repo / "gate_a_execution_ledger.schema.json").read_text())
 
     if check_runtime and Path(manifest["python"]).is_file():

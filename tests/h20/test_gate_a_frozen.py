@@ -13,7 +13,7 @@ sys.path.insert(0, str(REPO))
 
 from recurrent.research.gate_a_execution import append_jsonl, checkpoint_inventory
 from recurrent.research.gate_a_execution import load_frozen_manifest
-from tools.h20.audit_qwen25_7b_gatea import audit_seeds, audit_sync
+from tools.h20.audit_qwen25_7b_gatea import audit_seeds, audit_sync, component_inventory
 from recurrent.research.trajectory_seeding import build_trajectory_seed_records, derive_turn_request_seeds
 
 digest_spec = importlib.util.spec_from_file_location(
@@ -30,9 +30,11 @@ class FrozenManifestTests(unittest.TestCase):
     def test_manifest_freezes_required_h20_shape(self):
         path = REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml"
         manifest = json.loads(path.read_text())
-        self.assertEqual(manifest["gpu"]["declared_whitelist"], [4, 5, 6, 7])
-        self.assertEqual(manifest["gpu"]["world_size"], 4)
-        self.assertEqual(manifest["gpu"]["fsdp_size"], 4)
+        self.assertEqual(manifest["branch"], "h20/qwen25-7b-gatea-2gpu-frozen-20260820")
+        self.assertEqual(manifest["derived_from_commit"], "4304f81d896df59604ccbd66adee1009e030376a")
+        self.assertEqual(manifest["gpu"]["declared_whitelist"], [6, 7])
+        self.assertEqual(manifest["gpu"]["world_size"], 2)
+        self.assertEqual(manifest["gpu"]["fsdp_size"], 2)
         self.assertEqual(manifest["backend"]["rollout"], "vllm")
         self.assertEqual(manifest["backend"]["evaluation"], "vllm")
         self.assertFalse(manifest["backend"]["allow_hf_fallback"])
@@ -49,6 +51,9 @@ class FrozenManifestTests(unittest.TestCase):
         commands = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_commands.json").read_text())
         schema = json.loads((REPO / "gate_a_execution_ledger.schema.json").read_text())
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
+        self.assertEqual(commands["contract"], {
+            "kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2,
+        })
         self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
         self.assertEqual(commands["required_environment"], ["WORK_ROOT", "REPO_DIR"])
         self.assertEqual(commands["working_directory"], "${REPO_DIR}")
@@ -89,10 +94,25 @@ class LedgerAndAuditTests(unittest.TestCase):
             append_jsonl(root / "ledger.jsonl", {"b": 2, "a": 1})
             self.assertEqual(json.loads((root / "ledger.jsonl").read_text()), {"a": 1, "b": 2})
             (root / "step/actor").mkdir(parents=True)
-            (root / "step/actor/model_world_size_4_rank_0.pt").write_bytes(b"model")
+            (root / "step/actor/model_world_size_2_rank_0.pt").write_bytes(b"model")
             inventory = checkpoint_inventory(root / "step")
             self.assertEqual(inventory[0]["size"], 5)
             self.assertEqual(inventory[0]["sha256"], hashlib.sha256(b"model").hexdigest())
+
+    def test_checkpoint_inventory_requires_both_two_gpu_ranks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            step = Path(directory) / "global_step_2"
+            actor = step / "actor"
+            actor.mkdir(parents=True)
+            for rank in range(2):
+                for prefix in ("model", "optim", "extra_state"):
+                    (actor / f"{prefix}_world_size_2_rank_{rank}.pt").write_bytes(b"evidence")
+            (step / "data.pt").write_bytes(b"cursor")
+            _, missing = component_inventory(step, 2)
+            self.assertEqual(missing, [])
+            (actor / "optim_world_size_2_rank_1.pt").unlink()
+            _, missing = component_inventory(step, 2)
+            self.assertTrue(any(item.startswith("optim_ranks_") for item in missing))
 
     def test_seed_schedule_reconstruction(self):
         rows = build_trajectory_seed_records(
@@ -124,9 +144,9 @@ class LedgerAndAuditTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("collision" in failure for failure in failures))
 
-    def test_four_worker_sync_ack(self):
+    def test_two_worker_sync_ack(self):
         records = []
-        for rank in range(4):
+        for rank in range(2):
             records.append({
                 "record_type": "weight_sync_ack",
                 "actor_version": 2,
@@ -135,11 +155,11 @@ class LedgerAndAuditTests(unittest.TestCase):
                 "actor_sampled_tensor_digest": "a" * 64,
                 "vllm_sampled_tensor_digest": "a" * 64,
             })
-        ok, failures, digests = audit_sync(records, [2], [0, 1, 2, 3])
+        ok, failures, digests = audit_sync(records, [2], [0, 1])
         self.assertTrue(ok, failures)
         self.assertEqual(digests, {2: "a" * 64})
         records.pop()
-        ok, failures, _ = audit_sync(records, [2], [0, 1, 2, 3])
+        ok, failures, _ = audit_sync(records, [2], [0, 1])
         self.assertFalse(ok)
         self.assertTrue(any("ack ranks" in failure for failure in failures))
 

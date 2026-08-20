@@ -15,15 +15,15 @@ readonly REPO_DIR
 readonly CODE=$REPO_DIR
 readonly PYTHON=$WORK_ROOT/.venv/bin/python
 readonly MANIFEST=$CODE/manifests/h20/qwen25_7b_gatea_seed2026.yaml
-readonly LOG_ROOT=$WORK_ROOT/logs/gate_a_frozen_20260820
+readonly LOG_ROOT=$WORK_ROOT/logs/gate_a_2gpu_frozen_20260820
 readonly CERTIFICATE_ROOT=$LOG_ROOT/certificates
 readonly EXECUTION_LEDGER=$LOG_ROOT/gate_a_execution_ledger.jsonl
-readonly FRESH_EXP=qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820
-readonly RESUME_EXP=qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820
+readonly FRESH_EXP=qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820
+readonly RESUME_EXP=qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820
 readonly FRESH_OUTPUT=$WORK_ROOT/logs/memory_agent/$FRESH_EXP
 readonly RESUME_OUTPUT=$WORK_ROOT/logs/memory_agent/$RESUME_EXP
 readonly RESUME_SOURCE=$FRESH_OUTPUT/global_step_2
-readonly FROZEN_GPU_DECLARATION=4,5,6,7
+readonly FROZEN_GPU_DECLARATION=6,7
 readonly DIGEST_PARAMETERS=model.layers.0.input_layernorm.weight,model.layers.0.post_attention_layernorm.weight,model.layers.27.input_layernorm.weight,model.layers.27.post_attention_layernorm.weight
 
 gatea_require_clean_frozen_checkout() {
@@ -32,7 +32,7 @@ gatea_require_clean_frozen_checkout() {
   [[ $(cd -- "$CODE" && pwd -P) == "$invoked_repo" ]] || {
     echo "GATE_A_NO_GO:P0 invoked checkout differs from explicit REPO_DIR: $invoked_repo != $CODE" >&2; exit 68;
   }
-  [[ $(cd "$CODE" && git branch --show-current) == h20/qwen25-7b-gatea-frozen-20260820 ]] || {
+  [[ $(cd "$CODE" && git branch --show-current) == h20/qwen25-7b-gatea-2gpu-frozen-20260820 ]] || {
     echo 'GATE_A_NO_GO:P0 wrong branch' >&2; exit 70;
   }
   [[ -z $(cd "$CODE" && git status --porcelain) ]] || {
