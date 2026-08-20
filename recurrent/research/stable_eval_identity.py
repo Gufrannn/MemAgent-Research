@@ -53,6 +53,40 @@ AUDIT_ONLY_NON_TENSOR_FIELDS = (
     "rollout_worker_rank",
     "is_final",
 )
+TURN_LEDGER_NON_TENSOR_FIELDS = AUDIT_ONLY_NON_TENSOR_FIELDS
+
+
+def trajectory_turn_record_from_columns(
+    columns: Mapping[str, Sequence[Any]],
+    *,
+    row: int,
+    trajectory_turn: int,
+    response_token_sha256: str,
+) -> dict[str, Any]:
+    """Serialize one turn using the same complete identity contract as terminal output."""
+    missing = [field for field in TURN_LEDGER_NON_TENSOR_FIELDS if field not in columns]
+    if missing:
+        raise ValueError(f"stable evaluation turn ledger is missing row fields: {missing}")
+    lengths = {field: len(columns[field]) for field in TURN_LEDGER_NON_TENSOR_FIELDS}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"stable evaluation turn ledger columns are not row-aligned: {lengths}")
+    row_count = next(iter(lengths.values()))
+    if row < 0 or row >= row_count:
+        raise IndexError(f"stable evaluation turn ledger row {row} outside [0, {row_count})")
+
+    def json_scalar(value: Any) -> Any:
+        item = getattr(value, "item", None)
+        return item() if callable(item) else value
+
+    return {
+        "record_type": "trajectory_turn",
+        **{
+            field: json_scalar(columns[field][row])
+            for field in TURN_LEDGER_NON_TENSOR_FIELDS
+        },
+        "trajectory_turn": int(trajectory_turn),
+        "response_token_sha256": str(response_token_sha256),
+    }
 
 
 def canonical_json_bytes(value: Any) -> bytes:

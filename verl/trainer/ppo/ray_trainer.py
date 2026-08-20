@@ -353,29 +353,12 @@ def _response_token_sha256(response: torch.Tensor) -> str:
 def _append_stable_eval_turn_ledger(path: str, output_batch: DataProto) -> None:
     """Append row-aligned recurrent request evidence after vLLM prompt checks."""
     from recurrent.research.stable_eval_identity import (
+        TURN_LEDGER_NON_TENSOR_FIELDS,
+        trajectory_turn_record_from_columns,
         validate_configured_request_binding,
     )
 
-    required_non_tensor = (
-        "interface_id",
-        "attempt_id",
-        "example_id",
-        "source_order_index",
-        "replica_id",
-        "source_repeated_row",
-        "eval_manifest_hash",
-        "trajectory_seed",
-        "trajectory_id",
-        "runtime_sample_uuid",
-        "active_sample_index",
-        "request_seed",
-        "configured_request_seed",
-        "rollout_request_seed",
-        "request_prompt_token_sha256",
-        "returned_prompt_token_sha256",
-        "rollout_worker_rank",
-        "is_final",
-    )
+    required_non_tensor = TURN_LEDGER_NON_TENSOR_FIELDS
     missing = [key for key in required_non_tensor if key not in output_batch.non_tensor_batch]
     if missing:
         raise ValueError(f"stable evaluation turn ledger is missing row fields: {missing}")
@@ -402,19 +385,14 @@ def _append_stable_eval_turn_ledger(path: str, output_batch: DataProto) -> None:
         )
     with open(path, "a", encoding="utf-8") as stream:
         for row in range(len(output_batch)):
-            record = {
-                "record_type": "trajectory_turn",
-                **{
-                    key: (
-                        output_batch.non_tensor_batch[key][row].item()
-                        if isinstance(output_batch.non_tensor_batch[key][row], np.generic)
-                        else output_batch.non_tensor_batch[key][row]
-                    )
-                    for key in required_non_tensor
-                },
-                "trajectory_turn": int(output_batch.batch["trajectory_turn"][row].item()),
-                "response_token_sha256": _response_token_sha256(output_batch.batch["responses"][row]),
-            }
+            record = trajectory_turn_record_from_columns(
+                output_batch.non_tensor_batch,
+                row=row,
+                trajectory_turn=int(output_batch.batch["trajectory_turn"][row].item()),
+                response_token_sha256=_response_token_sha256(
+                    output_batch.batch["responses"][row]
+                ),
+            )
             stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 @contextmanager

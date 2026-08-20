@@ -11,9 +11,13 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from recurrent.research.stable_eval_identity import (
+    MANIFEST_ROW_FIELDS,
+    OUTPUT_IDENTITY_FIELDS,
+    TURN_LEDGER_NON_TENSOR_FIELDS,
     build_stable_eval_identities,
     canonical_sha256,
     stable_eval_runtime_config_sha256,
+    trajectory_turn_record_from_columns,
 )
 from recurrent.research.trajectory_seeding import derive_turn_request_seeds
 from tools.h20.audit_qwen25_7b_stable_i4x2 import (
@@ -192,6 +196,75 @@ def write_attempt(root: Path, attempt_id: str, manifest: dict, resolved: dict) -
 
 
 class FrozenContractTests(unittest.TestCase):
+    def test_turn_ledger_writer_uses_complete_identity_contract(self):
+        trainer_source = (REPO / "verl/trainer/ppo/ray_trainer.py").read_text(
+            encoding="utf-8"
+        )
+        writer_start = trainer_source.index("def _append_stable_eval_turn_ledger")
+        writer_end = trainer_source.index("\n@contextmanager", writer_start)
+        writer_source = trainer_source[writer_start:writer_end]
+        self.assertIn("TURN_LEDGER_NON_TENSOR_FIELDS", writer_source)
+        self.assertIn("trajectory_turn_record_from_columns", writer_source)
+        for field in MANIFEST_ROW_FIELDS:
+            self.assertIn(field, OUTPUT_IDENTITY_FIELDS)
+            self.assertIn(field, TURN_LEDGER_NON_TENSOR_FIELDS)
+
+    def test_turn_record_serializes_every_identity_and_request_field(self):
+        frozen_rows, _ = freeze_existing_s128_rows(
+            [fake_source_row(0)],
+            prompt_token_length=lambda _prompt: 10,
+            context_token_length=lambda _context: 5000,
+            max_prompt_length=40000,
+            max_context_length=40000,
+        )
+        identity = build_stable_eval_identities(
+            semantic_indices=[3, 3],
+            source_order_indices=[0, 0],
+            replicas=2,
+            base_seed=2026,
+            interface_id="I",
+            attempt_id="repeat_a",
+            resolved_manifest=resolved_manifest(frozen_rows),
+        )[0]
+        columns = {field: [identity[field]] for field in OUTPUT_IDENTITY_FIELDS}
+        columns.update(
+            {
+                "active_sample_index": [0],
+                "request_seed": [11],
+                "configured_request_seed": [11],
+                "rollout_request_seed": [11],
+                "request_prompt_token_sha256": ["a" * 64],
+                "returned_prompt_token_sha256": ["a" * 64],
+                "rollout_worker_rank": [0],
+                "is_final": [False],
+            }
+        )
+        record = trajectory_turn_record_from_columns(
+            columns,
+            row=0,
+            trajectory_turn=2,
+            response_token_sha256="b" * 64,
+        )
+        self.assertEqual(
+            set(record),
+            {
+                "record_type",
+                *TURN_LEDGER_NON_TENSOR_FIELDS,
+                "trajectory_turn",
+                "response_token_sha256",
+            },
+        )
+        for field in TURN_LEDGER_NON_TENSOR_FIELDS:
+            broken = dict(columns)
+            broken.pop(field)
+            with self.assertRaisesRegex(ValueError, "missing row fields"):
+                trajectory_turn_record_from_columns(
+                    broken,
+                    row=0,
+                    trajectory_turn=2,
+                    response_token_sha256="b" * 64,
+                )
+
     def test_manifest_has_no_implicit_shared_account_path_binding(self):
         with self.assertRaisesRegex(ValueError, "missing explicit stable-I runtime bindings"):
             load_manifest(MANIFEST_PATH, {})
