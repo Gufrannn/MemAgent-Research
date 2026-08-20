@@ -66,7 +66,7 @@ class FrozenManifestTests(unittest.TestCase):
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
         self.assertEqual(commands["contract"], {
             "kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2,
-            "execution_revision": "20260821r2",
+            "execution_revision": "20260821r3",
         })
         self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
         self.assertEqual(commands["required_environment"], [
@@ -172,6 +172,7 @@ class LedgerAndAuditTests(unittest.TestCase):
                 "uid": row["uid"],
                 "trajectory_seed": row["trajectory_seed"],
                 "request_seed": derive_turn_request_seeds([row["trajectory_seed"]], [0], 0)[0],
+                "is_final": True,
                 "mode": "independent",
             })
         records = rows + turn_rows
@@ -181,6 +182,66 @@ class LedgerAndAuditTests(unittest.TestCase):
         ok, failures = audit_seeds(records, 2026, 2)
         self.assertFalse(ok)
         self.assertTrue(any("collision" in failure for failure in failures))
+
+    def test_seed_audit_allows_inactive_gap_before_shared_final_turn(self):
+        rows = build_trajectory_seed_records(
+            base_seed=2026, global_step=1, batch_size=2, rollout_n=2, mode="independent"
+        )
+        records = []
+        for row in rows:
+            row = dict(row)
+            row.update(record_type="trajectory_seed", uid=f"uid-{row['row']}")
+            records.append(row)
+        active_turn_counts = {0: 5, 1: 6}
+        for row in rows:
+            source_row = int(row["row"])
+            for turn in range(active_turn_counts[source_row]):
+                records.append({
+                    "record_type": "trajectory_turn_seed",
+                    "global_step": 1,
+                    "row": source_row,
+                    "sample_index": source_row,
+                    "group": int(row["group"]),
+                    "replica": int(row["replica"]),
+                    "turn": turn,
+                    "uid": f"uid-{source_row}",
+                    "trajectory_seed": int(row["trajectory_seed"]),
+                    "request_seed": derive_turn_request_seeds(
+                        [int(row["trajectory_seed"])], [0], turn
+                    )[0],
+                    "is_final": False,
+                    "mode": "independent",
+                })
+            records.append({
+                "record_type": "trajectory_turn_seed",
+                "global_step": 1,
+                "row": source_row,
+                "sample_index": source_row,
+                "group": int(row["group"]),
+                "replica": int(row["replica"]),
+                "turn": 6,
+                "uid": f"uid-{source_row}",
+                "trajectory_seed": int(row["trajectory_seed"]),
+                "request_seed": derive_turn_request_seeds(
+                    [int(row["trajectory_seed"])], [0], 6
+                )[0],
+                "is_final": True,
+                "mode": "independent",
+            })
+        ok, failures = audit_seeds(records, 2026, 2)
+        self.assertTrue(ok, failures)
+
+        records = [
+            record for record in records
+            if not (
+                record.get("record_type") == "trajectory_turn_seed"
+                and record.get("sample_index") == 1
+                and record.get("turn") == 3
+            )
+        ]
+        ok, failures = audit_seeds(records, 2026, 2)
+        self.assertFalse(ok)
+        self.assertTrue(any("active trajectory turns" in failure for failure in failures))
 
     def test_two_worker_sync_ack(self):
         parameters = ["model.layers.0.input_layernorm.weight"]

@@ -92,7 +92,8 @@ def audit_seeds(seed_records: list[dict], seed: int, rollout_n: int) -> tuple[bo
         ]
         if len(turn_keys) != len(set(turn_keys)):
             failures.append(f"trajectory turn identity collision at step {step}")
-        turns_by_row: dict[int, list[int]] = defaultdict(list)
+        active_turns_by_row: dict[int, list[int]] = defaultdict(list)
+        final_turns_by_row: dict[int, list[int]] = defaultdict(list)
         for row in step_turns:
             source_row = int(row.get("sample_index", -1))
             base = base_by_row.get(source_row)
@@ -106,22 +107,51 @@ def audit_seeds(seed_records: list[dict], seed: int, rollout_n: int) -> tuple[bo
             ):
                 failures.append(f"turn/base trajectory identity mismatch at step {step}, row {source_row}")
             turn = int(row.get("turn", -1))
-            turns_by_row[source_row].append(turn)
             if turn < 0:
                 failures.append(f"invalid recurrent turn at step {step}, row {source_row}: {turn}")
                 continue
+            is_final = row.get("is_final")
+            if not isinstance(is_final, bool):
+                failures.append(
+                    f"turn record is missing boolean final identity at step {step}, "
+                    f"row {source_row}, turn {turn}"
+                )
+            elif is_final:
+                final_turns_by_row[source_row].append(turn)
+            else:
+                active_turns_by_row[source_row].append(turn)
             expected_request_seed = derive_turn_request_seeds(
                 [int(base["trajectory_seed"])], [0], turn
             )[0]
             if int(row.get("request_seed", -1)) != expected_request_seed:
                 failures.append(f"request seed is not reconstructable at step {step}, row {source_row}, turn {turn}")
+        common_final_turns = set()
         for source_row in base_by_row:
-            actual_turns = sorted(turns_by_row[source_row])
-            if actual_turns != list(range(len(actual_turns))) or not actual_turns:
+            active_turns = sorted(active_turns_by_row[source_row])
+            final_turns = sorted(final_turns_by_row[source_row])
+            if active_turns != list(range(len(active_turns))):
                 failures.append(
-                    f"trajectory turns are missing or non-contiguous at step {step}, "
-                    f"row {source_row}: {actual_turns}"
+                    f"active trajectory turns are missing or non-contiguous at step {step}, "
+                    f"row {source_row}: {active_turns}"
                 )
+            if len(final_turns) != 1:
+                failures.append(
+                    f"trajectory must have exactly one final turn at step {step}, "
+                    f"row {source_row}: {final_turns}"
+                )
+                continue
+            final_turn = final_turns[0]
+            common_final_turns.add(final_turn)
+            if active_turns and final_turn <= active_turns[-1]:
+                failures.append(
+                    f"trajectory final turn does not follow active turns at step {step}, "
+                    f"row {source_row}: active={active_turns}, final={final_turn}"
+                )
+        if len(common_final_turns) != 1:
+            failures.append(
+                f"memory trajectories do not share one global final turn at step {step}: "
+                f"{sorted(common_final_turns)}"
+            )
     return not failures, failures
 
 

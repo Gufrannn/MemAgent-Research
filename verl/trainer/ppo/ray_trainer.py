@@ -1285,6 +1285,7 @@ class RayPPOTrainer:
                                     gen_batch_output.non_tensor_batch["request_seed"], dtype=np.uint64
                                 )
                                 turns = gen_batch_output.batch["trajectory_turn"].detach().cpu().tolist()
+                                final_flags = final_mask.detach().cpu().tolist()
                                 turn_records = []
                                 rollout_n = int(self.config.actor_rollout_ref.rollout.n)
                                 for output_row, source_row in enumerate(source_rows.tolist()):
@@ -1300,6 +1301,7 @@ class RayPPOTrainer:
                                         "uid": str(source_uids[source_row]),
                                         "trajectory_seed": int(source_seeds[source_row]),
                                         "request_seed": int(request_seeds[output_row]),
+                                        "is_final": bool(final_flags[output_row]),
                                         "mode": str(trajectory_seed_mode),
                                     })
                                 _append_rollout_seed_audit(

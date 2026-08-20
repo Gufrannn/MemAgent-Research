@@ -6,7 +6,7 @@
     "kind": "formal_gate_a",
     "physical_gpus": [6, 7],
     "world_size": 2,
-    "execution_revision": "20260821r2"
+    "execution_revision": "20260821r3"
   },
   "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
   "working_directory": "${MEMAGENT_GATEA_REPO_DIR}",

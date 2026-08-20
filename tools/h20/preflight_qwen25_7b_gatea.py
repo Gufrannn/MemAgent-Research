@@ -191,7 +191,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
         "kind": "formal_gate_a",
         "physical_gpus": [6, 7],
         "world_size": 2,
-        "execution_revision": "20260821r2",
+        "execution_revision": "20260821r3",
     }
     if manifest.get("contract") != expected_contract or commands.get("contract") != expected_contract:
         failures.append("formal two-GPU command/manifest contract drifted")
