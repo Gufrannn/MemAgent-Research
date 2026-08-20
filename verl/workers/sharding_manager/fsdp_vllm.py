@@ -120,20 +120,41 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         params = self.module.state_dict()
         log_gpu_memory_usage("After state_dict() in sharding manager memory", logger=logger)
         gate_a_context = self._gate_a_sync_context
-        actor_digest = None
+        actor_master_digest = None
+        actor_rollout_digest = None
+        vllm_params = None
+        parameter_names = None
+        parameter_dtypes = None
         sync_started_at = None
         if gate_a_context is not None:
             from recurrent.research.gate_a_execution import utc_now
             from verl.utils.gate_a_weight_sync import sampled_tensor_digest
 
+            if self.model_runner is None or not hasattr(self.model_runner, "model"):
+                raise RuntimeError("Gate A cannot access the local vLLM model before weight synchronization")
+            vllm_params = dict(self.model_runner.model.named_parameters())
             parameter_names = [
                 name for name in os.environ["GATE_A_WEIGHT_DIGEST_PARAMETERS"].split(",") if name
             ]
+            missing_vllm_parameters = sorted(set(parameter_names) - set(vllm_params))
+            if missing_vllm_parameters:
+                raise RuntimeError(
+                    "Gate A sampled parameters are absent from the vLLM model: "
+                    f"{missing_vllm_parameters}"
+                )
             samples_per_tensor = int(os.environ["GATE_A_WEIGHT_DIGEST_SAMPLES"])
             sync_started_at = utc_now()
-            actor_digest = sampled_tensor_digest(params, parameter_names, samples_per_tensor)
+            actor_master_digest = sampled_tensor_digest(params, parameter_names, samples_per_tensor)
+            actor_rollout_digest = sampled_tensor_digest(
+                params,
+                parameter_names,
+                samples_per_tensor,
+                project_to=vllm_params,
+            )
+            parameter_dtypes = {name: str(vllm_params[name].dtype) for name in parameter_names}
         # Copy, not share memory
         load_format = "hf" if self.full_params else "dtensor"
+        loaded_params = None
 
         if vllm_version in (
             "0.5.4",
@@ -149,7 +170,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 self.inference_engine.wake_up()
 
             # update model params
-            self.update_params(params)
+            loaded_params = self.update_params(params)
             log_gpu_memory_usage("After sync model weights in sharding manager", logger=logger)
             del params
             if self.offload_param:
@@ -163,21 +184,36 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             from recurrent.research.gate_a_execution import append_gate_a_record, utc_now
             from verl.utils.gate_a_weight_sync import sampled_tensor_digest
 
-            if self.model_runner is None or not hasattr(self.model_runner, "model"):
-                raise RuntimeError("Gate A cannot access the local vLLM model after weight synchronization")
-            vllm_params = dict(self.model_runner.model.named_parameters())
-            parameter_names = [
-                name for name in os.environ["GATE_A_WEIGHT_DIGEST_PARAMETERS"].split(",") if name
-            ]
+            if loaded_params is None:
+                raise RuntimeError(
+                    f"Gate A cannot verify vLLM load coverage for vLLM {vllm_version}; "
+                    "the loader did not return parameter names"
+                )
+            loaded_params = set(loaded_params)
+            missing_loaded_parameters = sorted(set(parameter_names) - loaded_params)
+            if missing_loaded_parameters:
+                raise RuntimeError(
+                    "Gate A vLLM weight load omitted sampled parameters: "
+                    f"load_format={load_format}, loaded_parameter_count={len(loaded_params)}, "
+                    f"missing={missing_loaded_parameters}"
+                )
             samples_per_tensor = int(os.environ["GATE_A_WEIGHT_DIGEST_SAMPLES"])
             vllm_digest = sampled_tensor_digest(vllm_params, parameter_names, samples_per_tensor)
             worker_rank = torch.distributed.get_rank()
             ack = {
                 **gate_a_context,
-                "actor_sampled_tensor_digest": actor_digest,
+                "actor_master_sampled_tensor_digest": actor_master_digest,
+                "actor_rollout_sampled_tensor_digest": actor_rollout_digest,
+                # Backward-compatible alias: comparisons must use the actor
+                # represented in the rollout engine's effective dtype.
+                "actor_sampled_tensor_digest": actor_rollout_digest,
                 "vllm_worker_rank": worker_rank,
                 "vllm_ack_version": gate_a_context["actor_version"],
                 "vllm_sampled_tensor_digest": vllm_digest,
+                "weight_transfer_format": load_format,
+                "loaded_parameter_count": len(loaded_params),
+                "audited_loaded_parameters": sorted(set(parameter_names) & loaded_params),
+                "sampled_parameter_dtypes": parameter_dtypes,
                 "sync_started_at": sync_started_at,
                 "sync_finished_at": utc_now(),
             }
@@ -245,3 +281,4 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         world_size = torch.distributed.get_world_size()
         loaded_params = model.load_weights(((name, param.full_tensor() if world_size != 1 and hasattr(param, "full_tensor") else param) for name, param in updated_params.items()))
         logger.info("vLLM load weights, loaded_params: %d", len(loaded_params))
+        return loaded_params

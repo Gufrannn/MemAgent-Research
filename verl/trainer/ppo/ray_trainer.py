@@ -988,16 +988,26 @@ class RayPPOTrainer:
         )
         expected_ranks = list(range(self.actor_rollout_wg.world_size))
         actual_ranks = sorted(int(ack["vllm_worker_rank"]) for ack in acknowledgements)
-        actor_digests = {ack["actor_sampled_tensor_digest"] for ack in acknowledgements}
+        actor_master_digests = {
+            ack["actor_master_sampled_tensor_digest"] for ack in acknowledgements
+        }
+        actor_digests = {
+            ack["actor_rollout_sampled_tensor_digest"] for ack in acknowledgements
+        }
         vllm_digests = {ack["vllm_sampled_tensor_digest"] for ack in acknowledgements}
         if actual_ranks != expected_ranks:
             raise RuntimeError(
                 f"Gate A vLLM acknowledgement ranks mismatch: expected={expected_ranks}, actual={actual_ranks}"
             )
+        if len(actor_master_digests) != 1:
+            raise RuntimeError(
+                "Gate A actor master sampled-tensor digests differ across ranks: "
+                f"actor_master={sorted(actor_master_digests)}"
+            )
         if len(actor_digests) != 1 or len(vllm_digests) != 1 or actor_digests != vllm_digests:
             raise RuntimeError(
-                "Gate A actor/vLLM sampled-tensor digests diverged: "
-                f"actor={sorted(actor_digests)}, vllm={sorted(vllm_digests)}"
+                "Gate A effective actor-rollout/vLLM sampled-tensor digests diverged: "
+                f"actor_rollout={sorted(actor_digests)}, vllm={sorted(vllm_digests)}"
             )
         append_gate_a_record(
             "weight_sync_summary",
@@ -1006,6 +1016,7 @@ class RayPPOTrainer:
             sync_kind=str(sync_kind),
             worker_ranks=actual_ranks,
             sampled_tensor_digest=next(iter(actor_digests)),
+            actor_master_sampled_tensor_digest=next(iter(actor_master_digests)),
         )
 
     def _load_checkpoint(self):

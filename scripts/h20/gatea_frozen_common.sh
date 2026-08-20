@@ -15,16 +15,16 @@ readonly GATEA_REPO_DIR=$MEMAGENT_GATEA_REPO_DIR
 readonly GATEA_CODE=$GATEA_REPO_DIR
 readonly GATEA_PYTHON=$GATEA_WORK_ROOT/.venv/bin/python
 readonly GATEA_MANIFEST=$GATEA_CODE/manifests/h20/qwen25_7b_gatea_seed2026.yaml
-readonly GATEA_LOG_ROOT=$GATEA_WORK_ROOT/logs/gate_a_2gpu_frozen_20260821r1
+readonly GATEA_LOG_ROOT=$GATEA_WORK_ROOT/logs/gate_a_2gpu_frozen_20260821r2
 readonly GATEA_CERTIFICATE_ROOT=$GATEA_LOG_ROOT/certificates
 readonly GATEA_EXECUTION_LEDGER=$GATEA_LOG_ROOT/gate_a_execution_ledger.jsonl
-readonly GATEA_FRESH_EXP=qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r1
-readonly GATEA_RESUME_EXP=qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r1
+readonly GATEA_FRESH_EXP=qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r2
+readonly GATEA_RESUME_EXP=qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r2
 readonly GATEA_FRESH_OUTPUT=$GATEA_WORK_ROOT/logs/memory_agent/$GATEA_FRESH_EXP
 readonly GATEA_RESUME_OUTPUT=$GATEA_WORK_ROOT/logs/memory_agent/$GATEA_RESUME_EXP
 readonly GATEA_RESUME_SOURCE=$GATEA_FRESH_OUTPUT/global_step_2
 readonly GATEA_FROZEN_GPU_DECLARATION=6,7
-readonly GATEA_DIGEST_PARAMETERS=model.layers.0.input_layernorm.weight,model.layers.0.post_attention_layernorm.weight,model.layers.27.input_layernorm.weight,model.layers.27.post_attention_layernorm.weight
+readonly GATEA_DIGEST_PARAMETERS=model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight
 
 gatea_require_clean_frozen_checkout() {
   local invoked_repo

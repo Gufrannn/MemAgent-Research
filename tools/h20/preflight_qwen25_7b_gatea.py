@@ -116,6 +116,18 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
         "reward_manager": "naive",
     }:
         failures.append(f"backend configuration drift: {backend}")
+    weight_sync = manifest["weight_sync"]
+    if weight_sync.get("comparison_semantics") != "actor_projected_to_vllm_parameter_dtype":
+        failures.append(
+            f"weight-sync comparison semantics drifted: {weight_sync.get('comparison_semantics')}"
+        )
+    if weight_sync.get("transfer_format") != "dtensor":
+        failures.append(f"weight-sync transfer format drifted: {weight_sync.get('transfer_format')}")
+    if not any(
+        name.endswith((".self_attn.o_proj.weight", ".mlp.down_proj.weight"))
+        for name in weight_sync.get("parameter_names", [])
+    ):
+        failures.append("weight-sync sample set does not include transformer matrix weights")
 
     data_spec = dict(raw_manifest["data"])
     expected_data_manifest_sha = data_spec.pop("manifest_sha256")
@@ -179,7 +191,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
         "kind": "formal_gate_a",
         "physical_gpus": [6, 7],
         "world_size": 2,
-        "execution_revision": "20260821r1",
+        "execution_revision": "20260821r2",
     }
     if manifest.get("contract") != expected_contract or commands.get("contract") != expected_contract:
         failures.append("formal two-GPU command/manifest contract drifted")

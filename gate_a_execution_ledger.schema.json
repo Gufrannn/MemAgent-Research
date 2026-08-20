@@ -11,6 +11,8 @@
     "recorded_at": {"type": "string", "format": "date-time"},
     "global_step": {"type": "integer", "minimum": 0},
     "actor_version": {"type": "integer", "minimum": 0},
+    "actor_master_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "actor_rollout_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "actor_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "vllm_worker_rank": {"type": "integer", "minimum": 0},
     "vllm_ack_version": {"type": "integer", "minimum": 0},
@@ -19,12 +21,25 @@
     "sync_finished_at": {"type": "string", "format": "date-time"},
     "optimizer_step_min": {"type": ["integer", "null"], "minimum": 0},
     "optimizer_step_max": {"type": ["integer", "null"], "minimum": 0},
-    "lr_scheduler_last_epoch": {"type": ["integer", "null"], "minimum": 0}
+    "lr_scheduler_last_epoch": {"type": ["integer", "null"], "minimum": 0},
+    "weight_transfer_format": {"type": "string", "enum": ["dtensor", "hf"]},
+    "loaded_parameter_count": {"type": "integer", "minimum": 1},
+    "audited_loaded_parameters": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "sampled_parameter_dtypes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "minLength": 1}
+    }
   },
   "allOf": [
     {
       "if": {"properties": {"record_type": {"const": "weight_sync_ack"}}},
-      "then": {"required": ["global_step", "actor_version", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "lr_scheduler_last_epoch"]}
+      "then": {"required": ["global_step", "actor_version", "actor_master_sampled_tensor_digest", "actor_rollout_sampled_tensor_digest", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "lr_scheduler_last_epoch", "weight_transfer_format", "loaded_parameter_count", "audited_loaded_parameters", "sampled_parameter_dtypes"]}
     }
   ],
   "additionalProperties": true

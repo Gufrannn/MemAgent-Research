@@ -41,19 +41,49 @@ def _resolve_tensor(named_tensors: Mapping[str, Any], required_name: str) -> Any
     return matches[0][1]
 
 
-def sampled_tensor_digest(named_tensors: Mapping[str, Any], parameter_names: Sequence[str], samples_per_tensor: int) -> str:
+def _materialize_tensor(tensor: Any) -> Any:
+    if hasattr(tensor, "full_tensor"):
+        tensor = tensor.full_tensor()
+    return tensor.detach()
+
+
+def sampled_tensor_digest(
+    named_tensors: Mapping[str, Any],
+    parameter_names: Sequence[str],
+    samples_per_tensor: int,
+    *,
+    project_to: Mapping[str, Any] | None = None,
+) -> str:
+    """Digest samples using the effective dtype of ``project_to`` when supplied.
+
+    FSDP keeps actor optimizer parameters in FP32 while a colocated vLLM engine
+    commonly serves BF16 weights.  A direct byte comparison therefore reports
+    legitimate sub-BF16 optimizer updates as synchronization failures.  The
+    projected digest models the actual transfer: cast the actor tensor to the
+    corresponding vLLM dtype, then serialize both sides canonically as FP32.
+    """
     import numpy as np
     import torch
 
     records = []
     for name in sorted(parameter_names):
-        tensor = _resolve_tensor(named_tensors, name)
-        if hasattr(tensor, "full_tensor"):
-            tensor = tensor.full_tensor()
-        tensor = tensor.detach().reshape(-1)
+        tensor = _materialize_tensor(_resolve_tensor(named_tensors, name))
+        if project_to is not None:
+            # The reference can be a sleeping vLLM parameter whose allocation
+            # is currently unmapped. Shape and dtype metadata remain valid;
+            # do not detach, reshape, or otherwise touch its storage here.
+            target = _resolve_tensor(project_to, name)
+            if tuple(tensor.shape) != tuple(target.shape):
+                raise ValueError(
+                    f"cannot project sampled tensor with different shape: "
+                    f"{name}: actor={tuple(tensor.shape)}, target={tuple(target.shape)}"
+                )
+            tensor = tensor.to(dtype=target.dtype)
+        shape = tuple(tensor.shape)
+        tensor = tensor.reshape(-1)
         indices = evenly_spaced_indices(tensor.numel(), samples_per_tensor)
         index_tensor = torch.tensor(indices, dtype=torch.long, device=tensor.device)
         values = tensor.index_select(0, index_tensor).to(dtype=torch.float32).cpu().contiguous().numpy()
         values = np.asarray(values, dtype="<f4").tobytes(order="C")
-        records.append((name, tuple(_resolve_tensor(named_tensors, name).shape), indices, values))
+        records.append((name, shape, indices, values))
     return digest_sample_records(records)

@@ -39,6 +39,19 @@ class FrozenManifestTests(unittest.TestCase):
         self.assertEqual(manifest["backend"]["evaluation"], "vllm")
         self.assertFalse(manifest["backend"]["allow_hf_fallback"])
         self.assertEqual(manifest["backend"]["reward_manager"], "naive")
+        self.assertEqual(
+            manifest["weight_sync"]["comparison_semantics"],
+            "actor_projected_to_vllm_parameter_dtype",
+        )
+        self.assertEqual(manifest["weight_sync"]["transfer_format"], "dtensor")
+        self.assertTrue(
+            any(".self_attn.o_proj.weight" in name or ".mlp.down_proj.weight" in name
+                for name in manifest["weight_sync"]["parameter_names"])
+        )
+
+    def test_gate_a_run_freezes_dtensor_transfer(self):
+        script = (REPO / "experiments/7b_gate_a/run_gate_a.sh").read_text()
+        self.assertIn("actor_rollout_ref.rollout.load_format=dummy_dtensor", script)
 
     def test_data_manifest_hash_is_canonical(self):
         manifest = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml").read_text())
@@ -53,7 +66,7 @@ class FrozenManifestTests(unittest.TestCase):
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
         self.assertEqual(commands["contract"], {
             "kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2,
-            "execution_revision": "20260821r1",
+            "execution_revision": "20260821r2",
         })
         self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
         self.assertEqual(commands["required_environment"], [
@@ -170,6 +183,7 @@ class LedgerAndAuditTests(unittest.TestCase):
         self.assertTrue(any("collision" in failure for failure in failures))
 
     def test_two_worker_sync_ack(self):
+        parameters = ["model.layers.0.input_layernorm.weight"]
         records = []
         for rank in range(2):
             records.append({
@@ -177,16 +191,51 @@ class LedgerAndAuditTests(unittest.TestCase):
                 "actor_version": 2,
                 "vllm_worker_rank": rank,
                 "vllm_ack_version": 2,
+                "actor_master_sampled_tensor_digest": "b" * 64,
+                "actor_rollout_sampled_tensor_digest": "a" * 64,
                 "actor_sampled_tensor_digest": "a" * 64,
                 "vllm_sampled_tensor_digest": "a" * 64,
+                "weight_transfer_format": "dtensor",
+                "loaded_parameter_count": 10,
+                "audited_loaded_parameters": parameters,
+                "sampled_parameter_dtypes": {parameters[0]: "torch.bfloat16"},
             })
-        ok, failures, digests = audit_sync(records, [2], [0, 1])
+        ok, failures, digests = audit_sync(
+            records, [2], [0, 1], required_parameters=parameters,
+            required_transfer_format="dtensor",
+        )
         self.assertTrue(ok, failures)
         self.assertEqual(digests, {2: "a" * 64})
         records.pop()
-        ok, failures, _ = audit_sync(records, [2], [0, 1])
+        ok, failures, _ = audit_sync(
+            records, [2], [0, 1], required_parameters=parameters,
+            required_transfer_format="dtensor",
+        )
         self.assertFalse(ok)
         self.assertTrue(any("ack ranks" in failure for failure in failures))
+
+    def test_sync_audit_rejects_missing_load_coverage(self):
+        parameters = ["model.layers.0.input_layernorm.weight"]
+        records = [{
+            "record_type": "weight_sync_ack",
+            "actor_version": 2,
+            "vllm_worker_rank": rank,
+            "vllm_ack_version": 2,
+            "actor_master_sampled_tensor_digest": "b" * 64,
+            "actor_rollout_sampled_tensor_digest": "a" * 64,
+            "actor_sampled_tensor_digest": "a" * 64,
+            "vllm_sampled_tensor_digest": "a" * 64,
+            "weight_transfer_format": "dtensor",
+            "loaded_parameter_count": 10,
+            "audited_loaded_parameters": [],
+            "sampled_parameter_dtypes": {parameters[0]: "torch.bfloat16"},
+        } for rank in range(2)]
+        ok, failures, _ = audit_sync(
+            records, [2], [0, 1], required_parameters=parameters,
+            required_transfer_format="dtensor",
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("load coverage mismatch" in failure for failure in failures))
 
 
 if __name__ == "__main__":

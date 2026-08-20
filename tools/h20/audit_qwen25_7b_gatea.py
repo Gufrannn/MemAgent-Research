@@ -130,9 +130,12 @@ def audit_sync(
     required_versions: list[int],
     ranks: list[int],
     required_syncs: list[tuple[str, int, str]] | None = None,
+    required_parameters: list[str] | None = None,
+    required_transfer_format: str | None = None,
 ) -> tuple[bool, list[str], dict[int, str]]:
     failures = []
     digests_by_version: dict[int, set[str]] = defaultdict(set)
+    master_digests_by_version: dict[int, set[str]] = defaultdict(set)
     syncs = required_syncs or [("", version, "") for version in required_versions]
     for experiment, version, sync_kind in syncs:
         acks = [
@@ -149,13 +152,54 @@ def audit_sync(
         if len(acks) != len(ranks):
             failures.append(f"sync {context} expected {len(ranks)} unique acks, found {len(acks)}")
         for row in acks:
-            if row["actor_sampled_tensor_digest"] != row["vllm_sampled_tensor_digest"]:
-                failures.append(f"actor/vLLM digest mismatch at sync {context}, rank {row['vllm_worker_rank']}")
+            actor_rollout_digest = row.get("actor_rollout_sampled_tensor_digest")
+            if row.get("actor_sampled_tensor_digest") != actor_rollout_digest:
+                failures.append(
+                    f"actor effective-digest alias mismatch at sync {context}, "
+                    f"rank {row['vllm_worker_rank']}"
+                )
+            if actor_rollout_digest != row["vllm_sampled_tensor_digest"]:
+                failures.append(
+                    f"effective actor-rollout/vLLM digest mismatch at sync {context}, "
+                    f"rank {row['vllm_worker_rank']}"
+                )
+            master_digest = row.get("actor_master_sampled_tensor_digest")
+            if not master_digest:
+                failures.append(f"missing actor master digest at sync {context}, rank {row['vllm_worker_rank']}")
+            else:
+                master_digests_by_version[version].add(master_digest)
+            if required_parameters is not None:
+                audited_loaded = sorted(row.get("audited_loaded_parameters") or [])
+                if audited_loaded != sorted(required_parameters):
+                    failures.append(
+                        f"sampled load coverage mismatch at sync {context}, rank "
+                        f"{row['vllm_worker_rank']}: {audited_loaded} != {sorted(required_parameters)}"
+                    )
+                if int(row.get("loaded_parameter_count", -1)) < len(required_parameters):
+                    failures.append(
+                        f"loaded parameter count is too small at sync {context}, "
+                        f"rank {row['vllm_worker_rank']}: {row.get('loaded_parameter_count')}"
+                    )
+                sampled_dtypes = row.get("sampled_parameter_dtypes") or {}
+                if sorted(sampled_dtypes) != sorted(required_parameters):
+                    failures.append(
+                        f"sampled dtype coverage mismatch at sync {context}, "
+                        f"rank {row['vllm_worker_rank']}"
+                    )
+            if required_transfer_format is not None and row.get("weight_transfer_format") != required_transfer_format:
+                failures.append(
+                    f"weight transfer format mismatch at sync {context}, rank "
+                    f"{row['vllm_worker_rank']}: {row.get('weight_transfer_format')} "
+                    f"!= {required_transfer_format}"
+                )
             if int(row["vllm_ack_version"]) != version:
                 failures.append(f"ack version mismatch at actor version {version}")
-            digests_by_version[version].add(row["actor_sampled_tensor_digest"])
+            if actor_rollout_digest:
+                digests_by_version[version].add(actor_rollout_digest)
         if len(digests_by_version[version]) != 1:
             failures.append(f"sync {context} has split or missing actor digests")
+        if len(master_digests_by_version[version]) != 1:
+            failures.append(f"sync {context} has split or missing actor master digests")
     collapsed = {version: next(iter(values)) for version, values in digests_by_version.items() if len(values) == 1}
     return not failures, failures, collapsed
 
@@ -276,6 +320,8 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         required_versions,
         manifest["weight_sync"]["required_worker_ranks"],
         required_syncs,
+        manifest["weight_sync"]["parameter_names"],
+        manifest["weight_sync"]["transfer_format"],
     )
 
     signal_steps = {

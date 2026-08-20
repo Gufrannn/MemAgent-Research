@@ -141,6 +141,7 @@ export NCCL_DEBUG=WARN
   actor_rollout_ref.actor.fsdp_config.fsdp_size="$FSDP_SIZE" \
   actor_rollout_ref.ref.fsdp_config.param_offload=True \
   actor_rollout_ref.rollout.name=vllm \
+  actor_rollout_ref.rollout.load_format=dummy_dtensor \
   actor_rollout_ref.rollout.temperature=1 \
   actor_rollout_ref.rollout.top_p=1.0 \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
