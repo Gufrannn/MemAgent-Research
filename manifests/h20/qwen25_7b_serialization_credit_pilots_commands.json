@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "branch": "h20/qwen25-7b-serialization-credit-pilots-20260821",
+  "required_sequence": [
+    "p0",
+    "smsb_capture",
+    "smsb_12_fresh_replays",
+    "smsb_adjudication",
+    "tetrad_construct_if_and_only_if_smsb_pass",
+    "tetrad_20_fresh_requests",
+    "tetrad_adjudication",
+    "final_audit"
+  ],
+  "entrypoints": {
+    "p0": "scripts/h20/preflight_qwen25_7b_serialization_credit.sh",
+    "gpu_runner": "tools/h20/run_qwen25_7b_serialization_credit.py",
+    "audit": "tools/h20/audit_qwen25_7b_serialization_credit.py",
+    "smsb": "scripts/h20/run_qwen25_7b_smsb4.sh",
+    "tetrad": "scripts/h20/run_qwen25_7b_tetrad4.sh"
+  },
+  "execution": {
+    "physical_gpus": [6, 7],
+    "visible_devices": "6,7",
+    "cuda_device_order": "PCI_BUS_ID",
+    "tensor_parallel_size": 2,
+    "rollout_and_reader_backend": "strict_vllm",
+    "huggingface_generation_fallback": false,
+    "single_request_only": true,
+    "max_num_seqs": 1,
+    "prefix_cache_enabled": false,
+    "training_updates": 0,
+    "full_model_sha_per_fresh_child": true,
+    "actual_gpu_uuid_name_bound_per_child": true,
+    "parent_issued_single_use_credential_per_child": true,
+    "unique_child_pid_required": true
+  },
+  "gate_order": {
+    "tetrad_requires_exact_smsb_decision": "PASS_E_DET_SINGLE_REQUEST",
+    "audit32_requires_tetrad4_but_is_not_part_of_this_closure": true,
+    "method_training_authorized": false
+  },
+  "claim_firewall": {
+    "smsb_L2_is_report_only": true,
+    "tetrad4_effects_reportable": false,
+    "paper_performance_result": false,
+    "method_selection_status": "PENDING_EVIDENCE_NO_SELECTION"
+  },
+  "gpu_execution_authorized_by_this_manifest": false,
+  "external_authorization_required": true
+}
