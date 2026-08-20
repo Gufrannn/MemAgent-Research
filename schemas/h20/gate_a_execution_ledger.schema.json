@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gate_a_execution_ledger.schema.json",
+  "title": "MemAgent H20 Gate A append-only execution ledger record",
+  "type": "object",
+  "required": ["record_type", "experiment_name", "git_commit", "recorded_at"],
+  "properties": {
+    "record_type": {"enum": ["p0_preflight", "resume_load", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
+    "experiment_name": {"type": "string", "minLength": 1},
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "global_step": {"type": "integer", "minimum": 0},
+    "actor_version": {"type": "integer", "minimum": 0},
+    "actor_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "vllm_worker_rank": {"type": "integer", "minimum": 0},
+    "vllm_ack_version": {"type": "integer", "minimum": 0},
+    "vllm_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sync_started_at": {"type": "string", "format": "date-time"},
+    "sync_finished_at": {"type": "string", "format": "date-time"},
+    "optimizer_step_min": {"type": ["integer", "null"], "minimum": 0},
+    "optimizer_step_max": {"type": ["integer", "null"], "minimum": 0},
+    "lr_scheduler_last_epoch": {"type": ["integer", "null"], "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"record_type": {"const": "weight_sync_ack"}}},
+      "then": {"required": ["global_step", "actor_version", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "lr_scheduler_last_epoch"]}
+    }
+  ],
+  "additionalProperties": true
+}

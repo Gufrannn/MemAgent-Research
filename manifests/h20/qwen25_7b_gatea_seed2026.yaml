@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-08-20T00:00:00+08:00",
+  "branch": "h20/qwen25-7b-gatea-frozen-20260820",
+  "base_commit": "bf2efb6c25334b7382a35735bfbe6ec1a4a8d497",
+  "work_root": "/data/cw/memagent_work",
+  "repository": "/data/cw/memagent_work/MemAgent-Research",
+  "python": "/data/cw/memagent_work/.venv/bin/python",
+  "model": {
+    "id": "Qwen/Qwen2.5-7B-Instruct",
+    "path": "/data/cw/memagent_work/models/Qwen2.5-7B-Instruct",
+    "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+    "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"
+  },
+  "data": {
+    "train": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet",
+    "validation": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet",
+    "shuffle": false,
+    "dataloader_num_workers": 0,
+    "manifest_sha256": "2bdc34886471e22a30e1f61f19ae5a49247cf5bacc576e8d8b23f91554496dcf"
+  },
+  "gpu": {
+    "declared_whitelist": [4, 5, 6, 7],
+    "visible_devices": "4,5,6,7",
+    "world_size": 4,
+    "fsdp_size": 4,
+    "trainer_gpus": 4,
+    "tensor_parallel_size": 1
+  },
+  "training": {
+    "seed": 2026,
+    "trajectory_seed_mode": "independent",
+    "train_batch_size": 4,
+    "rollout_n": 2,
+    "ppo_mini_batch_size": 4,
+    "chunk_size": 5000,
+    "max_prompt_length": 8192,
+    "max_response_length": 1024,
+    "ppo_max_token_len_per_gpu": 16384,
+    "log_prob_max_token_len_per_gpu": 32768,
+    "max_num_batched_tokens": 16384,
+    "max_num_seqs": 16,
+    "gpu_memory_utilization": 0.55,
+    "actor_learning_rate": 0.000001,
+    "kl_loss_coefficient": 0.001,
+    "fresh_total_steps": 2,
+    "resume_total_steps": 3
+  },
+  "backend": {
+    "rollout": "vllm",
+    "evaluation": "vllm",
+    "allow_hf_fallback": false,
+    "reward_manager": "naive"
+  },
+  "experiments": {
+    "p0": "qwen25_7b_h20_gatea_preflight_gitclosed_seed2026_20260820",
+    "fresh": "qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
+    "resume": "qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820"
+  },
+  "paths": {
+    "checkpoint_root": "/data/cw/memagent_work/logs/memory_agent",
+    "log_root": "/data/cw/memagent_work/logs/gate_a_frozen_20260820",
+    "certificate_root": "/data/cw/memagent_work/logs/gate_a_frozen_20260820/certificates",
+    "fresh_output": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
+    "resume_output": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820",
+    "resume_source": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820/global_step_2",
+    "execution_ledger": "/data/cw/memagent_work/logs/gate_a_frozen_20260820/gate_a_execution_ledger.jsonl"
+  },
+  "weight_sync": {
+    "samples_per_tensor": 256,
+    "canonical_dtype": "float32",
+    "byte_order": "little",
+    "parameter_names": [
+      "model.layers.0.input_layernorm.weight",
+      "model.layers.0.post_attention_layernorm.weight",
+      "model.layers.27.input_layernorm.weight",
+      "model.layers.27.post_attention_layernorm.weight"
+    ],
+    "required_worker_ranks": [0, 1, 2, 3]
+  }
+}

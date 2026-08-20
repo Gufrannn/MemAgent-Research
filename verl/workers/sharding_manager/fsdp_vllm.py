@@ -79,6 +79,29 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             torch.cuda.set_rng_state(self.torch_random_states)
         else:
             self.gen_random_states = None
+        self._gate_a_sync_context = None
+        self.last_gate_a_sync_ack = None
+
+    def set_gate_a_sync_context(
+        self,
+        *,
+        global_step: int,
+        actor_version: int,
+        sync_kind: str,
+        optimizer_step_min: int | None,
+        optimizer_step_max: int | None,
+        lr_scheduler_last_epoch: int | None,
+    ) -> None:
+        """Enable one fail-closed digest/ack record for the next weight sync."""
+        self.last_gate_a_sync_ack = None
+        self._gate_a_sync_context = {
+            "global_step": int(global_step),
+            "actor_version": int(actor_version),
+            "sync_kind": str(sync_kind),
+            "optimizer_step_min": optimizer_step_min,
+            "optimizer_step_max": optimizer_step_max,
+            "lr_scheduler_last_epoch": lr_scheduler_last_epoch,
+        }
 
     @GPUMemoryLogger(role="fsdp vllm sharding_manager", logger=logger)
     def __enter__(self):
@@ -96,6 +119,19 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             load_fsdp_model_to_gpu(self.module)
         params = self.module.state_dict()
         log_gpu_memory_usage("After state_dict() in sharding manager memory", logger=logger)
+        gate_a_context = self._gate_a_sync_context
+        actor_digest = None
+        sync_started_at = None
+        if gate_a_context is not None:
+            from recurrent.research.gate_a_execution import utc_now
+            from verl.utils.gate_a_weight_sync import sampled_tensor_digest
+
+            parameter_names = [
+                name for name in os.environ["GATE_A_WEIGHT_DIGEST_PARAMETERS"].split(",") if name
+            ]
+            samples_per_tensor = int(os.environ["GATE_A_WEIGHT_DIGEST_SAMPLES"])
+            sync_started_at = utc_now()
+            actor_digest = sampled_tensor_digest(params, parameter_names, samples_per_tensor)
         # Copy, not share memory
         load_format = "hf" if self.full_params else "dtensor"
 
@@ -122,6 +158,32 @@ class FSDPVLLMShardingManager(BaseShardingManager):
 
             if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
                 self.inference_engine.wake_up(tags=["kv_cache"])
+
+        if gate_a_context is not None:
+            from recurrent.research.gate_a_execution import append_gate_a_record, utc_now
+            from verl.utils.gate_a_weight_sync import sampled_tensor_digest
+
+            if self.model_runner is None or not hasattr(self.model_runner, "model"):
+                raise RuntimeError("Gate A cannot access the local vLLM model after weight synchronization")
+            vllm_params = dict(self.model_runner.model.named_parameters())
+            parameter_names = [
+                name for name in os.environ["GATE_A_WEIGHT_DIGEST_PARAMETERS"].split(",") if name
+            ]
+            samples_per_tensor = int(os.environ["GATE_A_WEIGHT_DIGEST_SAMPLES"])
+            vllm_digest = sampled_tensor_digest(vllm_params, parameter_names, samples_per_tensor)
+            worker_rank = torch.distributed.get_rank()
+            ack = {
+                **gate_a_context,
+                "actor_sampled_tensor_digest": actor_digest,
+                "vllm_worker_rank": worker_rank,
+                "vllm_ack_version": gate_a_context["actor_version"],
+                "vllm_sampled_tensor_digest": vllm_digest,
+                "sync_started_at": sync_started_at,
+                "sync_finished_at": utc_now(),
+            }
+            append_gate_a_record("weight_sync_ack", **ack)
+            self.last_gate_a_sync_ack = ack
+            self._gate_a_sync_context = None
 
         log_gpu_memory_usage("After del state_dict and empty_cache in sharding manager", logger=logger)
 

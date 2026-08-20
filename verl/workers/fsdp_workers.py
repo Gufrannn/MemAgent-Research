@@ -585,6 +585,35 @@ class ActorRolloutRefWorker(Worker):
         torch.cuda.empty_cache()
         return output
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def audit_actor_vllm_weight_sync(self, global_step: int, actor_version: int, sync_kind: str):
+        """Synchronize without rollout and return this vLLM worker's digest acknowledgement."""
+        assert self._is_actor and self._is_rollout
+        if self.config.rollout.name != "vllm":
+            raise RuntimeError(f"Gate A requires vLLM rollout, got {self.config.rollout.name!r}")
+        optimizer_steps = []
+        for state in self.actor_optimizer.state.values():
+            if "step" not in state:
+                continue
+            step = state["step"]
+            optimizer_steps.append(int(step.item() if hasattr(step, "item") else step))
+        self.rollout_sharding_manager.set_gate_a_sync_context(
+            global_step=global_step,
+            actor_version=actor_version,
+            sync_kind=sync_kind,
+            optimizer_step_min=min(optimizer_steps) if optimizer_steps else None,
+            optimizer_step_max=max(optimizer_steps) if optimizer_steps else None,
+            lr_scheduler_last_epoch=(
+                int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
+            ),
+        )
+        with self.rollout_sharding_manager:
+            pass
+        ack = self.rollout_sharding_manager.last_gate_a_sync_ack
+        if ack is None:
+            raise RuntimeError("Gate A vLLM sync completed without a digest acknowledgement")
+        return ack
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_prob(self, data: DataProto):
         assert self._is_actor
@@ -670,11 +699,33 @@ class ActorRolloutRefWorker(Worker):
 
         self.checkpoint_manager.load_checkpoint(local_path=local_path, hdfs_path=hdfs_path, del_local_after_load=del_local_after_load)
 
+        gate_a_load_ack = None
+        if os.getenv("GATE_A_FROZEN_AUDIT", "0") == "1":
+            optimizer_steps = []
+            for state in self.actor_optimizer.state.values():
+                if "step" not in state:
+                    continue
+                step = state["step"]
+                optimizer_steps.append(int(step.item() if hasattr(step, "item") else step))
+            gate_a_load_ack = {
+                "rank": int(torch.distributed.get_rank()),
+                "model_loaded": True,
+                "optimizer_loaded": bool(self.actor_optimizer.state),
+                "extra_loaded": True,
+                "optimizer_step_min": min(optimizer_steps) if optimizer_steps else None,
+                "optimizer_step_max": max(optimizer_steps) if optimizer_steps else None,
+                "lr_scheduler_last_epoch": (
+                    int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
+                ),
+            }
+
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
 
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(self.actor_optimizer)
+
+        return gate_a_load_ack
 
 
 class CriticWorker(Worker):

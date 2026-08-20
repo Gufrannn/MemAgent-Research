@@ -170,6 +170,19 @@ class LLMGenerationManager:
                 logger.info('generation done')
             with _timer('mt_update', timing_raw):
                 gen_output = self.agent.update(gen_output)
+                if trajectory_base_seeds is not None:
+                    if len(gen_output) != len(active_sample_indices):
+                        raise ValueError(
+                            "trajectory turn identity is not row-aligned after recurrent agent update: "
+                            f"output={len(gen_output)}, active={len(active_sample_indices)}"
+                        )
+                    gen_output.batch["trajectory_turn"] = torch.full(
+                        (len(gen_output),), recurrent_turn, dtype=torch.long,
+                        device=gen_output.batch["responses"].device,
+                    )
+                    gen_output.non_tensor_batch["request_seed"] = np.asarray(
+                        meta_info_gen["request_seeds"], dtype=np.uint64
+                    )
                 gen_output_list.append(gen_output)
                 logger.info('agent update done')
                 recurrent_turn += 1

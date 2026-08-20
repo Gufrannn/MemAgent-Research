@@ -978,6 +978,36 @@ class RayPPOTrainer:
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
 
+    def _audit_gate_a_weight_sync(self, *, global_step: int, actor_version: int, sync_kind: str) -> None:
+        from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
+
+        if not gate_a_enabled():
+            return
+        acknowledgements = self.actor_rollout_wg.audit_actor_vllm_weight_sync(
+            global_step, actor_version, sync_kind
+        )
+        expected_ranks = list(range(self.actor_rollout_wg.world_size))
+        actual_ranks = sorted(int(ack["vllm_worker_rank"]) for ack in acknowledgements)
+        actor_digests = {ack["actor_sampled_tensor_digest"] for ack in acknowledgements}
+        vllm_digests = {ack["vllm_sampled_tensor_digest"] for ack in acknowledgements}
+        if actual_ranks != expected_ranks:
+            raise RuntimeError(
+                f"Gate A vLLM acknowledgement ranks mismatch: expected={expected_ranks}, actual={actual_ranks}"
+            )
+        if len(actor_digests) != 1 or len(vllm_digests) != 1 or actor_digests != vllm_digests:
+            raise RuntimeError(
+                "Gate A actor/vLLM sampled-tensor digests diverged: "
+                f"actor={sorted(actor_digests)}, vllm={sorted(vllm_digests)}"
+            )
+        append_gate_a_record(
+            "weight_sync_summary",
+            global_step=int(global_step),
+            actor_version=int(actor_version),
+            sync_kind=str(sync_kind),
+            worker_ranks=actual_ranks,
+            sampled_tensor_digest=next(iter(actor_digests)),
+        )
+
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
             return 0
@@ -1015,7 +1045,9 @@ class RayPPOTrainer:
         actor_path = os.path.join(global_step_folder, "actor")
         critic_path = os.path.join(global_step_folder, "critic")
         # load actor
-        self.actor_rollout_wg.load_checkpoint(actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
+        actor_load_acks = self.actor_rollout_wg.load_checkpoint(
+            actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
+        )
         # load critic
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
@@ -1026,6 +1058,18 @@ class RayPPOTrainer:
         if os.path.exists(dataloader_local_path):
             dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
             self.train_dataloader.load_state_dict(dataloader_state_dict)
+            from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled, sha256_file
+
+            if gate_a_enabled():
+                append_gate_a_record(
+                    "resume_load",
+                    global_step=self.global_steps,
+                    resume_source=os.path.realpath(global_step_folder),
+                    actor_model_optimizer_extra_loaded=True,
+                    actor_load_worker_acks=actor_load_acks,
+                    data_loaded=True,
+                    data_sha256=sha256_file(dataloader_local_path),
+                )
         else:
             print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
 
@@ -1064,6 +1108,11 @@ class RayPPOTrainer:
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+        self._audit_gate_a_weight_sync(
+            global_step=self.global_steps,
+            actor_version=self.global_steps,
+            sync_kind="fresh_initial" if self.global_steps == 0 else "resume_loaded",
+        )
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
@@ -1174,6 +1223,7 @@ class RayPPOTrainer:
                                     trajectory_base_seeds, dtype=np.uint64
                                 )
                                 for record in trajectory_seed_records:
+                                    record["record_type"] = "trajectory_seed"
                                     record["uid"] = str(batch.non_tensor_batch["uid"][int(record["row"])])
                                 _append_rollout_seed_audit(
                                     str(self.config.trainer.default_local_dir), trajectory_seed_records
@@ -1219,6 +1269,31 @@ class RayPPOTrainer:
                             gen_batch_output.non_tensor_batch["trajectory_id"] = source_trajectory_ids[
                                 source_rows
                             ]
+                            if "trajectory_turn" in gen_batch_output.batch:
+                                request_seeds = np.asarray(
+                                    gen_batch_output.non_tensor_batch["request_seed"], dtype=np.uint64
+                                )
+                                turns = gen_batch_output.batch["trajectory_turn"].detach().cpu().tolist()
+                                turn_records = []
+                                rollout_n = int(self.config.actor_rollout_ref.rollout.n)
+                                for output_row, source_row in enumerate(source_rows.tolist()):
+                                    group, replica = divmod(int(source_row), rollout_n)
+                                    turn_records.append({
+                                        "record_type": "trajectory_turn_seed",
+                                        "global_step": int(self.global_steps),
+                                        "row": int(source_row),
+                                        "sample_index": int(source_row),
+                                        "group": group,
+                                        "replica": replica,
+                                        "turn": int(turns[output_row]),
+                                        "uid": str(source_uids[source_row]),
+                                        "trajectory_seed": int(source_seeds[source_row]),
+                                        "request_seed": int(request_seeds[output_row]),
+                                        "mode": str(trajectory_seed_mode),
+                                    })
+                                _append_rollout_seed_audit(
+                                    str(self.config.trainer.default_local_dir), turn_records
+                                )
 
                             # Will be used in advantage computation.
                             gen_batch_output.batch['final_mask'] = final_mask
@@ -1451,6 +1526,11 @@ class RayPPOTrainer:
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
+                        self._audit_gate_a_weight_sync(
+                            global_step=self.global_steps,
+                            actor_version=self.global_steps,
+                            sync_kind="post_actor_update",
+                        )
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
@@ -1496,6 +1576,16 @@ class RayPPOTrainer:
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
+
+                from recurrent.research.gate_a_execution import append_gate_a_record, finite_numeric_metrics, gate_a_enabled
+
+                if gate_a_enabled():
+                    append_gate_a_record(
+                        "execution_signal",
+                        global_step=self.global_steps,
+                        actor_version=self.global_steps,
+                        metrics=finite_numeric_metrics(metrics),
+                    )
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
