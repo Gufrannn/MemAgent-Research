@@ -75,6 +75,11 @@ class MemoryDataset(RDataset):
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
         row_dict: dict = self.dataframe[item]
+        # Stable-evaluation runs opt in to carrying the production-effective
+        # position.  Keep normal training/evaluation rows byte-for-byte
+        # compatible with the pre-existing dataset contract.
+        if self.config.get("include_source_order_index", False):
+            row_dict["source_order_index"] = int(item)
 
         chat = row_dict.pop(self.prompt_key)
         context = row_dict.pop(self.context_key)

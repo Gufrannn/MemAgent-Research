@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stable_identity_execution_ledger.schema.json",
+  "title": "MemAgent recurrent-I stable identity 4x2 execution ledger record",
+  "type": "object",
+  "required": [
+    "record_type",
+    "experiment_name",
+    "git_commit",
+    "run_id",
+    "recorded_at",
+    "execution_binding_sha256",
+    "runtime_binding_sha256",
+    "record_index",
+    "previous_record_sha256",
+    "record_sha256"
+  ],
+  "properties": {
+    "record_type": {
+      "enum": [
+        "s0_preflight",
+        "run_start",
+        "trajectory_turn_inventory",
+        "final_output_inventory",
+        "run_finish",
+        "audit_result"
+      ]
+    },
+    "experiment_name": {"type": "string", "minLength": 1},
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "record_index": {"type": "integer", "minimum": 0},
+    "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "eval_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "execution_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtime_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "attempt_id": {"type": ["string", "null"]},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "artifact": {"type": "string"},
+    "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifacts": {"type": "object"},
+    "row_count": {"type": "integer", "minimum": 0},
+    "decision": {"type": "string"}
+  },
+  "additionalProperties": true
+}

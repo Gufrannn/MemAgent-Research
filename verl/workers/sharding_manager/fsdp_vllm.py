@@ -131,9 +131,15 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         actor_master_digest = None
         actor_rollout_digest = None
         vllm_params = None
+        vllm_pre_sync_digest = None
         parameter_names = None
         parameter_dtypes = None
         sync_started_at = None
+        capture_stable_eval_pre_sync = bool(
+            gate_a_context is not None
+            and gate_a_context.get("sync_kind")
+            in {"stable_eval_before", "stable_eval_after"}
+        )
         if gate_a_context is not None:
             from recurrent.research.gate_a_execution import utc_now
             from verl.utils.gate_a_weight_sync import sampled_tensor_digest
@@ -168,6 +174,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             "0.5.4",
             "0.6.3",
         ):
+            if capture_stable_eval_pre_sync:
+                vllm_pre_sync_digest = sampled_tensor_digest(
+                    vllm_params, parameter_names, samples_per_tensor
+                )
             self.inference_engine.sync_model_weights(params, load_format=load_format)
             log_gpu_memory_usage("After sync model weights in sharding manager", logger=logger)
             del params
@@ -177,6 +187,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             else:
                 self.inference_engine.wake_up()
 
+            if capture_stable_eval_pre_sync:
+                vllm_pre_sync_digest = sampled_tensor_digest(
+                    vllm_params, parameter_names, samples_per_tensor
+                )
             # update model params
             loaded_params = self.update_params(params)
             log_gpu_memory_usage("After sync model weights in sharding manager", logger=logger)
@@ -234,6 +248,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 "vllm_worker_rank": worker_rank,
                 "vllm_ack_version": gate_a_context["actor_version"],
                 "vllm_sampled_tensor_digest": vllm_digest,
+                "vllm_pre_sync_sampled_tensor_digest": vllm_pre_sync_digest,
                 "weight_transfer_format": load_format,
                 "loaded_parameter_count": len(loaded_params),
                 "model_parameter_count": len(vllm_parameter_names),

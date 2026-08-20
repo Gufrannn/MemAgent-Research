@@ -16,6 +16,7 @@ FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+import hashlib
 import json
 import os
 import uuid
@@ -301,28 +302,120 @@ def _to_python_list(value):
     return list(value)
 
 
-def _build_validation_identities(test_batch, *, val_n: int, manifest_hash: str, seeds: list[int]):
-    """Build stable keys before recurrent pop/reorder; never used as metrics."""
-    if not manifest_hash:
-        return None
+def _build_validation_identities(
+    test_batch,
+    *,
+    val_n: int,
+    resolved_manifest,
+    base_seed: int,
+    interface_id: str,
+    attempt_id: str,
+):
+    """Build frozen evaluation identities before recurrent pop/reorder."""
+    from recurrent.research.stable_eval_identity import (
+        build_stable_eval_identities,
+        identity_rows_to_columns,
+    )
+
     if "index" in test_batch.batch:
-        source_indices = _to_python_list(test_batch.batch["index"])
+        semantic_indices = _to_python_list(test_batch.batch["index"])
     elif "index" in test_batch.non_tensor_batch:
-        source_indices = _to_python_list(test_batch.non_tensor_batch["index"])
+        semantic_indices = _to_python_list(test_batch.non_tensor_batch["index"])
     else:
         raise ValueError("strict evaluation identity requires dataset index; UUID/text fallback is forbidden")
-    if len(source_indices) != len(test_batch) or len(seeds) != len(test_batch):
-        raise ValueError("validation identity columns are not row-aligned")
-    runtime = test_batch.non_tensor_batch.get("sample_uuid")
-    runtime = _to_python_list(runtime) if runtime is not None else [None] * len(test_batch)
-    return {
-        "example_id": [str(index) for index in source_indices],
-        "source_order_index": [int(index) for index in source_indices],
-        "eval_manifest_hash": [str(manifest_hash)] * len(test_batch),
-        "replica_id": [row % int(val_n) for row in range(len(test_batch))],
-        "trajectory_seed": [int(seed) for seed in seeds],
-        "runtime_sample_uuid": runtime,
-    }
+    if "source_order_index" in test_batch.batch:
+        source_order_indices = _to_python_list(test_batch.batch["source_order_index"])
+    elif "source_order_index" in test_batch.non_tensor_batch:
+        source_order_indices = _to_python_list(test_batch.non_tensor_batch["source_order_index"])
+    else:
+        raise ValueError(
+            "strict evaluation identity requires source_order_index; semantic index cannot be used as a fallback"
+        )
+    rows = build_stable_eval_identities(
+        semantic_indices=semantic_indices,
+        source_order_indices=source_order_indices,
+        replicas=int(val_n),
+        base_seed=int(base_seed),
+        interface_id=str(interface_id),
+        attempt_id=str(attempt_id),
+        resolved_manifest=resolved_manifest,
+    )
+    return identity_rows_to_columns(rows)
+
+
+def _response_token_sha256(response: torch.Tensor) -> str:
+    values = (
+        response.detach().cpu().to(dtype=torch.int64).contiguous().numpy().astype("<i8", copy=False)
+    )
+    return hashlib.sha256(values.tobytes(order="C")).hexdigest()
+
+
+def _append_stable_eval_turn_ledger(path: str, output_batch: DataProto) -> None:
+    """Append row-aligned recurrent request evidence after vLLM prompt checks."""
+    from recurrent.research.stable_eval_identity import (
+        validate_configured_request_binding,
+    )
+
+    required_non_tensor = (
+        "interface_id",
+        "attempt_id",
+        "example_id",
+        "source_order_index",
+        "replica_id",
+        "source_repeated_row",
+        "eval_manifest_hash",
+        "trajectory_seed",
+        "trajectory_id",
+        "runtime_sample_uuid",
+        "active_sample_index",
+        "request_seed",
+        "configured_request_seed",
+        "rollout_request_seed",
+        "request_prompt_token_sha256",
+        "returned_prompt_token_sha256",
+        "rollout_worker_rank",
+        "is_final",
+    )
+    missing = [key for key in required_non_tensor if key not in output_batch.non_tensor_batch]
+    if missing:
+        raise ValueError(f"stable evaluation turn ledger is missing row fields: {missing}")
+    if "trajectory_turn" not in output_batch.batch or "responses" not in output_batch.batch:
+        raise ValueError("stable evaluation turn ledger requires trajectory_turn and responses tensors")
+    ledger_parent = os.path.dirname(path)
+    if ledger_parent:
+        os.makedirs(ledger_parent, exist_ok=True)
+    validate_configured_request_binding(
+        output_batch.non_tensor_batch["request_seed"],
+        output_batch.non_tensor_batch["configured_request_seed"],
+        output_batch.non_tensor_batch["request_prompt_token_sha256"],
+        output_batch.non_tensor_batch["returned_prompt_token_sha256"],
+        output_batch.non_tensor_batch["rollout_worker_rank"],
+    )
+    requested = [int(value) for value in output_batch.non_tensor_batch["request_seed"]]
+    rollout_alias = [
+        int(value) for value in output_batch.non_tensor_batch["rollout_request_seed"]
+    ]
+    if rollout_alias != requested:
+        raise ValueError(
+            "stable evaluation rollout seed alias is not row-aligned with configured requests: "
+            f"{rollout_alias} != {requested}"
+        )
+    with open(path, "a", encoding="utf-8") as stream:
+        for row in range(len(output_batch)):
+            record = {
+                "record_type": "trajectory_turn",
+                **{
+                    key: (
+                        output_batch.non_tensor_batch[key][row].item()
+                        if isinstance(output_batch.non_tensor_batch[key][row], np.generic)
+                        else output_batch.non_tensor_batch[key][row]
+                    )
+                    for key in required_non_tensor
+                },
+                "trajectory_turn": int(output_batch.batch["trajectory_turn"][row].item()),
+                "response_token_sha256": _response_token_sha256(output_batch.batch["responses"][row]),
+            }
+            stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -356,6 +449,28 @@ class RayPPOTrainer:
         self.tokenizer = tokenizer
         self.processor = processor
         self.config = config
+        self._stable_eval_runtime_config_sha256 = None
+        early_eval_identity = config.trainer.get("eval_identity", None)
+        if early_eval_identity is not None and bool(
+            early_eval_identity.get("enabled", False)
+        ):
+            from recurrent.research.stable_eval_identity import (
+                stable_eval_runtime_config_sha256,
+            )
+
+            resolved_config = OmegaConf.to_container(
+                config, resolve=True, throw_on_missing=True
+            )
+            actual_config_sha = stable_eval_runtime_config_sha256(resolved_config)
+            expected_config_sha = str(
+                early_eval_identity.get("expected_runtime_config_sha256", "")
+            )
+            if actual_config_sha != expected_config_sha:
+                raise ValueError(
+                    "strict stable evaluation resolved Hydra config differs from P0: "
+                    f"actual={actual_config_sha}, expected={expected_config_sha}"
+                )
+            self._stable_eval_runtime_config_sha256 = actual_config_sha
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
 
@@ -371,6 +486,7 @@ class RayPPOTrainer:
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
+        self._actor_update_calls = 0
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -498,6 +614,65 @@ class RayPPOTrainer:
         if config.data.get("val_batch_size", None) is not None:
             print("WARNING: val_batch_size is deprecated." + " Validation datasets are sent to inference engines as a whole batch," + " which will schedule the memory themselves.")
 
+        eval_identity_config = config.trainer.get("eval_identity", None)
+        if eval_identity_config is not None and bool(eval_identity_config.get("enabled", False)):
+            failures = []
+            if not bool(config.trainer.get("val_before_train", False)):
+                failures.append("trainer.val_before_train must be true")
+            if not bool(config.trainer.get("val_only", False)):
+                failures.append("trainer.val_only must be true")
+            if str(config.actor_rollout_ref.rollout.name) != "vllm":
+                failures.append("actor_rollout_ref.rollout.name must be vllm")
+            if str(config.actor_rollout_ref.rollout.mode) != "sync":
+                failures.append("only synchronous vLLM is admitted by this frozen canary")
+            if str(config.recurrent.enable) != "memory":
+                failures.append("recurrent.enable must be memory")
+            if not bool(config.data.get("include_source_order_index", False)):
+                failures.append("data.include_source_order_index must be true")
+            if int(config.actor_rollout_ref.rollout.val_kwargs.n) != int(
+                eval_identity_config.get("replicas", 0)
+            ):
+                failures.append("validation n must equal eval_identity.replicas")
+            if bool(config.actor_rollout_ref.rollout.val_kwargs.do_sample):
+                failures.append("validation must be deterministic (do_sample=false)")
+            if float(config.actor_rollout_ref.rollout.val_kwargs.temperature) != 0.0:
+                failures.append("validation temperature must be 0")
+            if float(config.actor_rollout_ref.rollout.val_kwargs.top_p) != 1.0:
+                failures.append("validation top_p must be 1")
+            if int(config.actor_rollout_ref.rollout.val_kwargs.top_k) != -1:
+                failures.append("validation top_k must be -1")
+            if int(config.trainer.get("save_freq", 0)) != -1:
+                failures.append("trainer.save_freq must be -1")
+            if str(config.trainer.get("resume_mode", "")) != "disable":
+                failures.append("trainer.resume_mode must be disable")
+            if config.trainer.get("resume_from_path", None) not in (None, ""):
+                failures.append("trainer.resume_from_path must be empty")
+            if not config.trainer.get("validation_data_dir", None):
+                failures.append("trainer.validation_data_dir is required")
+            for key in (
+                "resolved_manifest_path",
+                "expected_manifest_hash",
+                "interface_id",
+                "attempt_id",
+                "turn_ledger_path",
+                "execution_summary_path",
+                "expected_runtime_config_sha256",
+            ):
+                if not eval_identity_config.get(key, None):
+                    failures.append(f"trainer.eval_identity.{key} is required")
+            if not os.environ.get("GATE_A_WEIGHT_DIGEST_PARAMETERS", ""):
+                failures.append("sampled-weight parameter list is required for read-only evaluation audit")
+            if not os.environ.get("GATE_A_WEIGHT_DIGEST_SAMPLES", ""):
+                failures.append("sampled-weight sample count is required for read-only evaluation audit")
+            if os.environ.get("GATE_A_FROZEN_AUDIT", "0") == "1":
+                failures.append("Gate A evidence writer must be disabled for stable evaluation")
+            if int(config.data.get("val_max_samples", 0)) != int(
+                eval_identity_config.get("examples", 0)
+            ):
+                failures.append("data.val_max_samples must equal eval_identity.examples")
+            if failures:
+                raise ValueError("strict stable evaluation identity configuration is invalid: " + "; ".join(failures))
+
         # check eval config
         if config.actor_rollout_ref.rollout.val_kwargs.do_sample:
             assert config.actor_rollout_ref.rollout.temperature > 0, \
@@ -582,6 +757,16 @@ class RayPPOTrainer:
                 processor=self.processor,
                 config=self.config.data,
             )
+        val_max_samples = self.config.data.get("val_max_samples", None)
+        if val_max_samples is not None:
+            val_max_samples = int(val_max_samples)
+            if val_max_samples < 1 or val_max_samples > len(self.val_dataset):
+                raise ValueError(
+                    f"data.val_max_samples must be in [1, {len(self.val_dataset)}], got {val_max_samples}"
+                )
+            if not hasattr(self.val_dataset, "dataframe") or not hasattr(self.val_dataset.dataframe, "select"):
+                raise TypeError("val_max_samples requires a dataset with deterministic dataframe.select support")
+            self.val_dataset.dataframe = self.val_dataset.dataframe.select(range(val_max_samples))
         # consider the design of single controller with a large val dataset in multi-modal scenarios
         # may lead to oom issues
         val_batch_size = self.config.data.val_batch_size or len(self.val_dataset)
@@ -649,7 +834,10 @@ class RayPPOTrainer:
                     raise ValueError(f"identity column {key} has {len(values)} rows, expected {n}")
                 base_data[key] = values
 
-        with open(filename, "w") as f:
+        # Stable-identity evidence is append-only across preregistered attempt
+        # directories.  Refuse an accidental rerun/overwrite at the same path.
+        open_mode = "x" if identities is not None else "w"
+        with open(filename, open_mode, encoding="utf-8") as f:
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -684,6 +872,32 @@ class RayPPOTrainer:
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
 
+        eval_identity_config = self.config.trainer.get("eval_identity", None)
+        strict_eval_identity = bool(
+            eval_identity_config is not None and eval_identity_config.get("enabled", False)
+        )
+        resolved_eval_manifest = None
+        turn_ledger_path = None
+        if strict_eval_identity:
+            from recurrent.research.stable_eval_identity import load_resolved_manifest
+
+            resolved_eval_manifest = load_resolved_manifest(
+                str(eval_identity_config.resolved_manifest_path),
+                expected_hash=str(eval_identity_config.expected_manifest_hash),
+            )
+            turn_ledger_path = os.path.realpath(str(eval_identity_config.turn_ledger_path))
+            turn_ledger_parent = os.path.dirname(turn_ledger_path)
+            if turn_ledger_parent:
+                os.makedirs(turn_ledger_parent, exist_ok=True)
+            try:
+                with open(turn_ledger_path, "x", encoding="utf-8"):
+                    pass
+            except FileExistsError as error:
+                raise FileExistsError(
+                    "stable evaluation turn ledger already exists; preregistered attempts may not overwrite evidence: "
+                    f"{turn_ledger_path}"
+                ) from error
+
         # Lists to collect samples for the table
         sample_inputs = []
         sample_outputs = []
@@ -696,28 +910,34 @@ class RayPPOTrainer:
             # repeat test batch
             test_batch = test_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True)
             val_n = int(self.config.actor_rollout_ref.rollout.val_kwargs.n)
-            trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
             validation_seed_records = None
-            if trajectory_seed_mode not in (None, "", "legacy_shared"):
-                from recurrent.research.trajectory_seeding import build_trajectory_seed_records
-
-                validation_seed_records = build_trajectory_seed_records(
-                    base_seed=int(self.config.actor_rollout_ref.rollout.get("seed", 0)),
-                    global_step=int(self.global_steps),
-                    batch_size=len(test_batch),
-                    rollout_n=val_n,
-                    mode=str(trajectory_seed_mode),
+            identity_batch = None
+            if strict_eval_identity:
+                identity_batch = _build_validation_identities(
+                    test_batch,
+                    val_n=val_n,
+                    resolved_manifest=resolved_eval_manifest,
+                    base_seed=int(eval_identity_config.base_seed),
+                    interface_id=str(eval_identity_config.interface_id),
+                    attempt_id=str(eval_identity_config.attempt_id),
                 )
-            validation_seeds = (
-                [int(record["trajectory_seed"]) for record in validation_seed_records]
-                if validation_seed_records is not None else [0] * len(test_batch)
-            )
-            identity_batch = _build_validation_identities(
-                test_batch,
-                val_n=val_n,
-                manifest_hash=str(self.config.trainer.get("eval_manifest_hash", "")),
-                seeds=validation_seeds,
-            )
+                validation_seeds = [int(value) for value in identity_batch["trajectory_seed"]]
+            else:
+                trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
+                if trajectory_seed_mode not in (None, "", "legacy_shared"):
+                    from recurrent.research.trajectory_seeding import build_trajectory_seed_records
+
+                    validation_seed_records = build_trajectory_seed_records(
+                        base_seed=int(self.config.actor_rollout_ref.rollout.get("seed", 0)),
+                        global_step=int(self.global_steps),
+                        batch_size=len(test_batch),
+                        rollout_n=val_n,
+                        mode=str(trajectory_seed_mode),
+                    )
+                validation_seeds = (
+                    [int(record["trajectory_seed"]) for record in validation_seed_records]
+                    if validation_seed_records is not None else [0] * len(test_batch)
+                )
 
             # we only do validation on rule-based rm
             if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
@@ -756,8 +976,17 @@ class RayPPOTrainer:
                 "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
                 "validate": True,
             }
-            if validation_seed_records is not None:
+            if validation_seed_records is not None or strict_eval_identity:
                 test_gen_batch.meta_info["trajectory_base_seeds"] = validation_seeds
+            if strict_eval_identity:
+                test_gen_batch.meta_info["strict_eval_identity"] = True
+                test_gen_batch.meta_info["stable_eval_identity"] = identity_batch
+                if not self.config.recurrent.enable:
+                    test_gen_batch.non_tensor_batch["request_seeds"] = np.asarray(
+                        validation_seeds, dtype=np.uint64
+                    )
+                    for key, values in identity_batch.items():
+                        test_gen_batch.non_tensor_batch[key] = np.asarray(values, dtype=object)
 
             print(f'test_gen_batch meta info: {test_gen_batch.meta_info}')
             ######
@@ -778,13 +1007,38 @@ class RayPPOTrainer:
             else:
                 from recurrent.utils import final_batch
                 output_gen_batch, final_mask, sample_index = self.generation_manager.run_llm_loop(test_gen_batch, {})
+                if strict_eval_identity:
+                    _append_stable_eval_turn_ledger(turn_ledger_path, output_gen_batch)
                 test_output_gen_batch = final_batch(output_gen_batch, final_mask, sample_index)
-                if identity_batch is not None:
-                    final_source_index = sample_index[final_mask].detach().cpu().tolist()
-                    identity_batch = {
-                        key: [values[int(index)] for index in final_source_index]
-                        for key, values in identity_batch.items()
-                    }
+
+            if strict_eval_identity:
+                from recurrent.research.stable_eval_identity import (
+                    detach_audit_meta_for_metrics,
+                    detach_identity_columns_for_metrics,
+                )
+
+                terminal_response_token_sha256 = [
+                    _response_token_sha256(response)
+                    for response in test_output_gen_batch.batch["responses"]
+                ]
+                identity_batch = detach_identity_columns_for_metrics(
+                    test_output_gen_batch.non_tensor_batch,
+                    test_output_gen_batch.batch,
+                )
+                identity_batch["terminal_response_token_sha256"] = (
+                    terminal_response_token_sha256
+                )
+                detach_audit_meta_for_metrics(
+                    test_batch.meta_info, test_output_gen_batch.meta_info
+                )
+
+                # Identity evidence is deliberately kept outside the reward
+                # and metric DataProto.  This makes the instrumentation
+                # observational: reward code receives the same fields it did
+                # before stable identity was enabled.
+                test_batch.non_tensor_batch.pop("source_order_index", None)
+                if "source_order_index" in test_batch.batch:
+                    test_batch.batch.pop("source_order_index")
 
             if identity_batch is not None:
                 for key, values in identity_batch.items():
@@ -813,6 +1067,18 @@ class RayPPOTrainer:
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
+
+        if strict_eval_identity:
+            from recurrent.research.stable_eval_identity import (
+                identity_columns_to_rows,
+                validate_attempt_identity_rows,
+            )
+
+            validate_attempt_identity_rows(
+                identity_columns_to_rows(sample_identities),
+                examples=int(eval_identity_config.examples),
+                replicas=int(eval_identity_config.replicas),
+            )
 
         # dump generations
         val_data_dir = self.config.trainer.get("validation_data_dir", None)
@@ -947,6 +1213,11 @@ class RayPPOTrainer:
                 )
 
     def _save_checkpoint(self):
+        eval_identity_config = self.config.trainer.get("eval_identity", None)
+        if eval_identity_config is not None and bool(eval_identity_config.get("enabled", False)):
+            raise RuntimeError(
+                "strict stable evaluation is validation-only; checkpoint creation is forbidden"
+            )
         # path: given_path + `/global_step_{global_steps}` + `/actor`
         local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")
 
@@ -1020,6 +1291,110 @@ class RayPPOTrainer:
         )
         self._gate_a_synced_actor_version = int(actor_version)
         self._gate_a_synced_actor_digest = next(iter(actor_digests))
+
+    def _stable_eval_weight_snapshot(self, *, sync_kind: str) -> dict:
+        """Synchronize and attest actor/vLLM weights without writing Gate A evidence."""
+        from recurrent.research.gate_a_execution import gate_a_enabled
+
+        if gate_a_enabled():
+            raise RuntimeError(
+                "stable evaluation refuses to run while the Gate A evidence writer is enabled"
+            )
+        acknowledgements = self.actor_rollout_wg.audit_actor_vllm_weight_sync(
+            int(self.global_steps), int(self.global_steps), str(sync_kind)
+        )
+        expected_ranks = list(range(self.actor_rollout_wg.world_size))
+        actual_ranks = sorted(int(ack["vllm_worker_rank"]) for ack in acknowledgements)
+        if actual_ranks != expected_ranks:
+            raise RuntimeError(
+                "stable evaluation vLLM acknowledgement ranks mismatch: "
+                f"expected={expected_ranks}, actual={actual_ranks}"
+            )
+
+        def require_sha256(ack: dict, field: str) -> str:
+            value = ack.get(field)
+            if not isinstance(value, str) or len(value) != 64:
+                raise RuntimeError(
+                    f"stable evaluation worker acknowledgement has invalid {field}: {value!r}"
+                )
+            try:
+                int(value, 16)
+            except ValueError as error:
+                raise RuntimeError(
+                    f"stable evaluation worker acknowledgement has invalid {field}: {value!r}"
+                ) from error
+            return value
+
+        master_digests = {
+            require_sha256(ack, "actor_master_sampled_tensor_digest")
+            for ack in acknowledgements
+        }
+        actor_digests = {
+            require_sha256(ack, "actor_rollout_sampled_tensor_digest")
+            for ack in acknowledgements
+        }
+        vllm_digests = {
+            require_sha256(ack, "vllm_sampled_tensor_digest")
+            for ack in acknowledgements
+        }
+        vllm_pre_sync_digests = [
+            require_sha256(ack, "vllm_pre_sync_sampled_tensor_digest")
+            for ack in acknowledgements
+        ]
+        if len(master_digests) != 1:
+            raise RuntimeError(
+                f"stable evaluation actor master digests differ across ranks: {sorted(master_digests)}"
+            )
+        if len(actor_digests) != 1 or actor_digests != vllm_digests:
+            raise RuntimeError(
+                "stable evaluation actor/vLLM sampled digests diverged: "
+                f"actor={sorted(actor_digests)}, vllm={sorted(vllm_digests)}"
+            )
+        # The first snapshot wakes dummy-loaded vLLM workers, whose pre-sync
+        # values are intentionally outside the experiment contract.  The final
+        # snapshot, however, must observe the same pre-sync value on every
+        # worker so validation-time drift cannot be hidden by this sync call.
+        pre_sync_digest = None
+        if sync_kind == "stable_eval_after" and len(set(vllm_pre_sync_digests)) != 1:
+            raise RuntimeError(
+                "stable evaluation pre-sync vLLM digests differ across workers: "
+                f"{sorted(set(vllm_pre_sync_digests))}"
+            )
+        if sync_kind == "stable_eval_after":
+            pre_sync_digest = vllm_pre_sync_digests[0]
+        if any(
+            int(ack["loaded_parameter_count"]) != int(ack["model_parameter_count"])
+            for ack in acknowledgements
+        ):
+            raise RuntimeError("stable evaluation vLLM sync did not cover every model parameter")
+
+        invariant_ack_fields = (
+            "optimizer_step_min",
+            "optimizer_step_max",
+            "optimizer_state_entry_count",
+            "optimizer_step_entry_count",
+            "optimizer_step_histogram",
+            "lr_scheduler_last_epoch",
+            "weight_transfer_format",
+            "loaded_parameter_count",
+            "model_parameter_count",
+            "loaded_parameter_names_sha256",
+            "model_parameter_names_sha256",
+            "audited_loaded_parameters",
+            "sampled_parameter_dtypes",
+        )
+        return {
+            "sync_kind": str(sync_kind),
+            "worker_ranks": actual_ranks,
+            "actor_master_sampled_tensor_digest": next(iter(master_digests)),
+            "actor_rollout_sampled_tensor_digest": next(iter(actor_digests)),
+            "vllm_sampled_tensor_digest": next(iter(vllm_digests)),
+            "vllm_pre_sync_sampled_tensor_digest": pre_sync_digest,
+            "worker_evidence": [
+                {field: ack.get(field) for field in invariant_ack_fields}
+                for ack in sorted(acknowledgements, key=lambda item: int(item["vllm_worker_rank"]))
+            ],
+        }
 
     def _audit_gate_a_rollout_start(self, *, global_step: int) -> None:
         from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
@@ -1148,6 +1523,22 @@ class RayPPOTrainer:
             sync_kind="fresh_initial" if self.global_steps == 0 else "resume_loaded",
         )
 
+        eval_identity_config = self.config.trainer.get("eval_identity", None)
+        strict_eval_identity = bool(
+            eval_identity_config is not None and eval_identity_config.get("enabled", False)
+        )
+        stable_eval_weight_before = None
+        if strict_eval_identity:
+            stable_eval_weight_before = self._stable_eval_weight_snapshot(
+                sync_kind="stable_eval_before"
+            )
+
+        if self.config.trainer.get("val_only", False):
+            if not self.config.trainer.get("val_before_train", False):
+                raise ValueError("trainer.val_only requires trainer.val_before_train=true")
+            if self.val_reward_fn is None:
+                raise ValueError("trainer.val_only requires a validation reward function; refusing to enter training")
+
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
@@ -1155,6 +1546,57 @@ class RayPPOTrainer:
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
+                if strict_eval_identity:
+                    if self._actor_update_calls != 0:
+                        raise RuntimeError(
+                            "stable evaluation identity canary reached actor update unexpectedly: "
+                            f"calls={self._actor_update_calls}"
+                        )
+                    stable_eval_weight_after = self._stable_eval_weight_snapshot(
+                        sync_kind="stable_eval_after"
+                    )
+                    for field in (
+                        "actor_master_sampled_tensor_digest",
+                        "actor_rollout_sampled_tensor_digest",
+                        "vllm_sampled_tensor_digest",
+                        "worker_ranks",
+                        "worker_evidence",
+                    ):
+                        if stable_eval_weight_before[field] != stable_eval_weight_after[field]:
+                            raise RuntimeError(
+                                "stable evaluation mutated actor/optimizer/vLLM state: "
+                                f"field={field}, before={stable_eval_weight_before[field]}, "
+                                f"after={stable_eval_weight_after[field]}"
+                            )
+                    if stable_eval_weight_after[
+                        "vllm_pre_sync_sampled_tensor_digest"
+                    ] != stable_eval_weight_before["vllm_sampled_tensor_digest"]:
+                        raise RuntimeError(
+                            "stable evaluation vLLM weights drifted before the final read-only sync: "
+                            f"before_post={stable_eval_weight_before['vllm_sampled_tensor_digest']}, "
+                            f"after_pre={stable_eval_weight_after['vllm_pre_sync_sampled_tensor_digest']}"
+                        )
+                    summary_path = os.path.realpath(str(eval_identity_config.execution_summary_path))
+                    summary_parent = os.path.dirname(summary_path)
+                    if summary_parent:
+                        os.makedirs(summary_parent, exist_ok=True)
+                    summary = {
+                        "record_type": "execution_summary",
+                        "interface_id": str(eval_identity_config.interface_id),
+                        "attempt_id": str(eval_identity_config.attempt_id),
+                        "eval_manifest_hash": str(eval_identity_config.expected_manifest_hash),
+                        "resolved_runtime_config_sha256": self._stable_eval_runtime_config_sha256,
+                        "global_step": int(self.global_steps),
+                        "actor_update_calls": int(self._actor_update_calls),
+                        "optimizer_step_calls": 0,
+                        "checkpoint_save_calls": 0,
+                        "resume_mode": str(self.config.trainer.resume_mode),
+                        "validation_only": True,
+                        "weight_snapshot_before": stable_eval_weight_before,
+                        "weight_snapshot_after": stable_eval_weight_after,
+                    }
+                    with open(summary_path, "x", encoding="utf-8") as stream:
+                        stream.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
                 return
 
         # add tqdm
@@ -1571,6 +2013,14 @@ class RayPPOTrainer:
 
                         # update actor
                         with _timer("update_actor", timing_raw):
+                            eval_identity_config = self.config.trainer.get("eval_identity", None)
+                            if eval_identity_config is not None and bool(
+                                eval_identity_config.get("enabled", False)
+                            ):
+                                raise RuntimeError(
+                                    "strict stable evaluation reached actor update; refusing before mutation"
+                                )
+                            self._actor_update_calls += 1
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)

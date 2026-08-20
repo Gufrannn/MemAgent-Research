@@ -22,6 +22,7 @@ from codetiming import Timer
 from verl import DataProto
 
 from .interface import RAgent, RConfig
+from .research.stable_eval_identity import validate_configured_request_binding
 from .research.trajectory_seeding import derive_turn_request_seeds
 from .utils import (chat_template, create_attention_mask, create_position_ids,
                     graceful_padding, indexing_proto,
@@ -143,6 +144,19 @@ class LLMGenerationManager:
         pad_token_id = self.tokenizer.pad_token_id
         self.agent.start(gen_batch, timing_raw)
         trajectory_base_seeds = meta_info.get("trajectory_base_seeds")
+        strict_eval_identity = bool(meta_info.get("strict_eval_identity", False))
+        stable_eval_identity = meta_info.get("stable_eval_identity")
+        if strict_eval_identity:
+            if trajectory_base_seeds is None:
+                raise ValueError("strict stable evaluation identity requires trajectory_base_seeds")
+            if not isinstance(stable_eval_identity, dict) or not stable_eval_identity:
+                raise ValueError("strict stable evaluation identity requires row-aligned identity columns")
+            identity_lengths = {key: len(values) for key, values in stable_eval_identity.items()}
+            if set(identity_lengths.values()) != {len(gen_batch)}:
+                raise ValueError(
+                    "stable evaluation identity columns must align with recurrent input rows: "
+                    f"batch={len(gen_batch)}, columns={identity_lengths}"
+                )
         recurrent_turn = 0
         # Main generation loop, agent should indicate whether to stop
         while not self.agent.done():
@@ -183,6 +197,47 @@ class LLMGenerationManager:
                     gen_output.non_tensor_batch["request_seed"] = np.asarray(
                         meta_info_gen["request_seeds"], dtype=np.uint64
                     )
+                    if strict_eval_identity:
+                        configured = gen_output.non_tensor_batch.get(
+                            "configured_request_seed"
+                        )
+                        request_prompt_hashes = gen_output.non_tensor_batch.get(
+                            "request_prompt_token_sha256"
+                        )
+                        returned_prompt_hashes = gen_output.non_tensor_batch.get(
+                            "returned_prompt_token_sha256"
+                        )
+                        worker_ranks = gen_output.non_tensor_batch.get("rollout_worker_rank")
+                        expected = np.asarray(meta_info_gen["request_seeds"], dtype=np.uint64)
+                        if any(
+                            value is None
+                            for value in (
+                                configured,
+                                request_prompt_hashes,
+                                returned_prompt_hashes,
+                                worker_ranks,
+                            )
+                        ):
+                            raise ValueError(
+                                "strict stable evaluation identity requires configured seed, "
+                                "returned prompt-token, and worker-rank evidence"
+                            )
+                        validate_configured_request_binding(
+                            expected,
+                            configured,
+                            request_prompt_hashes,
+                            returned_prompt_hashes,
+                            worker_ranks,
+                        )
+                        active_identity_indices = np.asarray(active_sample_indices, dtype=np.int64)
+                        for key, values in stable_eval_identity.items():
+                            gen_output.non_tensor_batch[key] = np.asarray(values, dtype=object)[
+                                active_identity_indices
+                            ]
+                        gen_output.non_tensor_batch["active_sample_index"] = active_identity_indices
+                        gen_output.non_tensor_batch["is_final"] = np.asarray(
+                            self.agent.final_mask_list[-1].tolist(), dtype=bool
+                        )
                 gen_output_list.append(gen_output)
                 logger.info('agent update done')
                 recurrent_turn += 1

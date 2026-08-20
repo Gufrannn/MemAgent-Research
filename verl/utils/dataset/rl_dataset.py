@@ -166,6 +166,13 @@ class RLHFDataset(Dataset):
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
         row_dict: dict = self.dataframe[item]
+        # Stable-evaluation runs opt in to carrying the position in the
+        # production-effective dataset.  It is deliberately distinct from the
+        # semantic ``extra_info.index`` stored below, and stays absent from
+        # ordinary training batches so this instrumentation cannot affect
+        # reward or optimization code.
+        if self.config.get("include_source_order_index", False):
+            row_dict["source_order_index"] = int(item)
         messages = self._build_messages(row_dict)
         model_inputs = {}
 

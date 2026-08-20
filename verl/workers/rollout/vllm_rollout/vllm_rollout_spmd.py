@@ -26,6 +26,7 @@ When working with Megatron:
 - After inference, all the parameters that doesn't belong to this pp rank is freed.
 """
 
+import hashlib
 import logging
 import os
 from contextlib import contextmanager
@@ -54,6 +55,11 @@ import time
 import datetime 
 def _now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _prompt_token_sha256(token_ids) -> str:
+    values = np.asarray(list(token_ids), dtype="<i8")
+    return hashlib.sha256(values.tobytes(order="C")).hexdigest()
 # TODO
 # 1. support pp in vllm
 # 2. passing tokenizer is not necessary? no encoding/decoding is happending here
@@ -284,6 +290,11 @@ class vLLMRollout(BaseRollout):
             if torch.distributed.get_rank() == 0:
                 print(f"prepare time: {prepared_time - start_time}")
             request_seeds = non_tensor_batch.pop("request_seeds", None)
+            strict_eval_identity = bool(prompts.meta_info.get("strict_eval_identity", False))
+            if strict_eval_identity and request_seeds is None:
+                raise ValueError(
+                    "strict stable evaluation identity requires one row-aligned request seed per vLLM input"
+                )
             effective_sampling_params = self.sampling_params
             if request_seeds is not None:
                 if len(request_seeds) != len(vllm_inputs):
@@ -296,12 +307,58 @@ class vLLMRollout(BaseRollout):
                     request_sampling_params.seed = int(request_seed)
                     effective_sampling_params.append(request_sampling_params)
                 non_tensor_batch["rollout_request_seed"] = np.asarray(request_seeds, dtype=np.uint64)
+                if strict_eval_identity:
+                    non_tensor_batch["configured_request_seed"] = np.asarray(
+                        request_seeds, dtype=np.uint64
+                    )
+                    non_tensor_batch["request_prompt_token_sha256"] = np.asarray(
+                        [
+                            _prompt_token_sha256(item["prompt_token_ids"])
+                            for item in vllm_inputs
+                        ],
+                        dtype=object,
+                    )
+                    non_tensor_batch["rollout_worker_rank"] = np.full(
+                        len(request_seeds), torch.distributed.get_rank(), dtype=np.int64
+                    )
 
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=effective_sampling_params,
                 use_tqdm=False,
             )
+            if strict_eval_identity:
+                if len(outputs) != len(vllm_inputs):
+                    raise ValueError(
+                        "strict stable evaluation vLLM output count differs from input count: "
+                        f"{len(outputs)} != {len(vllm_inputs)}"
+                    )
+                returned_prompt_hashes = []
+                for row, (request, output) in enumerate(zip(vllm_inputs, outputs)):
+                    if len(output.outputs) != 1:
+                        raise ValueError(
+                            "strict stable evaluation requires exactly one vLLM sample "
+                            f"per upstream-replicated request; local row {row} returned "
+                            f"{len(output.outputs)} samples"
+                        )
+                    returned_prompt_ids = getattr(output, "prompt_token_ids", None)
+                    if returned_prompt_ids is None:
+                        raise ValueError(
+                            f"strict stable evaluation vLLM output {row} lacks prompt_token_ids"
+                        )
+                    expected_prompt_ids = list(request["prompt_token_ids"])
+                    returned_prompt_ids = list(returned_prompt_ids)
+                    if returned_prompt_ids != expected_prompt_ids:
+                        raise ValueError(
+                            "strict stable evaluation vLLM reordered or changed prompt tokens "
+                            f"at local row {row}"
+                        )
+                    returned_prompt_hashes.append(
+                        _prompt_token_sha256(returned_prompt_ids)
+                    )
+                non_tensor_batch["returned_prompt_token_sha256"] = np.asarray(
+                    returned_prompt_hashes, dtype=object
+                )
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
             # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
