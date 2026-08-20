@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -16,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recurrent.research.gate_a_execution import checkpoint_inventory, sha256_file
+from recurrent.research.gate_a_execution import checkpoint_inventory, load_frozen_manifest, sha256_file
 from recurrent.research.trajectory_seeding import build_trajectory_seed_records, derive_turn_request_seeds
 
 
@@ -334,6 +335,14 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
     p0_path = Path(paths["certificate_root"]) / "p0_preflight.json"
     p0_certificate = json.loads(p0_path.read_text()) if p0_path.is_file() else {}
     p0_commit = p0_certificate.get("evidence", {}).get("git_commit")
+    resolved_payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    resolved_manifest_sha256 = hashlib.sha256(resolved_payload).hexdigest()
+    p0_resolved_manifest_sha256 = p0_certificate.get("evidence", {}).get("resolved_manifest_sha256")
+    p0_resolved_manifest_path = p0_certificate.get("evidence", {}).get("resolved_manifest_path")
+    resolved_manifest_file_matches = False
+    if p0_resolved_manifest_path and Path(p0_resolved_manifest_path).is_file():
+        frozen_resolved_manifest = json.loads(Path(p0_resolved_manifest_path).read_text(encoding="utf-8"))
+        resolved_manifest_file_matches = frozen_resolved_manifest == manifest
     ledger_commits = {row.get("git_commit") for row in execution_records}
     current_commit = subprocess.check_output(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True
@@ -341,6 +350,8 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
     p0_pass = (
         p0_certificate.get("status") == "PASS"
         and p0_commit == current_commit
+        and p0_resolved_manifest_sha256 == resolved_manifest_sha256
+        and resolved_manifest_file_matches
         and ledger_commits == {current_commit}
     )
     p1_pass = not step2_missing and all(step in signal_steps for step in (1, 2))
@@ -383,7 +394,16 @@ def main() -> int:
     parser.add_argument("--write-report", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    try:
+        manifest = load_frozen_manifest(args.manifest)
+    except ValueError as error:
+        print(json.dumps({
+            "phase": args.phase,
+            "status": "FAIL",
+            "decision": "GATE_A_NO_GO:P0",
+            "failures": [str(error)],
+        }, indent=2, sort_keys=True))
+        return 1
     report, inventory_records = build_report(manifest, args.phase)
     if args.write_report:
         name = "p1_audit_report.json" if args.phase == "p1" else "gate_a_final_report.json"

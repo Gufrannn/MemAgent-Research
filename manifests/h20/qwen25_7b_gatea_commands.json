@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
   "manifest": "manifests/h20/qwen25_7b_gatea_seed2026.yaml",
-  "working_directory": "/data/cw/memagent_work/MemAgent-Research",
+  "ledger_schema": "gate_a_execution_ledger.schema.json",
+  "required_environment": ["WORK_ROOT", "REPO_DIR"],
+  "working_directory": "${REPO_DIR}",
   "commands": {
-    "p0": ["/data/cw/memagent_work/.venv/bin/python", "tools/h20/preflight_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--check-runtime", "--write-certificate"],
+    "p0": ["${WORK_ROOT}/.venv/bin/python", "tools/h20/preflight_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--check-runtime", "--write-certificate"],
     "p1": ["bash", "scripts/h20/run_qwen25_7b_gatea_fresh2.sh"],
     "p2": ["bash", "scripts/h20/resume_qwen25_7b_gatea_step2_to3.sh"],
-    "audit": ["/data/cw/memagent_work/.venv/bin/python", "tools/h20/audit_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--write-report"]
+    "audit": ["${WORK_ROOT}/.venv/bin/python", "tools/h20/audit_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--write-report"]
   },
   "required_sequence": ["p0", "p1", "p2", "audit"],
   "gpu_execution_authorized_by_this_manifest": false

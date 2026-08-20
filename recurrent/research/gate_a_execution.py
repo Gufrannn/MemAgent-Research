@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+REQUIRED_RUNTIME_BINDINGS = ("WORK_ROOT", "REPO_DIR")
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -22,6 +25,39 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def resolve_manifest_environment(value: Any, environment: Mapping[str, str] | None = None) -> Any:
+    """Resolve only the two explicit H20 path bindings; reject implicit defaults."""
+    source = os.environ if environment is None else environment
+    missing = [name for name in REQUIRED_RUNTIME_BINDINGS if not source.get(name)]
+    if missing:
+        raise ValueError(f"missing explicit runtime path bindings: {missing}")
+    bindings = {name: str(source[name]) for name in REQUIRED_RUNTIME_BINDINGS}
+    non_absolute = [name for name, path in bindings.items() if not Path(path).is_absolute()]
+    if non_absolute:
+        raise ValueError(f"runtime path bindings must be absolute: {non_absolute}")
+
+    def resolve(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {key: resolve(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [resolve(child) for child in item]
+        if isinstance(item, str):
+            result = item
+            for name, path in bindings.items():
+                result = result.replace(f"${{{name}}}", path)
+            if "${" in result:
+                raise ValueError(f"unresolved manifest placeholder: {result}")
+            return result
+        return item
+
+    return resolve(value)
+
+
+def load_frozen_manifest(path: str | Path, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return resolve_manifest_environment(raw, environment)
 
 
 def append_jsonl(path: str | Path, record: Mapping[str, Any]) -> None:

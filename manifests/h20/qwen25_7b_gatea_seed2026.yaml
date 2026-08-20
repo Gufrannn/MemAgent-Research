@@ -3,21 +3,26 @@
   "frozen_at": "2026-08-20T00:00:00+08:00",
   "branch": "h20/qwen25-7b-gatea-frozen-20260820",
   "base_commit": "bf2efb6c25334b7382a35735bfbe6ec1a4a8d497",
-  "work_root": "/data/cw/memagent_work",
-  "repository": "/data/cw/memagent_work/MemAgent-Research",
-  "python": "/data/cw/memagent_work/.venv/bin/python",
+  "ledger_schema": "gate_a_execution_ledger.schema.json",
+  "runtime_binding": {
+    "required_environment": ["WORK_ROOT", "REPO_DIR"],
+    "automatic_repository_selection": false
+  },
+  "work_root": "${WORK_ROOT}",
+  "repository": "${REPO_DIR}",
+  "python": "${WORK_ROOT}/.venv/bin/python",
   "model": {
     "id": "Qwen/Qwen2.5-7B-Instruct",
-    "path": "/data/cw/memagent_work/models/Qwen2.5-7B-Instruct",
+    "path": "${WORK_ROOT}/models/Qwen2.5-7B-Instruct",
     "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
     "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"
   },
   "data": {
-    "train": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet",
-    "validation": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet",
+    "train": "${WORK_ROOT}/datasets/hotpotqa/hotpotqa_train_32k.parquet",
+    "validation": "${WORK_ROOT}/datasets/hotpotqa/hotpotqa_dev.parquet",
     "shuffle": false,
     "dataloader_num_workers": 0,
-    "manifest_sha256": "2bdc34886471e22a30e1f61f19ae5a49247cf5bacc576e8d8b23f91554496dcf"
+    "manifest_sha256": "2535fcebcd4d09fd7ea5131185c276b388fc4d5f2fec355f15f81010cbabea0d"
   },
   "gpu": {
     "declared_whitelist": [4, 5, 6, 7],
@@ -58,13 +63,13 @@
     "resume": "qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820"
   },
   "paths": {
-    "checkpoint_root": "/data/cw/memagent_work/logs/memory_agent",
-    "log_root": "/data/cw/memagent_work/logs/gate_a_frozen_20260820",
-    "certificate_root": "/data/cw/memagent_work/logs/gate_a_frozen_20260820/certificates",
-    "fresh_output": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
-    "resume_output": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820",
-    "resume_source": "/data/cw/memagent_work/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820/global_step_2",
-    "execution_ledger": "/data/cw/memagent_work/logs/gate_a_frozen_20260820/gate_a_execution_ledger.jsonl"
+    "checkpoint_root": "${WORK_ROOT}/logs/memory_agent",
+    "log_root": "${WORK_ROOT}/logs/gate_a_frozen_20260820",
+    "certificate_root": "${WORK_ROOT}/logs/gate_a_frozen_20260820/certificates",
+    "fresh_output": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
+    "resume_output": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820",
+    "resume_source": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820/global_step_2",
+    "execution_ledger": "${WORK_ROOT}/logs/gate_a_frozen_20260820/gate_a_execution_ledger.jsonl"
   },
   "weight_sync": {
     "samples_per_tensor": 256,

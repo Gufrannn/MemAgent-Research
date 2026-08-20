@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly WORK_ROOT=/data/cw/memagent_work
-readonly CODE=/data/cw/memagent_work/MemAgent-Research
-readonly PYTHON=/data/cw/memagent_work/.venv/bin/python
+[[ -n ${WORK_ROOT:-} ]] || {
+  echo 'GATE_A_NO_GO:P0 WORK_ROOT must be explicitly set; no runtime path is selected automatically' >&2; exit 66;
+}
+[[ -n ${REPO_DIR:-} ]] || {
+  echo 'GATE_A_NO_GO:P0 REPO_DIR must be explicitly set; resolve the repository-path conflict before P0' >&2; exit 67;
+}
+[[ $WORK_ROOT == /* && $REPO_DIR == /* ]] || {
+  echo 'GATE_A_NO_GO:P0 WORK_ROOT and REPO_DIR must be absolute paths' >&2; exit 69;
+}
+readonly WORK_ROOT
+readonly REPO_DIR
+readonly CODE=$REPO_DIR
+readonly PYTHON=$WORK_ROOT/.venv/bin/python
 readonly MANIFEST=$CODE/manifests/h20/qwen25_7b_gatea_seed2026.yaml
 readonly LOG_ROOT=$WORK_ROOT/logs/gate_a_frozen_20260820
 readonly CERTIFICATE_ROOT=$LOG_ROOT/certificates
@@ -17,6 +27,11 @@ readonly FROZEN_GPU_DECLARATION=4,5,6,7
 readonly DIGEST_PARAMETERS=model.layers.0.input_layernorm.weight,model.layers.0.post_attention_layernorm.weight,model.layers.27.input_layernorm.weight,model.layers.27.post_attention_layernorm.weight
 
 gatea_require_clean_frozen_checkout() {
+  local invoked_repo
+  invoked_repo=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+  [[ $(cd -- "$CODE" && pwd -P) == "$invoked_repo" ]] || {
+    echo "GATE_A_NO_GO:P0 invoked checkout differs from explicit REPO_DIR: $invoked_repo != $CODE" >&2; exit 68;
+  }
   [[ $(cd "$CODE" && git branch --show-current) == h20/qwen25-7b-gatea-frozen-20260820 ]] || {
     echo 'GATE_A_NO_GO:P0 wrong branch' >&2; exit 70;
   }

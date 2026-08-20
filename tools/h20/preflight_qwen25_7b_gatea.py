@@ -12,6 +12,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from recurrent.research.gate_a_execution import load_frozen_manifest
+
 REQUIRED_GIT_OBJECTS = (
     "scripts/h20/run_qwen25_7b_gatea_fresh2.sh",
     "scripts/h20/resume_qwen25_7b_gatea_step2_to3.sh",
@@ -19,7 +25,7 @@ REQUIRED_GIT_OBJECTS = (
     "tools/h20/audit_qwen25_7b_gatea.py",
     "manifests/h20/qwen25_7b_gatea_seed2026.yaml",
     "manifests/h20/qwen25_7b_gatea_commands.json",
-    "schemas/h20/gate_a_execution_ledger.schema.json",
+    "gate_a_execution_ledger.schema.json",
 )
 
 
@@ -42,15 +48,25 @@ def git(repo: Path, *args: str) -> str:
 
 def load_manifest(path: Path) -> dict:
     # JSON is a strict YAML subset, avoiding an undeclared parser dependency in P0.
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_frozen_manifest(path)
 
 
 def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
     manifest_path = manifest_path.resolve()
     repo = manifest_path.parents[2]
+    raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest = load_manifest(manifest_path)
     failures: list[str] = []
     evidence: dict[str, object] = {}
+    evidence["resolved_manifest"] = manifest
+    evidence["resolved_manifest_sha256"] = canonical_sha256(manifest)
+
+    expected_binding = {
+        "required_environment": ["WORK_ROOT", "REPO_DIR"],
+        "automatic_repository_selection": False,
+    }
+    if raw_manifest.get("runtime_binding") != expected_binding:
+        failures.append(f"runtime binding is not explicit/fail-closed: {raw_manifest.get('runtime_binding')}")
 
     head = git(repo, "rev-parse", "HEAD")
     branch = git(repo, "branch", "--show-current")
@@ -99,7 +115,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
     }:
         failures.append(f"backend configuration drift: {backend}")
 
-    data_spec = dict(manifest["data"])
+    data_spec = dict(raw_manifest["data"])
     expected_data_manifest_sha = data_spec.pop("manifest_sha256")
     actual_data_manifest_sha = canonical_sha256(data_spec)
     evidence["data_manifest_sha256"] = actual_data_manifest_sha
@@ -146,7 +162,13 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
 
     commands = json.loads((repo / "manifests/h20/qwen25_7b_gatea_commands.json").read_text())
     evidence["command_manifest_sha256"] = canonical_sha256(commands)
-    json.loads((repo / "schemas/h20/gate_a_execution_ledger.schema.json").read_text())
+    if commands.get("required_environment") != ["WORK_ROOT", "REPO_DIR"]:
+        failures.append("command manifest does not require explicit WORK_ROOT/REPO_DIR")
+    if manifest.get("ledger_schema") != "gate_a_execution_ledger.schema.json" or commands.get(
+        "ledger_schema"
+    ) != "gate_a_execution_ledger.schema.json":
+        failures.append("ledger schema Git object name drifted")
+    json.loads((repo / "gate_a_execution_ledger.schema.json").read_text())
 
     if check_runtime and Path(manifest["python"]).is_file():
         completed = subprocess.run(
@@ -176,14 +198,31 @@ def main() -> int:
     parser.add_argument("--write-certificate", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = run_preflight(args.manifest, args.check_runtime)
-    manifest = load_manifest(args.manifest)
+    try:
+        result = run_preflight(args.manifest, args.check_runtime)
+        manifest = load_manifest(args.manifest)
+    except ValueError as error:
+        result = {
+            "gate": "P0",
+            "status": "FAIL",
+            "decision": "GATE_A_NO_GO:P0",
+            "failures": [str(error)],
+            "evidence": {},
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 1
     if args.write_certificate:
         target = args.output or Path(manifest["paths"]["certificate_root"]) / "p0_preflight.json"
+        resolved_target = target.with_name("p0_resolved_manifest.json")
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            raise SystemExit(f"refusing to overwrite append-only certificate: {target}")
-        target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        existing = [str(path) for path in (target, resolved_target) if path.exists()]
+        if existing:
+            raise SystemExit(f"refusing to overwrite append-only P0 artifacts: {existing}")
+        result["evidence"]["resolved_manifest_path"] = str(resolved_target)
+        with resolved_target.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        with target.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
         ledger = Path(manifest["paths"]["execution_ledger"])
         ledger.parent.mkdir(parents=True, exist_ok=True)
         record = {

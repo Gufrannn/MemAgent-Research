@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from recurrent.research.gate_a_execution import append_jsonl, checkpoint_inventory
+from recurrent.research.gate_a_execution import load_frozen_manifest
 from tools.h20.audit_qwen25_7b_gatea import audit_seeds, audit_sync
 from recurrent.research.trajectory_seeding import build_trajectory_seed_records, derive_turn_request_seeds
 
@@ -46,11 +47,28 @@ class FrozenManifestTests(unittest.TestCase):
 
     def test_command_manifest_is_non_authorizing_and_schema_parses(self):
         commands = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_commands.json").read_text())
-        schema = json.loads((REPO / "schemas/h20/gate_a_execution_ledger.schema.json").read_text())
+        schema = json.loads((REPO / "gate_a_execution_ledger.schema.json").read_text())
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
-        self.assertEqual(commands["working_directory"], "/data/cw/memagent_work/MemAgent-Research")
+        self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
+        self.assertEqual(commands["required_environment"], ["WORK_ROOT", "REPO_DIR"])
+        self.assertEqual(commands["working_directory"], "${REPO_DIR}")
         self.assertEqual(commands["required_sequence"], ["p0", "p1", "p2", "audit"])
         self.assertIn("weight_sync_ack", schema["properties"]["record_type"]["enum"])
+
+    def test_runtime_paths_require_explicit_binding_without_selecting_repo(self):
+        path = REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml"
+        first = load_frozen_manifest(path, {
+            "WORK_ROOT": "/data/cw/memagent_work",
+            "REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research",
+        })
+        second = load_frozen_manifest(path, {
+            "WORK_ROOT": "/data/cw/memagent_work",
+            "REPO_DIR": "/data/cw/memagent_work/MemAgent-Research",
+        })
+        self.assertEqual(first["repository"], "/data/cw/memagent_work/code/MemAgent-Research")
+        self.assertEqual(second["repository"], "/data/cw/memagent_work/MemAgent-Research")
+        with self.assertRaisesRegex(ValueError, "missing explicit runtime path bindings"):
+            load_frozen_manifest(path, {})
 
 
 class DigestTests(unittest.TestCase):
