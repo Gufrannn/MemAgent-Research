@@ -135,13 +135,13 @@
     "semantics": "read-only actor master and post-sync vLLM digests before/after validation, plus the final pre-sync vLLM digest that detects validation-time drift before resynchronization"
   },
   "paths": {
-    "log_root": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821",
-    "certificate_root": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/certificates",
-    "p0_certificate": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/certificates/p0_preflight.json",
-    "resolved_manifest": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/certificates/p0_resolved_manifest.json",
-    "final_report": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/certificates/stable_i4x2_final_report.json",
-    "execution_ledger": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/stable_identity_execution_ledger.jsonl",
-    "repeat_a": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/repeat_a",
-    "repeat_b": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821/repeat_b"
+    "log_root": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2",
+    "certificate_root": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates",
+    "p0_certificate": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json",
+    "final_report": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/stable_i4x2_final_report.json",
+    "execution_ledger": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/stable_identity_execution_ledger.jsonl",
+    "repeat_a": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/repeat_a",
+    "repeat_b": "${MEMAGENT_STABLE_I_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/repeat_b"
   }
 }
