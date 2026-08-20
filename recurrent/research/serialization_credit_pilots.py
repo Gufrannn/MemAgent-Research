@@ -8,6 +8,7 @@ reward computation, and actor updates.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import itertools
 import json
 import math
@@ -35,6 +36,7 @@ STABLE_FIELDS = (
 SMSB_REGIMES = ("temperature_zero", "matched_seed", "independent_seed")
 TETRAD_ROLES = ("generated", "empty", "irrelevant", "shuffle", "gold")
 FROZEN_VLLM_VERSION = "0.8.2"
+PARENT_RECEIPT_SCHEMA = "memagent.serialization-credit.parent-launch-receipt.v2"
 
 
 def canonical_json(value: Any) -> str:
@@ -57,6 +59,120 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def parent_authority_mac(
+    authority_secret: bytes, domain: str, payload: Mapping[str, Any]
+) -> str:
+    if not isinstance(authority_secret, bytes) or len(authority_secret) < 32:
+        raise ValueError("parent authority secret must contain at least 32 bytes")
+    if not isinstance(domain, str) or not domain:
+        raise ValueError("parent authority MAC domain is empty")
+    message = domain.encode("ascii") + b"\0" + canonical_json(dict(payload)).encode(
+        "utf-8"
+    )
+    return hmac.new(authority_secret, message, hashlib.sha256).hexdigest()
+
+
+def build_parent_launch_receipt(
+    payload: Mapping[str, Any], authority_secret: bytes
+) -> dict[str, Any]:
+    receipt = dict(payload)
+    if receipt.get("schema") != PARENT_RECEIPT_SCHEMA:
+        raise ValueError("parent receipt schema differs")
+    if receipt.get("record_type") != "parent_launch_receipt":
+        raise ValueError("parent receipt record type differs")
+    if receipt.get("child_kind") not in {
+        "smsb_capture",
+        "smsb_replay",
+        "tetrad_replay",
+    }:
+        raise ValueError("parent receipt child kind is unsupported")
+    for field in ("child_identity", "artifact", "stdout_artifact"):
+        if not isinstance(receipt.get(field), str) or not receipt[field]:
+            raise ValueError(f"parent receipt {field} is empty")
+    for field in (
+        "credential_id",
+        "credential_mac",
+        "credential_sha256",
+        "artifact_sha256",
+        "artifact_canonical_sha256",
+        "stdout_artifact_sha256",
+        "runner_argv_sha256",
+        "runner_code_sha256",
+        "current_binding_sha256",
+        "runtime_binding_sha256",
+        "execution_binding_sha256",
+        "authority_secret_sha256",
+    ):
+        require_sha256(receipt.get(field), f"receipt.{field}")
+    for field in ("parent_launcher_pid", "child_pid", "observed_child_ppid"):
+        require_int(receipt.get(field), f"receipt.{field}", minimum=1)
+    if receipt["observed_child_ppid"] != receipt["parent_launcher_pid"]:
+        raise ValueError("parent receipt did not observe itself as child PPID")
+    if require_int(receipt.get("child_exit_code"), "receipt.child_exit_code") != 0:
+        raise ValueError("parent receipt child exit code is not zero")
+    if receipt.get("parent_observed_launch") is not True:
+        raise ValueError("parent receipt lacks parent-observed launch evidence")
+    if receipt.get("training_authorized") is not False:
+        raise ValueError("parent receipt improperly authorizes training")
+    unsigned = dict(receipt)
+    unsigned.pop("receipt_id", None)
+    unsigned.pop("receipt_mac", None)
+    receipt_id = canonical_sha256(unsigned)
+    signed = {**unsigned, "receipt_id": receipt_id}
+    signed["receipt_mac"] = parent_authority_mac(
+        authority_secret, "parent-launch-receipt-v2", signed
+    )
+    return signed
+
+
+def validate_parent_launch_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    authority_secret: bytes,
+    artifact_payload: Any,
+    child_evidence: Mapping[str, Any],
+    child_kind: str,
+    child_identity: str,
+) -> dict[str, Any]:
+    raw = dict(receipt)
+    receipt_id = require_sha256(raw.get("receipt_id"), "receipt.receipt_id")
+    receipt_mac = require_sha256(raw.get("receipt_mac"), "receipt.receipt_mac")
+    unsigned = dict(raw)
+    unsigned.pop("receipt_id")
+    unsigned.pop("receipt_mac")
+    rebuilt = build_parent_launch_receipt(unsigned, authority_secret)
+    if not hmac.compare_digest(receipt_id, rebuilt["receipt_id"]) or not hmac.compare_digest(
+        receipt_mac, rebuilt["receipt_mac"]
+    ):
+        raise ValueError("parent launch receipt signature differs")
+    if raw.get("authority_secret_sha256") != hashlib.sha256(
+        authority_secret
+    ).hexdigest():
+        raise ValueError("parent launch receipt authority binding differs")
+    if raw.get("child_kind") != child_kind or raw.get("child_identity") != child_identity:
+        raise ValueError("parent launch receipt child identity differs")
+    if raw.get("artifact_canonical_sha256") != canonical_sha256(artifact_payload):
+        raise ValueError("parent launch receipt canonical artifact digest differs")
+    expected_cross_binding = {
+        "child_pid": child_evidence.get("process_pid"),
+        "observed_child_ppid": child_evidence.get("observed_parent_pid"),
+        "process_instance_uuid": child_evidence.get("process_instance_uuid"),
+        "credential_id": child_evidence.get("parent_credential_id"),
+        "credential_mac": child_evidence.get("parent_credential_mac"),
+        "credential_sha256": child_evidence.get("parent_credential_sha256"),
+        "current_binding_sha256": child_evidence.get("current_binding_sha256"),
+        "runtime_binding_sha256": child_evidence.get("runtime_binding_sha256"),
+        "execution_binding_sha256": child_evidence.get(
+            "execution_binding_sha256",
+            child_evidence.get("engine_config_sha256"),
+        ),
+    }
+    for field, value in expected_cross_binding.items():
+        if raw.get(field) != value:
+            raise ValueError(f"parent launch receipt/result differs at {field}")
+    return rebuilt
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -661,6 +777,9 @@ def summarize_smsb_pilot(
     replay_payloads: Sequence[Mapping[str, Any]],
     *,
     expected_examples: int = 4,
+    capture_receipt: Mapping[str, Any] | None = None,
+    replay_receipts: Sequence[Mapping[str, Any]] | None = None,
+    authority_secret: bytes | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     canonical_captures: list[Mapping[str, Any]] = []
@@ -672,6 +791,26 @@ def summarize_smsb_pilot(
     captures_by_id = {str(row.get("example_id")): row for row in captures}
     if len(captures) != expected_examples or len(captures_by_id) != expected_examples:
         errors.append("capture_bijection_failed")
+    if authority_secret is None or capture_receipt is None:
+        errors.append("parent_receipt_capture_missing")
+    elif canonical_captures:
+        try:
+            capture_execution = canonical_captures[0]["execution"]
+            if any(
+                canonical_json(row["execution"]) != canonical_json(capture_execution)
+                for row in canonical_captures[1:]
+            ):
+                raise ValueError("capture rows do not share one process execution")
+            validate_parent_launch_receipt(
+                capture_receipt,
+                authority_secret=authority_secret,
+                artifact_payload=list(canonical_captures),
+                child_evidence=capture_execution,
+                child_kind="smsb_capture",
+                child_identity="capture4",
+            )
+        except Exception as error:
+            errors.append(f"parent_receipt_capture_invalid:{error}")
     if canonical_captures:
         capture_processes = {
             row.get("execution", {}).get("process_instance_uuid") for row in canonical_captures
@@ -708,6 +847,29 @@ def summarize_smsb_pilot(
     expected_replays = expected_examples * len(SMSB_REGIMES)
     if len(replay_payloads) != expected_replays:
         errors.append(f"replay_count:{len(replay_payloads)}:expected_{expected_replays}")
+    receipts_by_identity: dict[str, Mapping[str, Any]] = {}
+    if replay_receipts is None or authority_secret is None:
+        errors.append("parent_receipt_replays_missing")
+    else:
+        receipts_by_identity = {
+            str(receipt.get("child_identity")): receipt for receipt in replay_receipts
+        }
+        if (
+            len(replay_receipts) != expected_replays
+            or len(receipts_by_identity) != expected_replays
+        ):
+            errors.append("parent_receipt_replay_bijection_failed")
+        parent_launcher_pids = [
+            capture_receipt.get("parent_launcher_pid")
+            if capture_receipt is not None
+            else None,
+            *(receipt.get("parent_launcher_pid") for receipt in replay_receipts),
+        ]
+        if (
+            any(type(value) is not int or value < 1 for value in parent_launcher_pids)
+            or len(set(parent_launcher_pids)) != expected_replays + 1
+        ):
+            errors.append("parent_launcher_pid_not_unique")
     engine_ids = [item.get("result", {}).get("engine_id") for item in replay_payloads]
     cache_ids = [item.get("result", {}).get("cache_namespace") for item in replay_payloads]
     process_uuids = [
@@ -754,6 +916,24 @@ def summarize_smsb_pilot(
         if canonical_json(validation) != canonical_json(payload.get("validation", {})):
             errors.append(f"persisted_replay_validation_mismatch:{capture_id}")
         key = (str(validation.get("example_id", "")), str(validation.get("regime", "")))
+        child_identity = f"{key[0]}::{key[1]}"
+        receipt = receipts_by_identity.get(child_identity)
+        if receipt is None:
+            errors.append(f"parent_receipt_replay_missing:{child_identity}")
+        else:
+            try:
+                validate_parent_launch_receipt(
+                    receipt,
+                    authority_secret=authority_secret,
+                    artifact_payload=payload,
+                    child_evidence=payload.get("result", {}),
+                    child_kind="smsb_replay",
+                    child_identity=child_identity,
+                )
+            except Exception as error:
+                errors.append(
+                    f"parent_receipt_replay_invalid:{child_identity}:{error}"
+                )
         if key in by_key:
             errors.append(f"duplicate_replay:{key[0]}:{key[1]}")
         by_key[key] = validation
@@ -781,6 +961,8 @@ def summarize_smsb_pilot(
         "replay_capture_id",
         "replay_revalidation",
         "persisted_replay_validation",
+        "parent_receipt",
+        "parent_launcher_pid",
         "duplicate_replay",
         "missing_replay",
         "execution_invalid",
@@ -1265,6 +1447,8 @@ def adjudicate_tetrad_pilot(
     result_rows: Sequence[Mapping[str, Any]],
     *,
     answer_decoder: Any,
+    parent_receipts: Sequence[Mapping[str, Any]] | None = None,
+    authority_secret: bytes | None = None,
     competence_score_threshold: float = 0.5,
     competence_rate_floor: float = 0.75,
 ) -> dict[str, Any]:
@@ -1287,6 +1471,23 @@ def adjudicate_tetrad_pilot(
         _validate_authoring_row(row)
     if len(result_rows) != 20:
         raise ValueError(f"Tetrad pilot requires 20 execution results, got {len(result_rows)}")
+    if authority_secret is None or parent_receipts is None:
+        raise ValueError("Tetrad requires authenticated parent launch receipts")
+    receipts_by_identity = {
+        str(receipt.get("child_identity")): receipt for receipt in parent_receipts
+    }
+    if len(parent_receipts) != 20 or len(receipts_by_identity) != 20:
+        raise ValueError("Tetrad parent receipt/request bijection failed")
+    parent_launcher_pids = [
+        receipt.get("parent_launcher_pid") for receipt in parent_receipts
+    ]
+    if (
+        any(type(value) is not int or value < 1 for value in parent_launcher_pids)
+        or len(set(parent_launcher_pids)) != 20
+    ):
+        raise ValueError(
+            "each Tetrad request must use a distinct parent supervisor PID"
+        )
     manifest_by_id = {str(row["request_id"]): row for row in manifest_rows}
     results_by_id = {str(row.get("request_id")): row for row in result_rows}
     if len(results_by_id) != 20 or set(results_by_id) != set(manifest_by_id):
@@ -1325,6 +1526,17 @@ def adjudicate_tetrad_pilot(
     verified_scores: dict[str, float] = {}
     for request_id, result in results_by_id.items():
         request = manifest_by_id[request_id]
+        receipt = receipts_by_identity.get(request_id)
+        if receipt is None:
+            raise ValueError(f"Tetrad parent receipt is missing for {request_id}")
+        validate_parent_launch_receipt(
+            receipt,
+            authority_secret=authority_secret,
+            artifact_payload=result,
+            child_evidence=result,
+            child_kind="tetrad_replay",
+            child_identity=request_id,
+        )
         prompt_ids = token_ids(result.get("prompt_token_ids", []), "result.prompt_token_ids")
         answer_ids = token_ids(result.get("answer_token_ids", []), "result.answer_token_ids")
         physical_gpus = result.get("physical_gpu_whitelist")

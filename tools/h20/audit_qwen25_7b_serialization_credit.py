@@ -31,12 +31,15 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     validate_replay,
     validate_capture_record,
     validate_tetrad_manifest,
+    validate_parent_launch_receipt,
     write_json_exclusive,
 )
 from tools.h20.preflight_qwen25_7b_serialization_credit import (  # noqa: E402
     MANIFEST_REL,
     load_manifest,
+    load_parent_authority_secret,
     record_stage,
+    validate_child_credential,
     validate_p0,
     verify_current_binding,
 )
@@ -322,55 +325,76 @@ def _verify_parent_credential_record(
     manifest: dict[str, Any],
     resolved: dict[str, Any],
     current_binding_sha: str,
+    artifact_payload: Any,
+    authority_secret: bytes,
 ) -> str:
     path = Path(str(record.get("parent_credential_path", "")))
     if not path.is_file() or not path.resolve().is_relative_to(
         Path(manifest["paths"]["log_root"]).resolve()
     ):
         raise ValueError("parent credential path is missing or outside the run root")
-    digest = sha256_file(path)
-    credential = json.loads(path.read_text(encoding="utf-8"))
-    credential_id = credential.get("parent_credential_id")
-    unsigned = dict(credential)
-    unsigned.pop("parent_credential_id", None)
-    if (
-        not isinstance(credential_id, str)
-        or len(credential_id) != 64
-        or canonical_sha256(unsigned) != credential_id
+    receipt_path = Path(str(record.get("parent_receipt_path", "")))
+    if not receipt_path.is_file() or not receipt_path.resolve().is_relative_to(
+        Path(manifest["paths"]["log_root"]).resolve()
     ):
-        raise ValueError("parent credential canonical digest is invalid")
-    expected_evidence = {
-        "parent_credential_id": credential_id,
-        "parent_credential_sha256": digest,
-        "parent_credential_path": str(path.resolve()),
-        "parent_issuer_pid": credential.get("parent_issuer_pid"),
-        "observed_parent_pid": credential.get("parent_issuer_pid"),
+        raise ValueError("parent receipt path is missing or outside the run root")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    credential_evidence = validate_child_credential(
+        path,
+        manifest=manifest,
+        resolved=resolved,
+        current_binding_sha=current_binding_sha,
+        child_kind=child_kind,
+        child_identity=child_identity,
+        authority_secret=authority_secret,
+        expected_issuer_pid=receipt.get("parent_launcher_pid"),
+    )
+    if any(record.get(key) != value for key, value in credential_evidence.items()):
+        raise ValueError("ledger differs from authenticated parent credential")
+    if any(result.get(key) != value for key, value in credential_evidence.items()):
+        raise ValueError("child result differs from authenticated parent credential")
+    validated_receipt = validate_parent_launch_receipt(
+        receipt,
+        authority_secret=authority_secret,
+        artifact_payload=artifact_payload,
+        child_evidence=result,
+        child_kind=child_kind,
+        child_identity=child_identity,
+    )
+    expected_record = {
+        "process_pid": result.get("process_pid"),
+        "parent_receipt_path": str(receipt_path.resolve()),
+        "parent_receipt_sha256": sha256_file(receipt_path),
+        "parent_receipt_id": validated_receipt["receipt_id"],
+        "parent_receipt_mac": validated_receipt["receipt_mac"],
+        "parent_launcher_pid": validated_receipt["parent_launcher_pid"],
+        "observed_child_ppid": validated_receipt["observed_child_ppid"],
+        "child_exit_code": 0,
+        "child_stdout_artifact": validated_receipt["stdout_artifact"],
+        "child_stdout_artifact_sha256": validated_receipt[
+            "stdout_artifact_sha256"
+        ],
     }
-    if any(record.get(key) != value for key, value in expected_evidence.items()):
-        raise ValueError("ledger differs from parent credential evidence")
-    if any(result.get(key) != value for key, value in expected_evidence.items()):
-        raise ValueError("child result differs from parent credential evidence")
-    if record.get("process_pid") != result.get("process_pid"):
-        raise ValueError("ledger child PID differs from result")
+    if any(record.get(key) != value for key, value in expected_record.items()):
+        raise ValueError("ledger differs from authenticated parent launch receipt")
     if (
-        credential.get("schema")
-        != "memagent.serialization-credit.parent-child-credential.v1"
-        or credential.get("run_id") != manifest["run_id"]
-        or credential.get("git_commit")
-        != os.environ["MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"]
-        or credential.get("child_kind") != child_kind
-        or credential.get("child_identity") != child_identity
-        or credential.get("current_binding_sha256") != current_binding_sha
-        or credential.get("runtime_binding_sha256")
-        != resolved["runtime_binding_sha256"]
-        or credential.get("execution_binding_sha256")
-        != resolved["execution_binding_sha256"]
-        or credential.get("child_full_model_sha_required") is not True
-        or type(credential.get("parent_issuer_pid")) is not int
-        or credential.get("parent_issuer_pid", 0) < 1
+        Path(validated_receipt["artifact"]).resolve()
+        != Path(str(record.get("artifact"))).resolve()
+        or validated_receipt["artifact_sha256"] != record.get("artifact_sha256")
+        or not Path(validated_receipt["stdout_artifact"]).resolve().is_relative_to(
+            Path(manifest["paths"]["log_root"]).resolve()
+        )
+        or not Path(validated_receipt["stdout_artifact"]).is_file()
+        or sha256_file(validated_receipt["stdout_artifact"])
+        != validated_receipt["stdout_artifact_sha256"]
+        or validated_receipt["runner_code_sha256"]
+        != sha256_file(
+            Path(manifest["repository"])
+            / "tools/h20/run_qwen25_7b_serialization_credit.py"
+        )
     ):
-        raise ValueError("parent credential frozen binding differs")
-    return credential_id
+        raise ValueError("parent receipt artifact/stdout/runner digest differs")
+    return str(validated_receipt["receipt_id"])
 
 
 def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
@@ -380,6 +404,7 @@ def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
     current_binding_sha = verify_current_binding(
         manifest, resolved, full_model_sha=True
     )
+    authority_secret = load_parent_authority_secret(manifest, resolved)
     paths = {
         key: Path(value)
         for key, value in manifest["paths"].items()
@@ -425,12 +450,26 @@ def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
             raise ValueError("SMSB capture count is not four")
         for capture in captures:
             validate_capture_record(capture)
-        replay_paths = sorted(paths["smsb_replays"].glob("*.json"))
-        credential_paths = sorted(
-            (paths["smsb_replays"].parent / "credentials").glob("*.json")
+        capture_receipt_id = _verify_parent_credential_record(
+            record=records[1],
+            result=captures[0]["execution"],
+            child_kind="smsb_capture",
+            child_identity="capture4",
+            manifest=manifest,
+            resolved=resolved,
+            current_binding_sha=current_binding_sha,
+            artifact_payload=captures,
+            authority_secret=authority_secret,
         )
-        if len(replay_paths) != 12 or len(credential_paths) != 12:
-            raise ValueError("SMSB replay/credential artifact count is not 12/12")
+        replay_paths = sorted(paths["smsb_replays"].glob("*.json"))
+        credential_paths = sorted(paths["smsb_root"].joinpath("credentials").glob("*.json"))
+        receipt_paths = sorted(paths["smsb_receipts"].glob("*.json"))
+        if (
+            len(replay_paths) != 12
+            or len(credential_paths) != 13
+            or len(receipt_paths) != 13
+        ):
+            raise ValueError("SMSB replay/credential/receipt count is not 12/13/13")
         if {
             Path(str(record.get("artifact", ""))).resolve()
             for record in records[2:14]
@@ -438,6 +477,7 @@ def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
             raise ValueError("SMSB replay ledger/artifact path bijection failed")
         credential_ids: set[str] = set()
         child_pids: set[int] = set()
+        parent_launcher_pids = {records[1].get("parent_launcher_pid")}
         expected_keys = {
             (str(capture["example_id"]), regime)
             for capture in captures
@@ -472,31 +512,60 @@ def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
                     manifest=manifest,
                     resolved=resolved,
                     current_binding_sha=current_binding_sha,
+                    artifact_payload=payload,
+                    authority_secret=authority_secret,
                 )
             )
             child_pids.add(payload["result"]["process_pid"])
+            parent_launcher_pids.add(record.get("parent_launcher_pid"))
             observed_keys.add(key)
             payloads.append(payload)
         if (
             observed_keys != expected_keys
-            or len(credential_ids) != 12
+            or len(credential_ids | {capture_receipt_id}) != 13
             or len(child_pids) != 12
+            or len(parent_launcher_pids) != 13
+            or any(type(value) is not int or value < 1 for value in parent_launcher_pids)
             or {capture["execution"]["process_pid"] for capture in captures}
             & child_pids
         ):
             raise ValueError("SMSB replay key/PID/credential uniqueness gate failed")
         if {
             Path(str(record["parent_credential_path"])).resolve()
-            for record in records[2:14]
+            for record in records[1:14]
         } != {path.resolve() for path in credential_paths}:
             raise ValueError("SMSB credential ledger/artifact path bijection failed")
+        if {
+            Path(str(record["parent_receipt_path"])).resolve()
+            for record in records[1:14]
+        } != {path.resolve() for path in receipt_paths}:
+            raise ValueError("SMSB receipt ledger/artifact path bijection failed")
         _artifact(records[14], paths["smsb_report"])
         smsb_report = json.loads(paths["smsb_report"].read_text(encoding="utf-8"))
-        recomputed_report = summarize_smsb_pilot(captures, payloads, expected_examples=4)
+        receipt_rows = [
+            json.loads(path.read_text(encoding="utf-8")) for path in receipt_paths
+        ]
+        capture_receipts = [
+            row for row in receipt_rows if row.get("child_kind") == "smsb_capture"
+        ]
+        replay_receipts = [
+            row for row in receipt_rows if row.get("child_kind") == "smsb_replay"
+        ]
+        recomputed_report = summarize_smsb_pilot(
+            captures,
+            payloads,
+            expected_examples=4,
+            capture_receipt=(capture_receipts[0] if len(capture_receipts) == 1 else None),
+            replay_receipts=replay_receipts,
+            authority_secret=authority_secret,
+        )
         recomputed_report.update(
             capture_sha256=sha256_file(paths["smsb_captures"]),
             replay_artifact_sha256={
                 path.name: sha256_file(path) for path in replay_paths
+            },
+            parent_receipt_artifact_sha256={
+                path.name: sha256_file(path) for path in receipt_paths
             },
             training_authorized=False,
             method_selection_status="PENDING_EVIDENCE_NO_SELECTION",
@@ -536,6 +605,7 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
     current_binding_sha = verify_current_binding(
         manifest, resolved, full_model_sha=True
     )
+    authority_secret = load_parent_authority_secret(manifest, resolved)
     paths = {key: Path(value) for key, value in manifest["paths"].items() if key != "log_root"}
     ledger_path = paths["execution_ledger"]
     records = read_jsonl(ledger_path)
@@ -606,15 +676,27 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                         failures.append(f"SMSB capture {capture.get('example_id')} P0 field differs: {field}")
                 if capture.get("current_binding_sha256") != current_binding_sha:
                     failures.append("SMSB capture current binding differs")
+            _verify_parent_credential_record(
+                record=records[1],
+                result=captures[0]["execution"],
+                child_kind="smsb_capture",
+                child_identity="capture4",
+                manifest=manifest,
+                resolved=resolved,
+                current_binding_sha=current_binding_sha,
+                artifact_payload=captures,
+                authority_secret=authority_secret,
+            )
             replay_records = records[2:14]
             replay_paths = sorted(paths["smsb_replays"].glob("*.json"))
-            smsb_credential_paths = sorted(
-                (paths["smsb_replays"].parent / "credentials").glob("*.json")
-            )
+            smsb_credential_paths = sorted(paths["smsb_root"].joinpath("credentials").glob("*.json"))
+            smsb_receipt_paths = sorted(paths["smsb_receipts"].glob("*.json"))
             if len(replay_paths) != 12:
                 failures.append("SMSB replay directory does not contain exactly 12 JSON files")
-            if len(smsb_credential_paths) != 12:
-                failures.append("SMSB credential directory does not contain exactly 12 JSON files")
+            if len(smsb_credential_paths) != 13:
+                failures.append("SMSB credential directory does not contain exactly 13 JSON files")
+            if len(smsb_receipt_paths) != 13:
+                failures.append("SMSB receipt directory does not contain exactly 13 JSON files")
             if {
                 Path(str(record.get("artifact", ""))).resolve()
                 for record in replay_records
@@ -646,12 +728,19 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                     manifest=manifest,
                     resolved=resolved,
                     current_binding_sha=current_binding_sha,
+                    artifact_payload=payload,
+                    authority_secret=authority_secret,
                 )
             if {
                 Path(str(record.get("parent_credential_path", ""))).resolve()
-                for record in replay_records
+                for record in records[1:14]
             } != {path.resolve() for path in smsb_credential_paths}:
                 failures.append("SMSB credential ledger/artifact path bijection failed")
+            if {
+                Path(str(record.get("parent_receipt_path", ""))).resolve()
+                for record in records[1:14]
+            } != {path.resolve() for path in smsb_receipt_paths}:
+                failures.append("SMSB receipt ledger/artifact path bijection failed")
             expected_replay_keys = {
                 (example_id, regime)
                 for example_id in pilot_ids
@@ -661,13 +750,30 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                 failures.append("SMSB replay ledger lacks exact example/regime coverage")
             _artifact(records[14], paths["smsb_report"])
             smsb_report = json.loads(paths["smsb_report"].read_text(encoding="utf-8"))
+            smsb_receipts = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in smsb_receipt_paths
+            ]
+            capture_receipts = [
+                row for row in smsb_receipts if row.get("child_kind") == "smsb_capture"
+            ]
             recomputed_smsb = summarize_smsb_pilot(
-                captures, replay_payloads, expected_examples=4
+                captures,
+                replay_payloads,
+                expected_examples=4,
+                capture_receipt=(capture_receipts[0] if len(capture_receipts) == 1 else None),
+                replay_receipts=[
+                    row for row in smsb_receipts if row.get("child_kind") == "smsb_replay"
+                ],
+                authority_secret=authority_secret,
             )
             recomputed_smsb.update(
                 capture_sha256=sha256_file(paths["smsb_captures"]),
                 replay_artifact_sha256={
                     path.name: sha256_file(path) for path in replay_paths
+                },
+                parent_receipt_artifact_sha256={
+                    path.name: sha256_file(path) for path in smsb_receipt_paths
                 },
                 training_authorized=False,
                 method_selection_status="PENDING_EVIDENCE_NO_SELECTION",
@@ -745,12 +851,15 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
             tetrad_replay_records = records[16:36]
             result_paths = sorted(paths["tetrad_results"].glob("*.json"))
             tetrad_credential_paths = sorted(
-                (paths["tetrad_results"].parent / "credentials").glob("*.json")
+                paths["tetrad_root"].joinpath("credentials").glob("*.json")
             )
+            tetrad_receipt_paths = sorted(paths["tetrad_receipts"].glob("*.json"))
             if len(result_paths) != 20:
                 failures.append("Tetrad result directory does not contain exactly 20 JSON files")
             if len(tetrad_credential_paths) != 20:
                 failures.append("Tetrad credential directory does not contain exactly 20 JSON files")
+            if len(tetrad_receipt_paths) != 20:
+                failures.append("Tetrad receipt directory does not contain exactly 20 JSON files")
             if {
                 Path(str(record.get("artifact", ""))).resolve()
                 for record in tetrad_replay_records
@@ -782,12 +891,19 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                     manifest=manifest,
                     resolved=resolved,
                     current_binding_sha=current_binding_sha,
+                    artifact_payload=payload,
+                    authority_secret=authority_secret,
                 )
             if {
                 Path(str(record.get("parent_credential_path", ""))).resolve()
                 for record in tetrad_replay_records
             } != {path.resolve() for path in tetrad_credential_paths}:
                 failures.append("Tetrad credential ledger/artifact path bijection failed")
+            if {
+                Path(str(record.get("parent_receipt_path", ""))).resolve()
+                for record in tetrad_replay_records
+            } != {path.resolve() for path in tetrad_receipt_paths}:
+                failures.append("Tetrad receipt ledger/artifact path bijection failed")
             if observed_request_roles != expected_request_roles:
                 failures.append("Tetrad replay ledger lacks exact request/role coverage")
             _artifact(records[36], paths["tetrad_report"])
@@ -799,6 +915,11 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                 answer_decoder=lambda ids: tokenizer.decode(
                     ids, skip_special_tokens=False
                 ),
+                parent_receipts=[
+                    json.loads(path.read_text(encoding="utf-8"))
+                    for path in tetrad_receipt_paths
+                ],
+                authority_secret=authority_secret,
                 competence_score_threshold=float(
                     manifest["tetrad"]["canonical_competence_score_threshold_f1"]
                 ),
@@ -811,6 +932,9 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                 authoring_sha256=sha256_file(paths["tetrad_authoring"]),
                 result_artifact_sha256={
                     path.name: sha256_file(path) for path in result_paths
+                },
+                parent_receipt_artifact_sha256={
+                    path.name: sha256_file(path) for path in tetrad_receipt_paths
                 },
                 current_binding_sha256=current_binding_sha,
                 runtime_binding_sha256=resolved["runtime_binding_sha256"],
@@ -859,6 +983,13 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
             tetrad_credentials = {
                 row.get("parent_credential_id") for row in tetrad_results
             }
+            supervised_records = records[1:14] + records[16:36]
+            parent_launcher_pids = {
+                row.get("parent_launcher_pid") for row in supervised_records
+            }
+            parent_receipt_ids = {
+                row.get("parent_receipt_id") for row in supervised_records
+            }
             if (
                 len(capture_pids) != 1
                 or len(replay_pids) != 12
@@ -869,9 +1000,15 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                 or len(replay_credentials) != 12
                 or len(tetrad_credentials) != 20
                 or replay_credentials & tetrad_credentials
+                or len(parent_launcher_pids) != 33
+                or any(
+                    type(value) is not int or value < 1
+                    for value in parent_launcher_pids
+                )
+                or len(parent_receipt_ids) != 33
             ):
                 failures.append(
-                    "capture/replay/Tetrad PID or parent-credential uniqueness failed"
+                    "capture/replay/Tetrad PID, supervisor, receipt, or credential uniqueness failed"
                 )
         except Exception as error:
             failures.append(f"artifact authentication failed: {error}")

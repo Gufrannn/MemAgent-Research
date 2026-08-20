@@ -21,9 +21,12 @@ causal-effect result. Audit32, method selection, and method training remain pend
 
 Every child re-authenticates the Git checkout, fixed parquet, runtime versions, actual
 GPU UUID/name and `CUDA_DEVICE_ORDER`, and a full SHA-256 inventory of every model file.
-Immediately before each child, the parent shell issues one append-only, single-use
-credential bound to the child identity and frozen runtime/current-binding digests; the
-audit requires unique credential IDs and child PIDs. Evidence also binds actual
+Each GPU child is started by a new parent-supervisor Python process. The supervisor
+issues one HMAC-authenticated, single-use credential, observes the actual child PID,
+PPID and exit code, captures child stdout in an append-only file, and writes an
+HMAC-authenticated receipt binding the result and stdout digests. The audit requires
+unique supervisor PIDs, child PIDs, credential IDs and receipt IDs; result fields alone
+cannot satisfy either gate. Evidence also binds actual
 prompt/output token IDs and hashes, trajectory and per-turn seeds, generate-call indices,
 one engine construction, and one generate call for each fresh replay. Tetrad scores are
 recomputed from decoded answer tokens and the S128 ground truth, while Tetrad authoring

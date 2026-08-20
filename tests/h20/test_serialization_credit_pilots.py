@@ -17,12 +17,14 @@ from recurrent.research.serialization_credit_pilots import (
     TETRAD_ROLES,
     adjudicate_tetrad_pilot,
     best_length_derangement,
+    build_parent_launch_receipt,
     build_capture_record,
     build_replay_request,
     build_tetrad_requests,
     canonical_sha256,
     center_truncate_token_ids,
     summarize_smsb_pilot,
+    parent_authority_mac,
     validate_capture_record,
     validate_replay,
     validate_tetrad_manifest,
@@ -47,6 +49,7 @@ MANIFEST = REPO / "manifests/h20/qwen25_7b_serialization_credit_pilots_seed2026.
 COMMANDS = REPO / "manifests/h20/qwen25_7b_serialization_credit_pilots_commands.json"
 HEX = "a" * 64
 CAPTURE_PROCESS_UUID = str(uuid.UUID(int=1))
+AUTHORITY_SECRET = b"serialization-credit-test-authority"
 GPU_IDENTITIES = [
     "6, GPU-00000000-0000-0000-0000-000000000006, NVIDIA H20",
     "7, GPU-00000000-0000-0000-0000-000000000007, NVIDIA H20",
@@ -138,9 +141,18 @@ def capture(index: int, call_start: int, *, process_generate_count: int = 12) ->
                 "prefix_cache_enabled": False,
                 "process_instance_uuid": CAPTURE_PROCESS_UUID,
                 "process_pid": 101,
+                "observed_parent_pid": 900,
                 "engine_construction_count": 1,
                 "generate_call_count": process_generate_count,
                 "full_model_sha_verified_at_capture_start": True,
+                "parent_credential_id": "a" * 64,
+                "parent_credential_mac": "b" * 64,
+                "parent_credential_sha256": "c" * 64,
+                "parent_credential_path": "/fixture/capture.credential.json",
+                "parent_issuer_pid": 900,
+                "runtime_binding_sha256": "6" * 64,
+                "execution_binding_sha256": "d" * 64,
+                "current_binding_sha256": "8" * 64,
             },
             "ground_truth": [f"answer-{index}"],
         }
@@ -177,6 +189,7 @@ def replay_payload(item: dict, regime: str, ordinal: int) -> dict:
         "runtime_binding_sha256": item["runtime_binding_sha256"],
         "engine_config_sha256": item["engine_config_sha256"],
         "current_binding_sha256": item["current_binding_sha256"],
+        "execution_binding_sha256": "d" * 64,
         "prompt_token_ids": item["final_prompt_token_ids"],
         "prompt_token_ids_sha256": canonical_sha256(item["final_prompt_token_ids"]),
         "answer_token_ids": answer,
@@ -191,9 +204,10 @@ def replay_payload(item: dict, regime: str, ordinal: int) -> dict:
         "generate_call_count": 1,
         "full_model_sha_verified_at_child_start": True,
         "parent_credential_id": f"{ordinal:064x}",
+        "parent_credential_mac": f"{ordinal + 200:064x}",
         "parent_credential_sha256": f"{ordinal + 100:064x}",
-        "parent_issuer_pid": 9000,
-        "observed_parent_pid": 9000,
+        "parent_issuer_pid": 9000 + ordinal,
+        "observed_parent_pid": 9000 + ordinal,
         "configured_request_seed": request["request_seed"],
         "actual_request_seed": request["request_seed"],
     }
@@ -208,6 +222,88 @@ def replay_payload(item: dict, regime: str, ordinal: int) -> dict:
 
 def four_captures() -> list[dict]:
     return [capture(index, index * 3 + 1) for index in range(4)]
+
+
+def parent_receipt(
+    *,
+    child_kind: str,
+    child_identity: str,
+    artifact_payload: object,
+    evidence: dict,
+    ordinal: int,
+) -> dict:
+    return build_parent_launch_receipt(
+        {
+            "schema": "memagent.serialization-credit.parent-launch-receipt.v2",
+            "record_type": "parent_launch_receipt",
+            "recorded_at": "2026-08-21T00:00:00+00:00",
+            "child_kind": child_kind,
+            "child_identity": child_identity,
+            "credential_id": evidence["parent_credential_id"],
+            "credential_mac": evidence["parent_credential_mac"],
+            "credential_sha256": evidence["parent_credential_sha256"],
+            "parent_launcher_pid": evidence["observed_parent_pid"],
+            "child_pid": evidence["process_pid"],
+            "observed_child_ppid": evidence["observed_parent_pid"],
+            "child_exit_code": 0,
+            "parent_observed_launch": True,
+            "process_instance_uuid": evidence["process_instance_uuid"],
+            "artifact": f"/fixture/artifact-{ordinal}.json",
+            "artifact_sha256": f"{ordinal + 4000:064x}",
+            "artifact_canonical_sha256": canonical_sha256(artifact_payload),
+            "stdout_artifact": f"/fixture/stdout-{ordinal}.log",
+            "stdout_artifact_sha256": f"{ordinal + 5000:064x}",
+            "runner_argv_sha256": f"{ordinal + 6000:064x}",
+            "runner_code_sha256": "e" * 64,
+            "current_binding_sha256": evidence["current_binding_sha256"],
+            "runtime_binding_sha256": evidence["runtime_binding_sha256"],
+            "execution_binding_sha256": evidence["execution_binding_sha256"],
+            "authority_secret_sha256": hashlib.sha256(
+                AUTHORITY_SECRET
+            ).hexdigest(),
+            "training_authorized": False,
+        },
+        AUTHORITY_SECRET,
+    )
+
+
+def smsb_parent_receipts(
+    captures: list[dict], replays: list[dict]
+) -> tuple[dict, list[dict]]:
+    capture_receipt = parent_receipt(
+        child_kind="smsb_capture",
+        child_identity="capture4",
+        artifact_payload=captures,
+        evidence=captures[0]["execution"],
+        ordinal=1,
+    )
+    replay_receipts = [
+        parent_receipt(
+            child_kind="smsb_replay",
+            child_identity=(
+                f"{payload['validation']['example_id']}::"
+                f"{payload['validation']['regime']}"
+            ),
+            artifact_payload=payload,
+            evidence=payload["result"],
+            ordinal=ordinal + 2,
+        )
+        for ordinal, payload in enumerate(replays)
+    ]
+    return capture_receipt, replay_receipts
+
+
+def tetrad_parent_receipts(results: list[dict]) -> list[dict]:
+    return [
+        parent_receipt(
+            child_kind="tetrad_replay",
+            child_identity=result["request_id"],
+            artifact_payload=result,
+            evidence=result,
+            ordinal=ordinal + 100,
+        )
+        for ordinal, result in enumerate(results)
+    ]
 
 
 def authoring_rows(captures: list[dict]) -> list[dict]:
@@ -227,7 +323,8 @@ def authoring_rows(captures: list[dict]) -> list[dict]:
             "vllm_version": "0.8.2",
             "runtime_binding_sha256": item["runtime_binding_sha256"],
             "engine_config_sha256": item["engine_config_sha256"],
-            "current_binding_sha256": item["current_binding_sha256"],
+        "current_binding_sha256": item["current_binding_sha256"],
+        "execution_binding_sha256": "d" * 64,
             "prompt_protocol_hash": "5" * 64,
             "prompt_outside_memory_span_hash": "9" * 64,
             "physical_gpu_identity": GPU_IDENTITIES,
@@ -325,9 +422,10 @@ def tetrad_fixture() -> tuple[list[dict], list[dict], list[dict]]:
                 "generate_call_count": 1,
                 "full_model_sha_verified_at_child_start": True,
                 "parent_credential_id": f"{ordinal + 1000:064x}",
+                "parent_credential_mac": f"{ordinal + 3000:064x}",
                 "parent_credential_sha256": f"{ordinal + 2000:064x}",
-                "parent_issuer_pid": 9001,
-                "observed_parent_pid": 9001,
+                "parent_issuer_pid": 10000 + ordinal,
+                "observed_parent_pid": 10000 + ordinal,
                 "configured_request_seed": request["request_seed"],
                 "actual_request_seed": request["request_seed"],
                 "vllm_version": request["vllm_version"],
@@ -335,6 +433,7 @@ def tetrad_fixture() -> tuple[list[dict], list[dict], list[dict]]:
                 "runtime_binding_sha256": request["runtime_binding_sha256"],
                 "engine_config_sha256": request["engine_config_sha256"],
                 "current_binding_sha256": request["current_binding_sha256"],
+                "execution_binding_sha256": "d" * 64,
             }
         )
     return authoring, requests, results
@@ -350,10 +449,85 @@ def test_capture_seed_and_generate_schedule_round_trip() -> None:
             (item, regime) for item in captures for regime in SMSB_REGIMES
         )
     ]
-    report = summarize_smsb_pilot(captures, replays)
+    capture_receipt, replay_receipts = smsb_parent_receipts(captures, replays)
+    report = summarize_smsb_pilot(
+        captures,
+        replays,
+        capture_receipt=capture_receipt,
+        replay_receipts=replay_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
     assert report["status"] == "PASS"
     assert report["E_det_pass"] is True
     assert report["L2_report_only"] is True
+
+
+def test_handcrafted_results_without_parent_observation_fail_closed() -> None:
+    """A complete-looking result fixture is not execution evidence by itself."""
+    captures = four_captures()
+    replays = [
+        replay_payload(item, regime, ordinal + 1)
+        for ordinal, (item, regime) in enumerate(
+            (item, regime) for item in captures for regime in SMSB_REGIMES
+        )
+    ]
+    report = summarize_smsb_pilot(captures, replays)
+    assert report["status"] == "FAIL"
+    assert "parent_receipt_capture_missing" in report["errors"]
+    assert "parent_receipt_replays_missing" in report["errors"]
+
+    authoring, requests, results = tetrad_fixture()
+    with pytest.raises(ValueError, match="authenticated parent launch receipts"):
+        adjudicate_tetrad_pilot(
+            requests,
+            authoring,
+            results,
+            answer_decoder=decode_fixture,
+        )
+
+
+def test_parent_receipt_mac_and_unique_supervisor_pid_are_gate_critical() -> None:
+    captures = four_captures()
+    replays = [
+        replay_payload(item, regime, ordinal + 1)
+        for ordinal, (item, regime) in enumerate(
+            (item, regime) for item in captures for regime in SMSB_REGIMES
+        )
+    ]
+    capture_receipt, replay_receipts = smsb_parent_receipts(captures, replays)
+    tampered_receipts = copy.deepcopy(replay_receipts)
+    tampered_receipts[0]["receipt_mac"] = "0" * 64
+    report = summarize_smsb_pilot(
+        captures,
+        replays,
+        capture_receipt=capture_receipt,
+        replay_receipts=tampered_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
+    assert report["status"] == "FAIL"
+    assert any(
+        error.startswith("parent_receipt_replay_invalid:")
+        for error in report["errors"]
+    )
+
+    duplicate_parent = copy.deepcopy(replay_receipts)
+    unsigned = {
+        key: value
+        for key, value in duplicate_parent[1].items()
+        if key not in {"receipt_id", "receipt_mac"}
+    }
+    unsigned["parent_launcher_pid"] = duplicate_parent[0]["parent_launcher_pid"]
+    unsigned["observed_child_ppid"] = duplicate_parent[0]["parent_launcher_pid"]
+    duplicate_parent[1] = build_parent_launch_receipt(unsigned, AUTHORITY_SECRET)
+    report = summarize_smsb_pilot(
+        captures,
+        replays,
+        capture_receipt=capture_receipt,
+        replay_receipts=duplicate_parent,
+        authority_secret=AUTHORITY_SECRET,
+    )
+    assert report["status"] == "FAIL"
+    assert "parent_launcher_pid_not_unique" in report["errors"]
 
 
 def test_smsb_duplicate_process_or_broken_call_schedule_fails_closed() -> None:
@@ -365,7 +539,14 @@ def test_smsb_duplicate_process_or_broken_call_schedule_fails_closed() -> None:
         )
     ]
     replays[1]["result"]["process_instance_uuid"] = replays[0]["result"]["process_instance_uuid"]
-    report = summarize_smsb_pilot(captures, replays)
+    capture_receipt, replay_receipts = smsb_parent_receipts(captures, replays)
+    report = summarize_smsb_pilot(
+        captures,
+        replays,
+        capture_receipt=capture_receipt,
+        replay_receipts=replay_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
     assert report["status"] == "FAIL"
     assert "replay_process_instance_not_unique" in report["errors"]
     broken = copy.deepcopy(captures)
@@ -385,7 +566,14 @@ def test_smsb_revalidates_every_replay_and_rejects_pid_or_credential_reuse() -> 
 
     stale = copy.deepcopy(replays)
     stale[0]["validation"]["execution_valid"] = False
-    report = summarize_smsb_pilot(captures, stale)
+    capture_receipt, replay_receipts = smsb_parent_receipts(captures, replays)
+    report = summarize_smsb_pilot(
+        captures,
+        stale,
+        capture_receipt=capture_receipt,
+        replay_receipts=replay_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
     assert report["status"] == "FAIL"
     assert any(
         error.startswith("persisted_replay_validation_mismatch:")
@@ -399,7 +587,13 @@ def test_smsb_revalidates_every_replay_and_rejects_pid_or_credential_reuse() -> 
     duplicate_pid[1]["validation"] = validate_replay(
         captures[0], duplicate_pid[1]["request"], duplicate_pid[1]["result"]
     )
-    report = summarize_smsb_pilot(captures, duplicate_pid)
+    report = summarize_smsb_pilot(
+        captures,
+        duplicate_pid,
+        capture_receipt=capture_receipt,
+        replay_receipts=replay_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
     assert report["status"] == "FAIL"
     assert "replay_process_pid_not_unique" in report["errors"]
 
@@ -412,7 +606,13 @@ def test_smsb_revalidates_every_replay_and_rejects_pid_or_credential_reuse() -> 
         duplicate_credential[1]["request"],
         duplicate_credential[1]["result"],
     )
-    report = summarize_smsb_pilot(captures, duplicate_credential)
+    report = summarize_smsb_pilot(
+        captures,
+        duplicate_credential,
+        capture_receipt=capture_receipt,
+        replay_receipts=replay_receipts,
+        authority_secret=AUTHORITY_SECRET,
+    )
     assert report["status"] == "FAIL"
     assert "replay_parent_credential_not_unique" in report["errors"]
 
@@ -470,10 +670,16 @@ def test_replay_actual_prompt_hash_and_strict_counts_are_audited() -> None:
 
 def test_tetrad_exact_4x5_and_competence_gate() -> None:
     authoring, requests, results = tetrad_fixture()
+    receipts = tetrad_parent_receipts(results)
     gate = validate_tetrad_manifest(requests)
     assert gate["request_count"] == 20
     report = adjudicate_tetrad_pilot(
-        requests, authoring, results, answer_decoder=decode_fixture
+        requests,
+        authoring,
+        results,
+        answer_decoder=decode_fixture,
+        parent_receipts=receipts,
+        authority_secret=AUTHORITY_SECRET,
     )
     assert report["status"] == "PASS"
     assert report["effects_reportable"] is False
@@ -483,6 +689,7 @@ def test_tetrad_exact_4x5_and_competence_gate() -> None:
 
 def test_tetrad_tampering_and_process_reuse_fail_closed() -> None:
     authoring, requests, results = tetrad_fixture()
+    receipts = tetrad_parent_receipts(results)
     bad_requests = copy.deepcopy(requests)
     bad_requests[0]["request_seed"] = True
     with pytest.raises(ValueError):
@@ -495,92 +702,108 @@ def test_tetrad_tampering_and_process_reuse_fail_closed() -> None:
     bad_results[1]["process_instance_uuid"] = bad_results[0]["process_instance_uuid"]
     with pytest.raises(ValueError, match="distinct Python process"):
         adjudicate_tetrad_pilot(
-            requests, authoring, bad_results, answer_decoder=decode_fixture
+            requests,
+            authoring,
+            bad_results,
+            answer_decoder=decode_fixture,
+            parent_receipts=receipts,
+            authority_secret=AUTHORITY_SECRET,
         )
 
 
 def test_tetrad_actual_tokens_scores_effects_and_fresh_process_are_reauthenticated() -> None:
     authoring, requests, results = tetrad_fixture()
+    receipts = tetrad_parent_receipts(results)
+
+    def adjudicate(candidate_results: list[dict]) -> dict:
+        return adjudicate_tetrad_pilot(
+            requests,
+            authoring,
+            candidate_results,
+            answer_decoder=decode_fixture,
+            parent_receipts=receipts,
+            authority_secret=AUTHORITY_SECRET,
+        )
 
     prompt_tamper = copy.deepcopy(results)
     prompt_tamper[0]["prompt_token_ids"] = [999]
     prompt_tamper[0]["prompt_token_sha256"] = canonical_sha256([999])
     prompt_tamper[0]["prompt_token_ids_sha256"] = canonical_sha256([999])
-    with pytest.raises(ValueError, match="execution certificate"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, prompt_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(prompt_tamper)
 
     score_tamper = copy.deepcopy(results)
     score_tamper[0]["score"] = 0.125
-    with pytest.raises(ValueError, match="independent recomputation"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, score_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|independent recomputation"):
+        adjudicate(score_tamper)
 
     text_tamper = copy.deepcopy(results)
     text_tamper[0]["answer_text"] = "\\boxed{attacker-substitution}"
-    with pytest.raises(ValueError, match="answer text/token identity"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, text_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|answer text/token identity"):
+        adjudicate(text_tamper)
 
     effects_tamper = copy.deepcopy(results)
     effects_tamper[0]["effects_reportable"] = True
-    with pytest.raises(ValueError, match="execution certificate"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, effects_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(effects_tamper)
 
     duplicate_pid = copy.deepcopy(results)
     duplicate_pid[1]["process_pid"] = duplicate_pid[0]["process_pid"]
     with pytest.raises(ValueError, match="distinct child process PID"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, duplicate_pid, answer_decoder=decode_fixture
-        )
+        adjudicate(duplicate_pid)
 
     duplicate_credential = copy.deepcopy(results)
     duplicate_credential[1]["parent_credential_id"] = duplicate_credential[0][
         "parent_credential_id"
     ]
     with pytest.raises(ValueError, match="distinct parent credential"):
-        adjudicate_tetrad_pilot(
-            requests,
-            authoring,
-            duplicate_credential,
-            answer_decoder=decode_fixture,
-        )
+        adjudicate(duplicate_credential)
 
     gpu_tamper = copy.deepcopy(results)
     gpu_tamper[0]["physical_gpu_identity"] = list(reversed(GPU_IDENTITIES))
-    with pytest.raises(ValueError, match="execution certificate"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, gpu_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(gpu_tamper)
 
     full_sha_tamper = copy.deepcopy(results)
     full_sha_tamper[0]["full_model_sha_verified_at_child_start"] = False
-    with pytest.raises(ValueError, match="execution certificate"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, full_sha_tamper, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(full_sha_tamper)
     bad_results = copy.deepcopy(results)
     bad_results[0]["score"] = "0.2"
-    with pytest.raises(ValueError, match="finite number"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, bad_results, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|finite number"):
+        adjudicate(bad_results)
     bad_results = copy.deepcopy(results)
     bad_results[0]["actual_request_seed"] = True
-    with pytest.raises(ValueError, match="execution certificate"):
-        adjudicate_tetrad_pilot(
-            requests, authoring, bad_results, answer_decoder=decode_fixture
-        )
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(bad_results)
     bad_results = copy.deepcopy(results)
     bad_results[0]["configured_request_seed"] = str(requests[0]["request_seed"])
-    with pytest.raises(ValueError, match="execution certificate"):
+    with pytest.raises(ValueError, match="parent launch receipt|execution certificate"):
+        adjudicate(bad_results)
+
+    duplicate_parent_receipts = copy.deepcopy(receipts)
+    unsigned = {
+        key: value
+        for key, value in duplicate_parent_receipts[1].items()
+        if key not in {"receipt_id", "receipt_mac"}
+    }
+    unsigned["parent_launcher_pid"] = duplicate_parent_receipts[0][
+        "parent_launcher_pid"
+    ]
+    unsigned["observed_child_ppid"] = duplicate_parent_receipts[0][
+        "parent_launcher_pid"
+    ]
+    duplicate_parent_receipts[1] = build_parent_launch_receipt(
+        unsigned, AUTHORITY_SECRET
+    )
+    with pytest.raises(ValueError, match="distinct parent supervisor PID"):
         adjudicate_tetrad_pilot(
-            requests, authoring, bad_results, answer_decoder=decode_fixture
+            requests,
+            authoring,
+            results,
+            answer_decoder=decode_fixture,
+            parent_receipts=duplicate_parent_receipts,
+            authority_secret=AUTHORITY_SECRET,
         )
 
 
@@ -717,34 +940,47 @@ def test_parent_credential_is_canonical_direct_child_and_frozen_bound(
     credential_path = root / "credential.json"
     parent_pid = 4242
     current_sha = "4" * 64
+    authority_sha = hashlib.sha256(AUTHORITY_SECRET).hexdigest()
     manifest = {"run_id": "pilot4", "paths": {"log_root": str(root)}}
     resolved = {
         "runtime_binding_sha256": "5" * 64,
         "execution_binding_sha256": "6" * 64,
+        "parent_receipt_authority": {
+            "scheme": "hmac-sha256-run-scoped-v1",
+            "secret_sha256": authority_sha,
+        },
     }
-    credential = {
-        "schema": "memagent.serialization-credit.parent-child-credential.v1",
-        "run_id": "pilot4",
-        "git_commit": "a" * 40,
-        "child_kind": "smsb_replay",
-        "child_identity": "17::temperature_zero",
-        "parent_issuer_pid": parent_pid,
-        "issued_at": "2026-08-21T00:00:00+00:00",
-        "nonce": "7" * 64,
-        "current_binding_sha256": current_sha,
-        "runtime_binding_sha256": resolved["runtime_binding_sha256"],
-        "execution_binding_sha256": resolved["execution_binding_sha256"],
-        "child_full_model_sha_required": True,
-    }
-    credential["parent_credential_id"] = canonical_sha256(credential)
+
+    def signed_credential(
+        *, full_model_sha_required: bool = True, secret: bytes = AUTHORITY_SECRET
+    ) -> dict:
+        unsigned = {
+            "schema": "memagent.serialization-credit.parent-child-credential.v2",
+            "run_id": "pilot4",
+            "git_commit": "a" * 40,
+            "child_kind": "smsb_replay",
+            "child_identity": "17::temperature_zero",
+            "parent_issuer_pid": parent_pid,
+            "issued_at": "2026-08-21T00:00:00+00:00",
+            "nonce": "7" * 64,
+            "current_binding_sha256": current_sha,
+            "runtime_binding_sha256": resolved["runtime_binding_sha256"],
+            "execution_binding_sha256": resolved["execution_binding_sha256"],
+            "child_full_model_sha_required": full_model_sha_required,
+            "parent_authority_secret_sha256": authority_sha,
+        }
+        signed = {**unsigned, "parent_credential_id": canonical_sha256(unsigned)}
+        signed["parent_credential_mac"] = parent_authority_mac(
+            secret, "child-credential-v2", signed
+        )
+        return signed
+
+    credential = signed_credential()
     credential_path.write_text(json.dumps(credential), encoding="utf-8")
     with patch.dict(
         os.environ,
         {"MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT": "a" * 40},
         clear=False,
-    ), patch(
-        "tools.h20.preflight_qwen25_7b_serialization_credit.os.getppid",
-        return_value=parent_pid,
     ):
         evidence = validate_child_credential(
             credential_path,
@@ -753,19 +989,20 @@ def test_parent_credential_is_canonical_direct_child_and_frozen_bound(
             current_binding_sha=current_sha,
             child_kind="smsb_replay",
             child_identity="17::temperature_zero",
+            authority_secret=AUTHORITY_SECRET,
+            expected_issuer_pid=parent_pid,
         )
         assert evidence["parent_credential_id"] == credential[
             "parent_credential_id"
         ]
 
+    self_issued = signed_credential(secret=b"attacker-self-issued-secret-value!!")
+    credential_path.write_text(json.dumps(self_issued), encoding="utf-8")
     with patch.dict(
         os.environ,
         {"MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT": "a" * 40},
         clear=False,
-    ), patch(
-        "tools.h20.preflight_qwen25_7b_serialization_credit.os.getppid",
-        return_value=parent_pid + 1,
-    ), pytest.raises(ValueError, match="not a direct child"):
+    ), pytest.raises(ValueError, match="credential MAC differs"):
         validate_child_credential(
             credential_path,
             manifest=manifest,
@@ -773,20 +1010,16 @@ def test_parent_credential_is_canonical_direct_child_and_frozen_bound(
             current_binding_sha=current_sha,
             child_kind="smsb_replay",
             child_identity="17::temperature_zero",
+            authority_secret=AUTHORITY_SECRET,
+            expected_issuer_pid=parent_pid,
         )
 
-    tampered = copy.deepcopy(credential)
-    tampered["child_full_model_sha_required"] = False
-    tampered.pop("parent_credential_id")
-    tampered["parent_credential_id"] = canonical_sha256(tampered)
+    tampered = signed_credential(full_model_sha_required=False)
     credential_path.write_text(json.dumps(tampered), encoding="utf-8")
     with patch.dict(
         os.environ,
         {"MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT": "a" * 40},
         clear=False,
-    ), patch(
-        "tools.h20.preflight_qwen25_7b_serialization_credit.os.getppid",
-        return_value=parent_pid,
     ), pytest.raises(ValueError, match="binding differs"):
         validate_child_credential(
             credential_path,
@@ -795,6 +1028,8 @@ def test_parent_credential_is_canonical_direct_child_and_frozen_bound(
             current_binding_sha=current_sha,
             child_kind="smsb_replay",
             child_identity="17::temperature_zero",
+            authority_secret=AUTHORITY_SECRET,
+            expected_issuer_pid=parent_pid,
         )
 
 
@@ -916,6 +1151,8 @@ def test_ledger_schema_rejects_numeric_strings_and_bool_indices(tmp_path: Path) 
         "record_sha256": "5" * 64,
         "training_authorized": False,
         "method_selection_status": "PENDING_EVIDENCE_NO_SELECTION",
+        "parent_authority_secret_path": "/fixture/authority.secret",
+        "parent_authority_secret_sha256": "6" * 64,
     }
     assert _schema_failures(schema, [record]) == []
     bad = copy.deepcopy(record)
@@ -942,16 +1179,27 @@ def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() ->
     assert commands["execution"]["full_model_sha_per_fresh_child"] is True
     assert commands["execution"]["actual_gpu_uuid_name_bound_per_child"] is True
     assert commands["execution"]["parent_issued_single_use_credential_per_child"] is True
+    assert commands["execution"]["parent_hmac_authenticated_receipt_per_child"] is True
+    assert commands["execution"]["parent_observed_child_pid_ppid_exit_and_stdout_sha"] is True
+    assert commands["execution"]["unique_parent_supervisor_pid_required"] is True
     assert commands["execution"]["unique_child_pid_required"] is True
 
 
 def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> None:
     tetrad_shell = (REPO / "scripts/h20/run_qwen25_7b_tetrad4.sh").read_text()
+    smsb_shell = (REPO / "scripts/h20/run_qwen25_7b_smsb4.sh").read_text()
     common_shell = (REPO / "scripts/h20/serialization_credit_pilots_common.sh").read_text()
     audit_source = (REPO / "tools/h20/audit_qwen25_7b_serialization_credit.py").read_text()
+    preflight_source = (
+        REPO / "tools/h20/preflight_qwen25_7b_serialization_credit.py"
+    ).read_text()
+    launcher = "launch_qwen25_7b_serialization_credit_child.py"
     assert "list-tetrad-requests" in tetrad_shell
     assert "chr(9).join" not in tetrad_shell
     assert "run-tetrad-request" in tetrad_shell
+    assert launcher in tetrad_shell
+    assert launcher in smsb_shell
+    assert "--issue-child-credential" not in preflight_source
     assert "serial_credit_wait_idle" in tetrad_shell
     assert "serial_credit_sanitize_inherited_environment" in common_shell
     assert "summarize_smsb_pilot" in audit_source

@@ -41,8 +41,9 @@ from recurrent.research.trajectory_seeding import derive_turn_request_seeds  # n
 from tools.h20.preflight_qwen25_7b_serialization_credit import (  # noqa: E402
     MANIFEST_REL,
     load_manifest,
+    load_child_credential_claim,
+    load_parent_authority_secret,
     validate_p0,
-    validate_child_credential,
     verify_current_binding,
 )
 
@@ -192,9 +193,19 @@ def _engine_evidence(
     }
 
 
-def capture_smsb(manifest_path: Path, output: Path) -> dict[str, Any]:
+def capture_smsb(
+    manifest_path: Path, output: Path, *, credential_path: Path
+) -> dict[str, Any]:
     manifest, resolved, current_binding_sha, physical_gpu_identity = _runtime(
         manifest_path, full_model_sha=True
+    )
+    credential_evidence = load_child_credential_claim(
+        credential_path,
+        manifest=manifest,
+        resolved=resolved,
+        current_binding_sha=current_binding_sha,
+        child_kind="smsb_capture",
+        child_identity="capture4",
     )
     tokenizer = _tokenizer(manifest)
     from recurrent.impls.memory import TEMPLATE, TEMPLATE_FINAL_BOXED
@@ -251,6 +262,13 @@ def capture_smsb(manifest_path: Path, output: Path) -> dict[str, Any]:
         resolved,
         expected_generate_call_count=expected_generate_calls,
         physical_gpu_identity=physical_gpu_identity,
+    )
+    evidence.update(
+        credential_evidence,
+        runtime_binding_sha256=resolved["runtime_binding_sha256"],
+        execution_binding_sha256=resolved["execution_binding_sha256"],
+        current_binding_sha256=current_binding_sha,
+        observed_parent_pid=os.getppid(),
     )
     records: list[dict[str, Any]] = []
     for pilot, source, question_ids, context_ids in source_inputs:
@@ -410,7 +428,7 @@ def replay_smsb(
         raise ValueError("example_id must identify exactly one SMSB capture")
     capture = selected[0]
     validate_capture_record(capture)
-    credential_evidence = validate_child_credential(
+    credential_evidence = load_child_credential_claim(
         credential_path,
         manifest=manifest,
         resolved=resolved,
@@ -472,6 +490,7 @@ def replay_smsb(
         "hashes": capture["hashes"],
         "vllm_version": vllm.__version__,
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
+        "execution_binding_sha256": resolved["execution_binding_sha256"],
         "engine_config_sha256": resolved["execution_binding"]["engine_config_sha256"],
         "prompt_token_ids": prompt_ids,
         "answer_token_ids": list(completion.token_ids),
@@ -513,9 +532,13 @@ def replay_smsb(
 
 
 def adjudicate_smsb(
-    manifest_path: Path, captures_path: Path, replays_dir: Path, output: Path
+    manifest_path: Path,
+    captures_path: Path,
+    replays_dir: Path,
+    receipts_dir: Path,
+    output: Path,
 ) -> dict[str, Any]:
-    _, resolved, current_binding_sha, _ = _runtime(
+    manifest, resolved, current_binding_sha, _ = _runtime(
         manifest_path, full_model_sha=False
     )
     captures = read_jsonl(captures_path)
@@ -523,11 +546,32 @@ def adjudicate_smsb(
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(replays_dir.glob("*.json"))
     ]
-    report = summarize_smsb_pilot(captures, payloads, expected_examples=4)
+    receipts = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(receipts_dir.glob("*.json"))
+    ]
+    capture_receipts = [
+        receipt for receipt in receipts if receipt.get("child_kind") == "smsb_capture"
+    ]
+    replay_receipts = [
+        receipt for receipt in receipts if receipt.get("child_kind") == "smsb_replay"
+    ]
+    report = summarize_smsb_pilot(
+        captures,
+        payloads,
+        expected_examples=4,
+        capture_receipt=(capture_receipts[0] if len(capture_receipts) == 1 else None),
+        replay_receipts=replay_receipts,
+        authority_secret=load_parent_authority_secret(manifest, resolved),
+    )
     report["capture_sha256"] = hashlib.sha256(captures_path.read_bytes()).hexdigest()
     report["replay_artifact_sha256"] = {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(replays_dir.glob("*.json"))
+    }
+    report["parent_receipt_artifact_sha256"] = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(receipts_dir.glob("*.json"))
     }
     report["training_authorized"] = False
     report["method_selection_status"] = "PENDING_EVIDENCE_NO_SELECTION"
@@ -795,7 +839,7 @@ def run_tetrad_request(
     if len(selected) != 1:
         raise ValueError("request_id must identify exactly one Tetrad request")
     request = selected[0]
-    credential_evidence = validate_child_credential(
+    credential_evidence = load_child_credential_claim(
         credential_path,
         manifest=manifest,
         resolved=resolved,
@@ -883,6 +927,7 @@ def run_tetrad_request(
         "vllm_version": vllm.__version__,
         "hashes": dict(request["hashes"]),
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
+        "execution_binding_sha256": resolved["execution_binding_sha256"],
         "engine_config_sha256": resolved["execution_binding"]["engine_config_sha256"],
         "current_binding_sha256": current_binding_sha,
         "full_model_sha_verified_at_child_start": True,
@@ -920,6 +965,7 @@ def adjudicate_tetrad(
     tetrad_manifest_path: Path,
     authoring_path: Path,
     results_dir: Path,
+    receipts_dir: Path,
     output: Path,
 ) -> dict[str, Any]:
     manifest, resolved, current_binding_sha, _ = _runtime(
@@ -931,12 +977,18 @@ def adjudicate_tetrad(
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(results_dir.glob("*.json"))
     ]
+    parent_receipts = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(receipts_dir.glob("*.json"))
+    ]
     tokenizer = _tokenizer(manifest)
     report = adjudicate_tetrad_pilot(
         manifest_rows,
         authoring_rows,
         result_rows,
         answer_decoder=lambda ids: tokenizer.decode(ids, skip_special_tokens=False),
+        parent_receipts=parent_receipts,
+        authority_secret=load_parent_authority_secret(manifest, resolved),
         competence_score_threshold=float(
             manifest["tetrad"]["canonical_competence_score_threshold_f1"]
         ),
@@ -949,6 +1001,10 @@ def adjudicate_tetrad(
     report["result_artifact_sha256"] = {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(results_dir.glob("*.json"))
+    }
+    report["parent_receipt_artifact_sha256"] = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(receipts_dir.glob("*.json"))
     }
     report["current_binding_sha256"] = current_binding_sha
     report["runtime_binding_sha256"] = resolved["runtime_binding_sha256"]
@@ -963,6 +1019,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     capture = subparsers.add_parser("capture-smsb")
     capture.add_argument("--output", type=Path, required=True)
+    capture.add_argument("--credential", type=Path, required=True)
     replay = subparsers.add_parser("replay-smsb")
     replay.add_argument("--captures", type=Path, required=True)
     replay.add_argument("--example-id", required=True)
@@ -972,6 +1029,7 @@ def main() -> int:
     adjudicate_s = subparsers.add_parser("adjudicate-smsb")
     adjudicate_s.add_argument("--captures", type=Path, required=True)
     adjudicate_s.add_argument("--replays-dir", type=Path, required=True)
+    adjudicate_s.add_argument("--receipts-dir", type=Path, required=True)
     adjudicate_s.add_argument("--output", type=Path, required=True)
     prepare_t = subparsers.add_parser("prepare-tetrad")
     prepare_t.add_argument("--captures", type=Path, required=True)
@@ -989,10 +1047,13 @@ def main() -> int:
     adjudicate_t.add_argument("--tetrad-manifest", type=Path, required=True)
     adjudicate_t.add_argument("--authoring", type=Path, required=True)
     adjudicate_t.add_argument("--results-dir", type=Path, required=True)
+    adjudicate_t.add_argument("--receipts-dir", type=Path, required=True)
     adjudicate_t.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "capture-smsb":
-        report = capture_smsb(args.manifest, args.output)
+        report = capture_smsb(
+            args.manifest, args.output, credential_path=args.credential
+        )
     elif args.command == "replay-smsb":
         report = replay_smsb(
             args.manifest, args.captures,
@@ -1002,7 +1063,13 @@ def main() -> int:
             credential_path=args.credential,
         )
     elif args.command == "adjudicate-smsb":
-        report = adjudicate_smsb(args.manifest, args.captures, args.replays_dir, args.output)
+        report = adjudicate_smsb(
+            args.manifest,
+            args.captures,
+            args.replays_dir,
+            args.receipts_dir,
+            args.output,
+        )
     elif args.command == "prepare-tetrad":
         report = prepare_tetrad(
             args.manifest, args.captures, args.smsb_report,
@@ -1021,7 +1088,7 @@ def main() -> int:
     else:
         report = adjudicate_tetrad(
             args.manifest, args.tetrad_manifest, args.authoring,
-            args.results_dir, args.output,
+            args.results_dir, args.receipts_dir, args.output,
         )
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0 if report.get("status") == "PASS" else 1

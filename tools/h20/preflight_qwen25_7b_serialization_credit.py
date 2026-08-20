@@ -28,6 +28,8 @@ from recurrent.research.gate_a_execution import (  # noqa: E402
 from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     canonical_sha256,
     center_truncate_token_ids,
+    parent_authority_mac,
+    validate_parent_launch_receipt,
     read_jsonl,
     require_finite_number,
     require_int,
@@ -61,6 +63,7 @@ CODE_OBJECTS = (
     "verl/utils/torch_functional.py",
     "tools/h20/preflight_qwen25_7b_s128_it.py",
     "tools/h20/preflight_qwen25_7b_serialization_credit.py",
+    "tools/h20/launch_qwen25_7b_serialization_credit_child.py",
     "tools/h20/run_qwen25_7b_serialization_credit.py",
     "tools/h20/audit_qwen25_7b_serialization_credit.py",
     "scripts/h20/serialization_credit_pilots_common.sh",
@@ -127,6 +130,41 @@ def load_manifest(
 ) -> dict[str, Any]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     return resolve_manifest_environment(raw, environment)
+
+
+def parent_authority_secret_path(manifest: Mapping[str, Any]) -> Path:
+    return Path(manifest["paths"]["parent_authority_secret"]).resolve()
+
+
+def _write_parent_authority_secret(path: Path) -> bytes:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_bytes(32)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, secret)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return secret
+
+
+def load_parent_authority_secret(
+    manifest: Mapping[str, Any], resolved: Mapping[str, Any]
+) -> bytes:
+    path = parent_authority_secret_path(manifest)
+    authority = resolved.get("parent_receipt_authority", {})
+    if path != Path(str(authority.get("secret_path", ""))).resolve():
+        raise ValueError("parent authority secret path differs from P0")
+    if not path.is_file() or path.stat().st_mode & 0o077:
+        raise ValueError("parent authority secret is missing or not mode 0600")
+    secret = path.read_bytes()
+    if len(secret) != 32 or hashlib.sha256(secret).hexdigest() != authority.get(
+        "secret_sha256"
+    ):
+        raise ValueError("parent authority secret differs from P0")
+    if authority.get("scheme") != "hmac-sha256-parent-receipt-v2":
+        raise ValueError("parent authority scheme differs from P0")
+    return secret
 
 
 def _load_parquet_rows(path: Path) -> list[dict[str, Any]]:
@@ -570,6 +608,9 @@ def run_preflight(
             "full_model_sha_per_fresh_child",
             "actual_gpu_uuid_name_bound_per_child",
             "parent_issued_single_use_credential_per_child",
+            "parent_hmac_authenticated_receipt_per_child",
+            "parent_observed_child_pid_ppid_exit_and_stdout_sha",
+            "unique_parent_supervisor_pid_required",
             "unique_child_pid_required",
         ):
             if command_execution.get(field) is not True:
@@ -787,10 +828,21 @@ def write_preflight(
     p0_path = Path(manifest["paths"]["p0_certificate"])
     resolved_path = Path(manifest["paths"]["resolved_manifest"])
     ledger_path = Path(manifest["paths"]["execution_ledger"])
-    if any(path.exists() for path in (p0_path, resolved_path, ledger_path)):
+    authority_path = parent_authority_secret_path(manifest)
+    if any(
+        path.exists() for path in (p0_path, resolved_path, ledger_path, authority_path)
+    ):
         raise FileExistsError("refuse to overwrite append-only P0 evidence")
     report, resolved = run_preflight(manifest_path, check_runtime=check_runtime)
     if resolved is not None:
+        authority_secret = _write_parent_authority_secret(authority_path)
+        authority_binding = {
+            "scheme": "hmac-sha256-parent-receipt-v2",
+            "secret_path": str(authority_path),
+            "secret_sha256": hashlib.sha256(authority_secret).hexdigest(),
+        }
+        resolved["parent_receipt_authority"] = authority_binding
+        report["evidence"]["parent_receipt_authority"] = authority_binding
         write_json_exclusive(resolved_path, resolved)
         report["evidence"]["resolved_manifest_path"] = str(resolved_path.resolve())
         report["evidence"]["resolved_manifest_sha256"] = sha256_file(resolved_path)
@@ -812,6 +864,10 @@ def write_preflight(
                 "artifact_sha256": sha256_file(p0_path),
                 "resolved_manifest": str(resolved_path.resolve()),
                 "resolved_manifest_sha256": sha256_file(resolved_path),
+                "parent_authority_secret_path": str(authority_path),
+                "parent_authority_secret_sha256": resolved[
+                    "parent_receipt_authority"
+                ]["secret_sha256"],
                 "status": "PASS",
                 "decision": "SERIAL_CREDIT_P0_PASS",
                 "training_authorized": False,
@@ -837,6 +893,8 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if not records:
         raise ValueError("execution ledger is empty")
     head = records[0]
+    authority_path = parent_authority_secret_path(manifest)
+    authority = resolved.get("parent_receipt_authority", {})
     expected_commit = os.environ["MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"]
     valid = all(
         (
@@ -868,6 +926,17 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             head.get("runtime_binding_sha256") == resolved.get("runtime_binding_sha256"),
             head.get("execution_binding_sha256") == resolved.get("execution_binding_sha256"),
             head.get("current_binding_sha256") == resolved.get("lightweight_current_binding_sha256"),
+            p0.get("evidence", {}).get("parent_receipt_authority") == authority,
+            authority.get("scheme") == "hmac-sha256-parent-receipt-v2",
+            authority.get("secret_path") == str(authority_path),
+            isinstance(authority.get("secret_sha256"), str),
+            head.get("parent_authority_secret_path") == str(authority_path),
+            head.get("parent_authority_secret_sha256")
+            == authority.get("secret_sha256"),
+            authority_path.is_file(),
+            not bool(authority_path.stat().st_mode & 0o077)
+            if authority_path.is_file()
+            else False,
         )
     )
     if not valid:
@@ -881,53 +950,56 @@ def issue_child_credential(
     output: Path,
     child_kind: str,
     child_identity: str,
-    issuer_shell_pid: int,
+    issuer_pid: int,
 ) -> dict[str, Any]:
-    """Issue one append-only parent credential immediately before one GPU child."""
-    if child_kind not in {"smsb_replay", "tetrad_replay"}:
-        raise ValueError("child credential kind is not a fresh replay kind")
+    """Issue one HMAC-authenticated credential from the actual parent launcher."""
+    if child_kind not in {"smsb_capture", "smsb_replay", "tetrad_replay"}:
+        raise ValueError("child credential kind is not a supervised GPU child kind")
     if (
         not isinstance(child_identity, str)
         or not child_identity
         or any(character in child_identity for character in ("\t", "\r", "\n"))
     ):
         raise ValueError("child credential identity is unsafe or empty")
-    issuer_shell_pid = require_int(
-        issuer_shell_pid, "issuer_shell_pid", minimum=1
-    )
-    if os.getppid() != issuer_shell_pid:
-        raise ValueError(
-            "credential issuer PID is not the direct parent shell: "
-            f"{issuer_shell_pid} != {os.getppid()}"
-        )
+    issuer_pid = require_int(issuer_pid, "issuer_pid", minimum=1)
+    if os.getpid() != issuer_pid:
+        raise ValueError("credential issuer must be the current parent launcher process")
     manifest = load_manifest(manifest_path)
     _, resolved = validate_p0(manifest_path)
     current_binding_sha = verify_current_binding(
         manifest, resolved, full_model_sha=False
     )
+    authority_secret = load_parent_authority_secret(manifest, resolved)
     log_root = Path(manifest["paths"]["log_root"]).resolve()
     if not output.resolve().is_relative_to(log_root):
         raise ValueError("child credential path is outside the frozen run root")
     credential = {
-        "schema": "memagent.serialization-credit.parent-child-credential.v1",
+        "schema": "memagent.serialization-credit.parent-child-credential.v2",
         "run_id": manifest["run_id"],
         "git_commit": os.environ["MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"],
         "child_kind": child_kind,
         "child_identity": child_identity,
-        "parent_issuer_pid": issuer_shell_pid,
+        "parent_issuer_pid": issuer_pid,
         "issued_at": utc_now(),
         "nonce": secrets.token_hex(32),
         "current_binding_sha256": current_binding_sha,
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "child_full_model_sha_required": True,
+        "parent_authority_secret_sha256": hashlib.sha256(
+            authority_secret
+        ).hexdigest(),
     }
     credential["parent_credential_id"] = canonical_sha256(credential)
+    credential["parent_credential_mac"] = parent_authority_mac(
+        authority_secret, "child-credential-v2", credential
+    )
     write_json_exclusive(output, credential)
+    output.chmod(0o600)
     return credential
 
 
-def validate_child_credential(
+def _load_child_credential(
     credential_path: Path,
     *,
     manifest: Mapping[str, Any],
@@ -935,8 +1007,7 @@ def validate_child_credential(
     current_binding_sha: str,
     child_kind: str,
     child_identity: str,
-) -> dict[str, Any]:
-    """Authenticate a credential in its direct child or sibling recorder process."""
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not credential_path.is_file():
         raise ValueError("parent-issued child credential is missing")
     log_root = Path(manifest["paths"]["log_root"]).resolve()
@@ -946,22 +1017,21 @@ def validate_child_credential(
     credential_id = require_sha256(
         credential.get("parent_credential_id"), "parent_credential_id"
     )
+    credential_mac = require_sha256(
+        credential.get("parent_credential_mac"), "parent_credential_mac"
+    )
     unsigned = dict(credential)
     unsigned.pop("parent_credential_id")
+    unsigned.pop("parent_credential_mac")
     if canonical_sha256(unsigned) != credential_id:
         raise ValueError("parent-issued child credential canonical digest differs")
     parent_pid = require_int(
         credential.get("parent_issuer_pid"), "parent_issuer_pid", minimum=1
     )
-    if parent_pid != os.getppid():
-        raise ValueError(
-            "current process is not a direct child of the credential issuer: "
-            f"{os.getppid()} != {parent_pid}"
-        )
     valid = all(
         (
             credential.get("schema")
-            == "memagent.serialization-credit.parent-child-credential.v1",
+            == "memagent.serialization-credit.parent-child-credential.v2",
             credential.get("run_id") == manifest["run_id"],
             credential.get("git_commit")
             == os.environ["MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"],
@@ -973,6 +1043,8 @@ def validate_child_credential(
             credential.get("execution_binding_sha256")
             == resolved["execution_binding_sha256"],
             credential.get("child_full_model_sha_required") is True,
+            credential.get("parent_authority_secret_sha256")
+            == resolved["parent_receipt_authority"]["secret_sha256"],
             isinstance(credential.get("nonce"), str),
             re.fullmatch(r"[0-9a-f]{64}", credential.get("nonce", ""))
             is not None,
@@ -980,13 +1052,71 @@ def validate_child_credential(
     )
     if not valid:
         raise ValueError("parent-issued child credential binding differs")
-    return {
+    evidence = {
         "parent_credential_id": credential_id,
+        "parent_credential_mac": credential_mac,
         "parent_credential_sha256": sha256_file(credential_path),
         "parent_credential_path": str(credential_path.resolve()),
         "parent_issuer_pid": parent_pid,
-        "observed_parent_pid": os.getppid(),
     }
+    return credential, evidence
+
+
+def load_child_credential_claim(
+    credential_path: Path,
+    *,
+    manifest: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    current_binding_sha: str,
+    child_kind: str,
+    child_identity: str,
+) -> dict[str, Any]:
+    """Load a credential in the child; only the parent receipt later authenticates it."""
+    _, evidence = _load_child_credential(
+        credential_path,
+        manifest=manifest,
+        resolved=resolved,
+        current_binding_sha=current_binding_sha,
+        child_kind=child_kind,
+        child_identity=child_identity,
+    )
+    if evidence["parent_issuer_pid"] != os.getppid():
+        raise ValueError("GPU child is not directly parented by the credential issuer")
+    return {**evidence, "observed_parent_pid": os.getppid()}
+
+
+def validate_child_credential(
+    credential_path: Path,
+    *,
+    manifest: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    current_binding_sha: str,
+    child_kind: str,
+    child_identity: str,
+    authority_secret: bytes,
+    expected_issuer_pid: int,
+) -> dict[str, Any]:
+    """Authenticate an issuer credential in the parent supervisor/auditor."""
+    credential, evidence = _load_child_credential(
+        credential_path,
+        manifest=manifest,
+        resolved=resolved,
+        current_binding_sha=current_binding_sha,
+        child_kind=child_kind,
+        child_identity=child_identity,
+    )
+    if evidence["parent_issuer_pid"] != require_int(
+        expected_issuer_pid, "expected_issuer_pid", minimum=1
+    ):
+        raise ValueError("credential issuer PID differs from parent observation")
+    signed = dict(credential)
+    claimed_mac = signed.pop("parent_credential_mac")
+    expected_mac = parent_authority_mac(
+        authority_secret, "child-credential-v2", signed
+    )
+    if not secrets.compare_digest(claimed_mac, expected_mac):
+        raise ValueError("parent-issued child credential MAC differs")
+    return evidence
 
 
 def record_stage(
@@ -999,6 +1129,7 @@ def record_stage(
     request_id: str | None,
     state_role: str | None,
     parent_credential: Path | None = None,
+    parent_receipt: Path | None = None,
 ) -> dict[str, Any]:
     allowed = {
         "smsb_capture", "smsb_replay", "smsb_adjudication",
@@ -1075,29 +1206,88 @@ def record_stage(
             raise ValueError("Tetrad construct authoring companion artifact is missing")
         record["authoring_artifact"] = str(authoring.resolve())
         record["authoring_artifact_sha256"] = sha256_file(authoring)
-    if record_type in {"smsb_replay", "tetrad_replay"}:
-        if parent_credential is None:
-            raise ValueError("fresh replay stage requires its parent-issued credential")
-        payload = json.loads(artifact.read_text(encoding="utf-8"))
-        result = payload["result"] if record_type == "smsb_replay" else payload
-        child_identity = (
-            f"{example_id}::{regime}"
-            if record_type == "smsb_replay"
-            else str(request_id)
+    if record_type in {"smsb_capture", "smsb_replay", "tetrad_replay"}:
+        if parent_credential is None or parent_receipt is None:
+            raise ValueError(
+                "GPU child stage requires parent credential and launch receipt"
+            )
+        payload: Any = (
+            read_jsonl(artifact)
+            if record_type == "smsb_capture"
+            else json.loads(artifact.read_text(encoding="utf-8"))
         )
+        if record_type == "smsb_capture":
+            if len(payload) != 4:
+                raise ValueError("SMSB capture artifact must contain four rows")
+            result = payload[0]["execution"]
+            if any(
+                canonical_sha256(row["execution"])
+                != canonical_sha256(result)
+                for row in payload[1:]
+            ):
+                raise ValueError("SMSB capture process evidence differs by row")
+        else:
+            result = payload["result"] if record_type == "smsb_replay" else payload
+        child_identity = (
+            "capture4"
+            if record_type == "smsb_capture"
+            else (
+                f"{example_id}::{regime}"
+                if record_type == "smsb_replay"
+                else str(request_id)
+            )
+        )
+        child_kind = record_type
+        receipt_payload = json.loads(parent_receipt.read_text(encoding="utf-8"))
+        authority_secret = load_parent_authority_secret(manifest, resolved)
         credential_evidence = validate_child_credential(
             parent_credential,
             manifest=manifest,
             resolved=resolved,
             current_binding_sha=current_binding_sha,
-            child_kind=record_type,
+            child_kind=child_kind,
             child_identity=child_identity,
+            authority_secret=authority_secret,
+            expected_issuer_pid=require_int(
+                receipt_payload.get("parent_launcher_pid"),
+                "receipt.parent_launcher_pid",
+                minimum=1,
+            ),
         )
         if any(result.get(key) != value for key, value in credential_evidence.items()):
             raise ValueError("fresh replay result differs from parent-issued credential")
+        validated_receipt = validate_parent_launch_receipt(
+            receipt_payload,
+            authority_secret=authority_secret,
+            artifact_payload=payload,
+            child_evidence=result,
+            child_kind=child_kind,
+            child_identity=child_identity,
+        )
+        if (
+            Path(str(validated_receipt["artifact"])).resolve() != artifact.resolve()
+            or validated_receipt["artifact_sha256"] != sha256_file(artifact)
+            or not Path(str(validated_receipt["stdout_artifact"])).is_file()
+            or validated_receipt["stdout_artifact_sha256"]
+            != sha256_file(validated_receipt["stdout_artifact"])
+        ):
+            raise ValueError("parent launch receipt artifact/stdout binding differs")
         record.update(credential_evidence)
         record["process_pid"] = require_int(
             result.get("process_pid"), "result.process_pid", minimum=1
+        )
+        record.update(
+            parent_receipt_path=str(parent_receipt.resolve()),
+            parent_receipt_sha256=sha256_file(parent_receipt),
+            parent_receipt_id=validated_receipt["receipt_id"],
+            parent_receipt_mac=validated_receipt["receipt_mac"],
+            parent_launcher_pid=validated_receipt["parent_launcher_pid"],
+            observed_child_ppid=validated_receipt["observed_child_ppid"],
+            child_exit_code=validated_receipt["child_exit_code"],
+            child_stdout_artifact=validated_receipt["stdout_artifact"],
+            child_stdout_artifact_sha256=validated_receipt[
+                "stdout_artifact_sha256"
+            ],
         )
     append_jsonl(ledger_path, record)
     return record
@@ -1116,25 +1306,8 @@ def main() -> int:
     parser.add_argument("--request-id")
     parser.add_argument("--state-role")
     parser.add_argument("--parent-credential", type=Path)
-    parser.add_argument("--issue-child-credential", type=Path)
-    parser.add_argument("--child-kind")
-    parser.add_argument("--child-identity")
-    parser.add_argument("--issuer-shell-pid", type=int)
+    parser.add_argument("--parent-receipt", type=Path)
     args = parser.parse_args()
-    if args.issue_child_credential is not None:
-        if not args.child_kind or not args.child_identity or args.issuer_shell_pid is None:
-            parser.error(
-                "--issue-child-credential requires --child-kind, --child-identity, and --issuer-shell-pid"
-            )
-        credential = issue_child_credential(
-            args.manifest,
-            output=args.issue_child_credential,
-            child_kind=args.child_kind,
-            child_identity=args.child_identity,
-            issuer_shell_pid=args.issuer_shell_pid,
-        )
-        print(json.dumps(credential, ensure_ascii=False, sort_keys=True))
-        return 0
     if args.record_type:
         if args.artifact is None:
             parser.error("--record-type requires --artifact")
@@ -1147,6 +1320,7 @@ def main() -> int:
             request_id=args.request_id,
             state_role=args.state_role,
             parent_credential=args.parent_credential,
+            parent_receipt=args.parent_receipt,
         )
         print(json.dumps(record, ensure_ascii=False, sort_keys=True))
         return 0

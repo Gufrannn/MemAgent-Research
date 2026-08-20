@@ -29,9 +29,11 @@ serial_credit_require_idle
 [[ ! -e $SERIAL_CREDIT_TETRAD_ROOT ]] || {
   echo 'SERIAL_CREDIT_NO_GO:TETRAD append-only Tetrad root already exists' >&2; exit 77;
 }
-mkdir -p "$SERIAL_CREDIT_TETRAD_RESULTS" "$SERIAL_CREDIT_TETRAD_CREDENTIALS"
+mkdir -p "$SERIAL_CREDIT_TETRAD_RESULTS" "$SERIAL_CREDIT_TETRAD_CREDENTIALS" \
+  "$SERIAL_CREDIT_TETRAD_RECEIPTS" "$SERIAL_CREDIT_TETRAD_CHILD_LOGS"
 readonly TETRAD_LOG=$SERIAL_CREDIT_LOG_ROOT/tetrad4.log
 readonly RUNNER=$SERIAL_CREDIT_REPO_DIR/tools/h20/run_qwen25_7b_serialization_credit.py
+readonly LAUNCHER=$SERIAL_CREDIT_REPO_DIR/tools/h20/launch_qwen25_7b_serialization_credit_child.py
 
 cd "$SERIAL_CREDIT_REPO_DIR"
 
@@ -55,17 +57,16 @@ for request_row in "${request_rows[@]}"; do
   IFS=$'\t' read -r request_id example_id state_role <<<"$request_row"
   artifact=$(printf '%s/%02d.json' "$SERIAL_CREDIT_TETRAD_RESULTS" "$completed")
   credential=$(printf '%s/%02d.json' "$SERIAL_CREDIT_TETRAD_CREDENTIALS" "$completed")
+  receipt=$(printf '%s/%02d.json' "$SERIAL_CREDIT_TETRAD_RECEIPTS" "$completed")
+  child_log=$(printf '%s/%02d.log' "$SERIAL_CREDIT_TETRAD_CHILD_LOGS" "$completed")
   serial_credit_require_idle
-  serial_credit_issue_child_credential \
-    "$credential" tetrad_replay "$request_id"
-  "$SERIAL_CREDIT_PYTHON" "$RUNNER" --manifest "$SERIAL_CREDIT_MANIFEST" \
+  "$SERIAL_CREDIT_PYTHON" "$LAUNCHER" --manifest "$SERIAL_CREDIT_MANIFEST" \
+    --artifact "$artifact" --credential "$credential" \
+    --receipt "$receipt" --stdout-artifact "$child_log" \
     run-tetrad-request --tetrad-manifest "$SERIAL_CREDIT_TETRAD_MANIFEST" \
-    --request-id "$request_id" --output "$artifact" \
-    --credential "$credential" >>"$TETRAD_LOG" 2>&1
+    --request-id "$request_id" --example-id "$example_id" \
+    --state-role "$state_role" >>"$TETRAD_LOG" 2>&1
   serial_credit_wait_idle
-  serial_credit_record --record-type tetrad_replay --artifact "$artifact" \
-    --request-id "$request_id" --example-id "$example_id" --state-role "$state_role" \
-    --parent-credential "$credential"
   completed=$((completed + 1))
 done
 [[ $completed -eq 20 ]] || {
@@ -75,7 +76,9 @@ done
 "$SERIAL_CREDIT_PYTHON" "$RUNNER" --manifest "$SERIAL_CREDIT_MANIFEST" \
   adjudicate-tetrad --tetrad-manifest "$SERIAL_CREDIT_TETRAD_MANIFEST" \
   --authoring "$SERIAL_CREDIT_TETRAD_AUTHORING" \
-  --results-dir "$SERIAL_CREDIT_TETRAD_RESULTS" --output "$SERIAL_CREDIT_TETRAD_REPORT" \
+  --results-dir "$SERIAL_CREDIT_TETRAD_RESULTS" \
+  --receipts-dir "$SERIAL_CREDIT_TETRAD_RECEIPTS" \
+  --output "$SERIAL_CREDIT_TETRAD_REPORT" \
   >>"$TETRAD_LOG" 2>&1
 serial_credit_record --record-type tetrad_adjudication --artifact "$SERIAL_CREDIT_TETRAD_REPORT"
 

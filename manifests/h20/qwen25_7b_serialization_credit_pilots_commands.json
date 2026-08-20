@@ -13,6 +13,7 @@
   ],
   "entrypoints": {
     "p0": "scripts/h20/preflight_qwen25_7b_serialization_credit.sh",
+    "parent_supervisor": "tools/h20/launch_qwen25_7b_serialization_credit_child.py",
     "gpu_runner": "tools/h20/run_qwen25_7b_serialization_credit.py",
     "audit": "tools/h20/audit_qwen25_7b_serialization_credit.py",
     "smsb": "scripts/h20/run_qwen25_7b_smsb4.sh",
@@ -32,6 +33,9 @@
     "full_model_sha_per_fresh_child": true,
     "actual_gpu_uuid_name_bound_per_child": true,
     "parent_issued_single_use_credential_per_child": true,
+    "parent_hmac_authenticated_receipt_per_child": true,
+    "parent_observed_child_pid_ppid_exit_and_stdout_sha": true,
+    "unique_parent_supervisor_pid_required": true,
     "unique_child_pid_required": true
   },
   "gate_order": {

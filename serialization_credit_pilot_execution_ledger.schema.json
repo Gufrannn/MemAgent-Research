@@ -46,11 +46,23 @@
     "authoring_artifact": {"type": "string"},
     "authoring_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "parent_credential_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_credential_mac": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "parent_credential_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "parent_credential_path": {"type": "string"},
     "parent_issuer_pid": {"type": "integer", "minimum": 1},
     "observed_parent_pid": {"type": "integer", "minimum": 1},
     "process_pid": {"type": "integer", "minimum": 1},
+    "parent_authority_secret_path": {"type": "string"},
+    "parent_authority_secret_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_receipt_path": {"type": "string"},
+    "parent_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_receipt_mac": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_launcher_pid": {"type": "integer", "minimum": 1},
+    "observed_child_ppid": {"type": "integer", "minimum": 1},
+    "child_exit_code": {"const": 0},
+    "child_stdout_artifact": {"type": "string"},
+    "child_stdout_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "status": {"enum": ["PASS", "FAIL"]},
     "decision": {"type": "string"},
     "example_id": {"type": "string"},
@@ -60,5 +72,43 @@
     "training_authorized": {"const": false},
     "method_selection_status": {"const": "PENDING_EVIDENCE_NO_SELECTION"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"record_type": {"const": "s0_preflight"}}},
+      "then": {
+        "required": [
+          "parent_authority_secret_path",
+          "parent_authority_secret_sha256"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "enum": ["smsb_capture", "smsb_replay", "tetrad_replay"]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "parent_credential_id",
+          "parent_credential_mac",
+          "parent_credential_sha256",
+          "parent_credential_path",
+          "process_pid",
+          "parent_receipt_path",
+          "parent_receipt_sha256",
+          "parent_receipt_id",
+          "parent_receipt_mac",
+          "parent_launcher_pid",
+          "observed_child_ppid",
+          "child_exit_code",
+          "child_stdout_artifact",
+          "child_stdout_artifact_sha256"
+        ]
+      }
+    }
+  ],
   "additionalProperties": true
 }

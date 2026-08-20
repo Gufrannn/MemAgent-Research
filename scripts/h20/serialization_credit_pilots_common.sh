@@ -27,17 +27,22 @@ readonly SERIAL_CREDIT_LOG_ROOT=$SERIAL_CREDIT_WORK_ROOT/logs/serialization_cred
 readonly SERIAL_CREDIT_CERT_ROOT=$SERIAL_CREDIT_LOG_ROOT/certificates
 readonly SERIAL_CREDIT_P0=$SERIAL_CREDIT_CERT_ROOT/p0_preflight.json
 readonly SERIAL_CREDIT_RESOLVED=$SERIAL_CREDIT_CERT_ROOT/p0_resolved_manifest.json
+readonly SERIAL_CREDIT_PARENT_AUTHORITY=$SERIAL_CREDIT_CERT_ROOT/parent_receipt_authority.secret
 readonly SERIAL_CREDIT_LEDGER=$SERIAL_CREDIT_LOG_ROOT/serialization_credit_pilot_execution_ledger.jsonl
 readonly SERIAL_CREDIT_SMSB_ROOT=$SERIAL_CREDIT_LOG_ROOT/smsb
 readonly SERIAL_CREDIT_SMSB_CAPTURES=$SERIAL_CREDIT_SMSB_ROOT/captures.jsonl
 readonly SERIAL_CREDIT_SMSB_REPLAYS=$SERIAL_CREDIT_SMSB_ROOT/replays
 readonly SERIAL_CREDIT_SMSB_CREDENTIALS=$SERIAL_CREDIT_SMSB_ROOT/credentials
+readonly SERIAL_CREDIT_SMSB_RECEIPTS=$SERIAL_CREDIT_SMSB_ROOT/receipts
+readonly SERIAL_CREDIT_SMSB_CHILD_LOGS=$SERIAL_CREDIT_SMSB_ROOT/child_logs
 readonly SERIAL_CREDIT_SMSB_REPORT=$SERIAL_CREDIT_SMSB_ROOT/adjudication.json
 readonly SERIAL_CREDIT_TETRAD_ROOT=$SERIAL_CREDIT_LOG_ROOT/tetrad
 readonly SERIAL_CREDIT_TETRAD_AUTHORING=$SERIAL_CREDIT_TETRAD_ROOT/authoring.jsonl
 readonly SERIAL_CREDIT_TETRAD_MANIFEST=$SERIAL_CREDIT_TETRAD_ROOT/manifest.jsonl
 readonly SERIAL_CREDIT_TETRAD_RESULTS=$SERIAL_CREDIT_TETRAD_ROOT/results
 readonly SERIAL_CREDIT_TETRAD_CREDENTIALS=$SERIAL_CREDIT_TETRAD_ROOT/credentials
+readonly SERIAL_CREDIT_TETRAD_RECEIPTS=$SERIAL_CREDIT_TETRAD_ROOT/receipts
+readonly SERIAL_CREDIT_TETRAD_CHILD_LOGS=$SERIAL_CREDIT_TETRAD_ROOT/child_logs
 readonly SERIAL_CREDIT_TETRAD_REPORT=$SERIAL_CREDIT_TETRAD_ROOT/adjudication.json
 readonly SERIAL_CREDIT_FINAL_REPORT=$SERIAL_CREDIT_CERT_ROOT/serialization_credit_pilot_final_report.json
 readonly SERIAL_CREDIT_GPUS=6,7
@@ -127,15 +132,4 @@ serial_credit_record() {
   "$SERIAL_CREDIT_PYTHON" \
     "$SERIAL_CREDIT_REPO_DIR/tools/h20/preflight_qwen25_7b_serialization_credit.py" \
     --manifest "$SERIAL_CREDIT_MANIFEST" "$@" >/dev/null
-}
-
-serial_credit_issue_child_credential() {
-  local credential=$1 child_kind=$2 child_identity=$3
-  "$SERIAL_CREDIT_PYTHON" \
-    "$SERIAL_CREDIT_REPO_DIR/tools/h20/preflight_qwen25_7b_serialization_credit.py" \
-    --manifest "$SERIAL_CREDIT_MANIFEST" \
-    --issue-child-credential "$credential" \
-    --child-kind "$child_kind" \
-    --child-identity "$child_identity" \
-    --issuer-shell-pid "$$" >/dev/null
 }
