@@ -53,6 +53,50 @@ def load_manifest(path: Path) -> dict:
     return load_frozen_manifest(path)
 
 
+def validate_frozen_cursor_contract(data: dict, training: dict) -> list[str]:
+    """Validate the positional-to-semantic cursor map used by the sequential loader."""
+    failures: list[str] = []
+    prefix = data.get("train_cursor_prefix")
+    expected_length = int(training["resume_total_steps"]) * int(training["train_batch_size"])
+    if not isinstance(prefix, list) or any(
+        not isinstance(value, int) or isinstance(value, bool) for value in prefix
+    ):
+        return ["data.train_cursor_prefix must be a list of integer semantic dataset indices"]
+    if len(prefix) != expected_length:
+        failures.append(
+            f"frozen train cursor prefix length {len(prefix)} != {expected_length} "
+            "(resume_total_steps * train_batch_size)"
+        )
+    if len(prefix) != len(set(prefix)):
+        failures.append(f"frozen train cursor prefix contains duplicate semantic indices: {prefix}")
+    if data.get("shuffle") is not False:
+        failures.append("frozen train cursor requires data.shuffle=false")
+    if data.get("dataloader_num_workers") != 0:
+        failures.append("frozen train cursor requires data.dataloader_num_workers=0")
+    if data.get("filter_overlong_prompts") is not True:
+        failures.append("frozen train cursor requires filter_overlong_prompts=true")
+    return failures
+
+
+def collect_effective_cursor_prefix(
+    rows, *, prompt_is_valid, expected_length: int
+) -> tuple[list[int], list[int]]:
+    """Collect semantic IDs after replaying the production prompt filter in row order."""
+    semantic_indices: list[int] = []
+    raw_row_positions: list[int] = []
+    for raw_position, row in enumerate(rows):
+        if not prompt_is_valid(row["prompt"]):
+            continue
+        extra_info = row["extra_info"]
+        if isinstance(extra_info, str):
+            extra_info = json.loads(extra_info)
+        semantic_indices.append(int(extra_info["index"]))
+        raw_row_positions.append(raw_position)
+        if len(semantic_indices) == expected_length:
+            break
+    return semantic_indices, raw_row_positions
+
+
 def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -> dict:
     manifest_path = manifest_path.resolve()
     repo = manifest_path.parents[2]
@@ -151,6 +195,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -
         "rollout_n": 2,
         "ppo_mini_batch_size": 4,
         "chunk_size": 5000,
+        "max_chunks": 8,
         "max_prompt_length": 8192,
         "max_response_length": 1024,
         "ppo_max_token_len_per_gpu": 16384,
@@ -166,6 +211,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -
     if manifest.get("training") != expected_training:
         failures.append("formal Qwen2.5-7B Gate A training contract drifted")
 
+    failures.extend(validate_frozen_cursor_contract(manifest["data"], manifest["training"]))
     data_spec = dict(raw_manifest["data"])
     expected_data_manifest_sha = data_spec.pop("manifest_sha256")
     actual_data_manifest_sha = canonical_sha256(data_spec)
@@ -267,7 +313,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -
         "kind": "formal_gate_a",
         "physical_gpus": [6, 7],
         "world_size": 2,
-        "execution_revision": "20260821r4",
+        "execution_revision": "20260821r5",
     }
     if manifest.get("contract") != expected_contract or commands.get("contract") != expected_contract:
         failures.append("formal two-GPU command/manifest contract drifted")
@@ -300,17 +346,41 @@ def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -
                 failures.append(f"cannot parse frozen runtime versions: {error}")
         try:
             import pyarrow.parquet as parquet
+            from verl.utils import hf_tokenizer
 
-            table = parquet.read_table(train, columns=["extra_info"]).slice(0, 12)
-            cursor_indices = []
-            for value in table.column("extra_info").to_pylist():
-                if isinstance(value, str):
-                    value = json.loads(value)
-                cursor_indices.append(int(value["index"]))
+            expected_cursor_indices = manifest["data"].get("train_cursor_prefix")
+            if not isinstance(expected_cursor_indices, list):
+                raise ValueError("manifest data.train_cursor_prefix is not a list")
+            tokenizer = hf_tokenizer(str(model_root), trust_remote_code=False)
+            effective_max_prompt_length = (
+                int(manifest["training"]["max_chunks"])
+                * int(manifest["training"]["chunk_size"])
+            )
+            parquet_file = parquet.ParquetFile(train)
+
+            def iter_rows():
+                for batch in parquet_file.iter_batches(columns=["prompt", "extra_info"]):
+                    yield from batch.to_pylist()
+
+            cursor_indices, raw_row_positions = collect_effective_cursor_prefix(
+                iter_rows(),
+                prompt_is_valid=lambda prompt: len(tokenizer.apply_chat_template(
+                    prompt, add_generation_prompt=True
+                )) <= effective_max_prompt_length,
+                expected_length=len(expected_cursor_indices),
+            )
             evidence["train_cursor_prefix"] = cursor_indices
-            if cursor_indices != list(range(12)):
+            evidence["expected_train_cursor_prefix"] = expected_cursor_indices
+            evidence["train_cursor_raw_row_positions"] = raw_row_positions
+            evidence["effective_max_prompt_length"] = effective_max_prompt_length
+            evidence["filter_overlong_prompts"] = manifest["data"][
+                "filter_overlong_prompts"
+            ]
+            if cursor_indices != expected_cursor_indices:
                 failures.append(
-                    f"frozen HotpotQA cursor prefix is not semantic indices 0..11: {cursor_indices}"
+                    "frozen HotpotQA production-effective positional-to-semantic "
+                    "cursor mismatch: "
+                    f"{cursor_indices} != {expected_cursor_indices}"
                 )
         except Exception as error:
             failures.append(f"cannot verify frozen HotpotQA dataset indices: {error}")
@@ -340,7 +410,12 @@ def run_preflight(manifest_path: Path, check_runtime: bool, phase: str = "p0") -
                 failures.append("missing standalone P0 certificate during runtime recheck")
             else:
                 frozen_evidence = json.loads(p0_path.read_text(encoding="utf-8")).get("evidence", {})
-                for field in ("runtime_versions", "physical_gpu_identity"):
+                for field in (
+                    "runtime_versions",
+                    "physical_gpu_identity",
+                    "train_cursor_prefix",
+                    "train_cursor_raw_row_positions",
+                ):
                     if evidence.get(field) != frozen_evidence.get(field):
                         failures.append(
                             f"runtime field {field} changed since P0: "

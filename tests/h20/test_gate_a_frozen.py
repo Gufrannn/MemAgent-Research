@@ -26,7 +26,13 @@ from tools.h20.audit_qwen25_7b_gatea import (
     validate_ledger_schema,
     verify_resume_source,
 )
+from tools.h20.preflight_qwen25_7b_gatea import (
+    collect_effective_cursor_prefix,
+    validate_frozen_cursor_contract,
+)
 from recurrent.research.trajectory_seeding import build_trajectory_seed_records, derive_turn_request_seeds
+
+FROZEN_CURSOR_PREFIX = [2, 6, 7, 9, 10, 11, 12, 14, 16, 20, 21, 23]
 
 digest_spec = importlib.util.spec_from_file_location(
     "gate_a_weight_sync", REPO / "verl/utils/gate_a_weight_sync.py"
@@ -65,10 +71,18 @@ class FrozenManifestTests(unittest.TestCase):
         self.assertTrue(all(len(item["sha256"]) == 64 for item in manifest["model"]["files"]))
         self.assertEqual(len(manifest["data"]["train_sha256"]), 64)
         self.assertEqual(len(manifest["data"]["validation_sha256"]), 64)
+        self.assertEqual(manifest["data"]["train_cursor_prefix"], FROZEN_CURSOR_PREFIX)
+        self.assertTrue(manifest["data"]["filter_overlong_prompts"])
+        self.assertEqual(manifest["training"]["max_chunks"], 8)
+        self.assertEqual(
+            validate_frozen_cursor_contract(manifest["data"], manifest["training"]), []
+        )
 
     def test_gate_a_run_freezes_dtensor_transfer(self):
         script = (REPO / "experiments/7b_gate_a/run_gate_a.sh").read_text()
         self.assertIn("actor_rollout_ref.rollout.load_format=dummy_dtensor", script)
+        self.assertIn("recurrent.memory.config.max_chunks=8", script)
+        self.assertIn("data.filter_overlong_prompts=True", script)
 
     def test_data_manifest_hash_is_canonical(self):
         manifest = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml").read_text())
@@ -77,13 +91,54 @@ class FrozenManifestTests(unittest.TestCase):
         payload = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(payload).hexdigest(), expected)
 
+    def test_cursor_contract_rejects_shape_and_identity_drift(self):
+        manifest = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml").read_text())
+        data = dict(manifest["data"])
+        data["train_cursor_prefix"] = data["train_cursor_prefix"][:-1]
+        self.assertTrue(any(
+            "prefix length" in failure
+            for failure in validate_frozen_cursor_contract(data, manifest["training"])
+        ))
+        data["train_cursor_prefix"] = FROZEN_CURSOR_PREFIX[:-1] + [FROZEN_CURSOR_PREFIX[0]]
+        self.assertTrue(any(
+            "duplicate" in failure
+            for failure in validate_frozen_cursor_contract(data, manifest["training"])
+        ))
+        data["train_cursor_prefix"] = FROZEN_CURSOR_PREFIX[:-1] + ["23"]
+        self.assertTrue(any(
+            "list of integer" in failure
+            for failure in validate_frozen_cursor_contract(data, manifest["training"])
+        ))
+        data = dict(manifest["data"])
+        data["shuffle"] = True
+        data["dataloader_num_workers"] = 1
+        data["filter_overlong_prompts"] = False
+        failures = validate_frozen_cursor_contract(data, manifest["training"])
+        self.assertTrue(any("shuffle=false" in failure for failure in failures))
+        self.assertTrue(any("dataloader_num_workers=0" in failure for failure in failures))
+        self.assertTrue(any("filter_overlong_prompts=true" in failure for failure in failures))
+
+    def test_effective_cursor_prefix_replays_filter_before_freezing_identity(self):
+        rows = [
+            {"prompt": "too-long", "extra_info": {"index": 2}},
+            {"prompt": "short", "extra_info": {"index": 6}},
+            {"prompt": "short", "extra_info": '{"index": 7}'},
+        ]
+        semantic, raw_positions = collect_effective_cursor_prefix(
+            rows,
+            prompt_is_valid=lambda prompt: prompt == "short",
+            expected_length=2,
+        )
+        self.assertEqual(semantic, [6, 7])
+        self.assertEqual(raw_positions, [1, 2])
+
     def test_command_manifest_is_non_authorizing_and_schema_parses(self):
         commands = json.loads((REPO / "manifests/h20/qwen25_7b_gatea_commands.json").read_text())
         schema = json.loads((REPO / "gate_a_execution_ledger.schema.json").read_text())
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
         self.assertEqual(commands["contract"], {
             "kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2,
-            "execution_revision": "20260821r4",
+            "execution_revision": "20260821r5",
         })
         self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
         self.assertEqual(commands["required_environment"], [
@@ -305,7 +360,7 @@ class LedgerAndAuditTests(unittest.TestCase):
         for row in rows:
             row["record_type"] = "trajectory_seed"
             row["uid"] = f"uid-{row['group']}"
-            row["dataset_index"] = 4 + row["group"]
+            row["dataset_index"] = FROZEN_CURSOR_PREFIX[4 + row["group"]]
         turn_rows = []
         for row in rows:
             turn_rows.append({
@@ -325,12 +380,14 @@ class LedgerAndAuditTests(unittest.TestCase):
             })
         records = rows + turn_rows
         ok, failures = audit_seeds(
-            records, 2026, 2, expected_steps=[2], expected_batch_size=8
+            records, 2026, 2, expected_steps=[2], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertTrue(ok, failures)
         rows[1]["trajectory_seed"] = rows[0]["trajectory_seed"]
         ok, failures = audit_seeds(
-            records, 2026, 2, expected_steps=[2], expected_batch_size=8
+            records, 2026, 2, expected_steps=[2], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertFalse(ok)
         self.assertTrue(any("collision" in failure for failure in failures))
@@ -342,7 +399,7 @@ class LedgerAndAuditTests(unittest.TestCase):
         records = []
         for row in rows:
             row = dict(row)
-            row.update(record_type="trajectory_seed", uid="uid-0", dataset_index=0)
+            row.update(record_type="trajectory_seed", uid="uid-0", dataset_index=2)
             records.append(row)
         active_turn_counts = {0: 5, 1: 6}
         for row in rows:
@@ -358,7 +415,7 @@ class LedgerAndAuditTests(unittest.TestCase):
                     "turn": turn,
                     "uid": "uid-0",
                     "trajectory_seed": int(row["trajectory_seed"]),
-                    "dataset_index": 0,
+                    "dataset_index": 2,
                     "request_seed": derive_turn_request_seeds(
                         [int(row["trajectory_seed"])], [0], turn
                     )[0],
@@ -375,7 +432,7 @@ class LedgerAndAuditTests(unittest.TestCase):
                 "turn": 6,
                 "uid": "uid-0",
                 "trajectory_seed": int(row["trajectory_seed"]),
-                "dataset_index": 0,
+                "dataset_index": 2,
                 "request_seed": derive_turn_request_seeds(
                     [int(row["trajectory_seed"])], [0], 6
                 )[0],
@@ -383,7 +440,8 @@ class LedgerAndAuditTests(unittest.TestCase):
                 "mode": "independent",
             })
         ok, failures = audit_seeds(
-            records, 2026, 2, expected_steps=[1], expected_batch_size=2
+            records, 2026, 2, expected_steps=[1], expected_batch_size=2,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertTrue(ok, failures)
 
@@ -396,7 +454,8 @@ class LedgerAndAuditTests(unittest.TestCase):
             )
         ]
         ok, failures = audit_seeds(
-            records, 2026, 2, expected_steps=[1], expected_batch_size=2
+            records, 2026, 2, expected_steps=[1], expected_batch_size=2,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertFalse(ok)
         self.assertTrue(any("active trajectory turns" in failure for failure in failures))
@@ -410,7 +469,7 @@ class LedgerAndAuditTests(unittest.TestCase):
             result = []
             for row in rows:
                 uid = f"step-{step}-group-{row['group']}"
-                dataset_index = (step - 1) * 4 + row["group"]
+                dataset_index = FROZEN_CURSOR_PREFIX[(step - 1) * 4 + row["group"]]
                 result.append({
                     **row, "record_type": "trajectory_seed", "uid": uid,
                     "dataset_index": dataset_index,
@@ -434,15 +493,29 @@ class LedgerAndAuditTests(unittest.TestCase):
                 })
             return result
 
-        records = records_for_step(1) + records_for_step(2)
+        records = records_for_step(1) + records_for_step(2) + records_for_step(3)
         ok, failures = audit_seeds(
-            records, 2026, 2, expected_steps=[1, 2], expected_batch_size=8
+            records, 2026, 2, expected_steps=[1, 2, 3], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertTrue(ok, failures)
 
+        replica_drift = [dict(row) for row in records]
+        for row in replica_drift:
+            source_row = int(row.get("sample_index", row["row"]))
+            if row["global_step"] == 2 and source_row == 1:
+                row["dataset_index"] = 999
+        ok, failures = audit_seeds(
+            replica_drift, 2026, 2, expected_steps=[1, 2, 3], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("semantic dataset cursor" in failure for failure in failures))
+
         only_step_one = [row for row in records if row["global_step"] == 1]
         ok, failures = audit_seeds(
-            only_step_one, 2026, 2, expected_steps=[1, 2], expected_batch_size=8
+            only_step_one, 2026, 2, expected_steps=[1, 2, 3], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertFalse(ok)
         self.assertTrue(any("step coverage" in failure for failure in failures))
@@ -452,17 +525,19 @@ class LedgerAndAuditTests(unittest.TestCase):
             if not (row["global_step"] == 2 and row["group"] == 3)
         ]
         ok, failures = audit_seeds(
-            missing_group, 2026, 2, expected_steps=[1, 2], expected_batch_size=8
+            missing_group, 2026, 2, expected_steps=[1, 2, 3], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertFalse(ok)
         self.assertTrue(any("trajectory count" in failure for failure in failures))
 
         reset_cursor = [dict(row) for row in records]
         for row in reset_cursor:
-            if row["global_step"] == 2:
-                row["dataset_index"] -= 4
+            if row["global_step"] == 3:
+                row["dataset_index"] = FROZEN_CURSOR_PREFIX[row["group"]]
         ok, failures = audit_seeds(
-            reset_cursor, 2026, 2, expected_steps=[1, 2], expected_batch_size=8
+            reset_cursor, 2026, 2, expected_steps=[1, 2, 3], expected_batch_size=8,
+            expected_dataset_cursor=FROZEN_CURSOR_PREFIX,
         )
         self.assertFalse(ok)
         self.assertTrue(any("dataset cursor" in failure for failure in failures))

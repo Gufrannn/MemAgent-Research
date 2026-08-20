@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -156,6 +157,7 @@ def audit_seeds(
     *,
     expected_steps: list[int],
     expected_batch_size: int,
+    expected_dataset_cursor: Sequence[int],
 ) -> tuple[bool, list[str]]:
     failures = []
     if not seed_records:
@@ -243,10 +245,19 @@ def audit_seeds(
                 failures.append(f"step {step} prompt uid {uid!r} is reused across groups {sorted(groups)}")
         groups_per_step = expected_batch_size // rollout_n
         for group, indices in sorted(group_dataset_indices.items()):
-            expected_index = (step - 1) * groups_per_step + group
+            cursor_offset = (step - 1) * groups_per_step + group
+            if cursor_offset < 0 or cursor_offset >= len(expected_dataset_cursor):
+                failures.append(
+                    f"step {step} group {group} cursor offset {cursor_offset} is outside "
+                    f"the frozen prefix of length {len(expected_dataset_cursor)}"
+                )
+                continue
+            expected_index = int(expected_dataset_cursor[cursor_offset])
             if indices != {expected_index}:
                 failures.append(
-                    f"step {step} group {group} dataset cursor {sorted(indices)} != {expected_index}"
+                    f"step {step} group {group} semantic dataset cursor "
+                    f"{sorted(indices)} != frozen semantic index {expected_index} "
+                    f"at cursor position {cursor_offset}"
                 )
         step_turns = [row for row in turn_records if int(row.get("global_step", -1)) == step]
         turn_keys = [
@@ -464,6 +475,7 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         manifest["training"]["rollout_n"],
         expected_steps=[1, 2],
         expected_batch_size=expected_trajectory_count,
+        expected_dataset_cursor=manifest["data"]["train_cursor_prefix"],
     )
     a1_ok = fresh_a1_ok
     a1_failures = list(fresh_a1_failures)
@@ -474,6 +486,7 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
             manifest["training"]["rollout_n"],
             expected_steps=[3],
             expected_batch_size=expected_trajectory_count,
+            expected_dataset_cursor=manifest["data"]["train_cursor_prefix"],
         )
         a1_ok = a1_ok and resume_a1_ok
         a1_failures.extend(f"resume: {failure}" for failure in resume_a1_failures)

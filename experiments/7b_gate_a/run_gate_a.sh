@@ -98,6 +98,7 @@ export NCCL_DEBUG=WARN
 "$PYTHON" -m verl.trainer.main_ppo \
   recurrent.enable=memory \
   recurrent.memory.config.chunk_size=5000 \
+  recurrent.memory.config.max_chunks=8 \
   algorithm.adv_estimator=grpo \
   algorithm.grpo_use_adv=False \
   actor_rollout_ref.rollout.n="$ROLLOUT_N" \
