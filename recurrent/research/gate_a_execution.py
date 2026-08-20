@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-REQUIRED_RUNTIME_BINDINGS = ("WORK_ROOT", "REPO_DIR")
+REQUIRED_RUNTIME_BINDINGS = ("MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR")
 
 
 def utc_now() -> str:
@@ -28,7 +28,7 @@ def sha256_file(path: str | Path) -> str:
 
 
 def resolve_manifest_environment(value: Any, environment: Mapping[str, str] | None = None) -> Any:
-    """Resolve only the two explicit H20 path bindings; reject implicit defaults."""
+    """Resolve only the task-scoped H20 path bindings; reject implicit defaults."""
     source = os.environ if environment is None else environment
     missing = [name for name in REQUIRED_RUNTIME_BINDINGS if not source.get(name)]
     if missing:

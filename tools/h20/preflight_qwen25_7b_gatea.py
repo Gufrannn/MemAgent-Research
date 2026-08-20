@@ -62,7 +62,7 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
     evidence["resolved_manifest_sha256"] = canonical_sha256(manifest)
 
     expected_binding = {
-        "required_environment": ["WORK_ROOT", "REPO_DIR"],
+        "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
         "automatic_repository_selection": False,
     }
     if raw_manifest.get("runtime_binding") != expected_binding:
@@ -164,13 +164,23 @@ def run_preflight(manifest_path: Path, check_runtime: bool) -> dict:
 
     commands = json.loads((repo / "manifests/h20/qwen25_7b_gatea_commands.json").read_text())
     evidence["command_manifest_sha256"] = canonical_sha256(commands)
-    if commands.get("required_environment") != ["WORK_ROOT", "REPO_DIR"]:
-        failures.append("command manifest does not require explicit WORK_ROOT/REPO_DIR")
+    if commands.get("required_environment") != [
+        "MEMAGENT_GATEA_WORK_ROOT",
+        "MEMAGENT_GATEA_REPO_DIR",
+    ]:
+        failures.append(
+            "command manifest does not require explicit task-scoped Gate A path bindings"
+        )
     if manifest.get("ledger_schema") != "gate_a_execution_ledger.schema.json" or commands.get(
         "ledger_schema"
     ) != "gate_a_execution_ledger.schema.json":
         failures.append("ledger schema Git object name drifted")
-    expected_contract = {"kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2}
+    expected_contract = {
+        "kind": "formal_gate_a",
+        "physical_gpus": [6, 7],
+        "world_size": 2,
+        "execution_revision": "20260821r1",
+    }
     if manifest.get("contract") != expected_contract or commands.get("contract") != expected_contract:
         failures.append("formal two-GPU command/manifest contract drifted")
     json.loads((repo / "gate_a_execution_ledger.schema.json").read_text())

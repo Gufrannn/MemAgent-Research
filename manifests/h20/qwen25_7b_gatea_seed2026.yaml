@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "frozen_at": "2026-08-20T00:00:00+08:00",
+  "frozen_at": "2026-08-21T00:00:00+08:00",
   "branch": "h20/qwen25-7b-gatea-2gpu-frozen-20260820",
   "base_commit": "bf2efb6c25334b7382a35735bfbe6ec1a4a8d497",
   "derived_from_commit": "4304f81d896df59604ccbd66adee1009e030376a",
@@ -8,27 +8,28 @@
   "contract": {
     "kind": "formal_gate_a",
     "physical_gpus": [6, 7],
-    "world_size": 2
+    "world_size": 2,
+    "execution_revision": "20260821r1"
   },
   "runtime_binding": {
-    "required_environment": ["WORK_ROOT", "REPO_DIR"],
+    "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
     "automatic_repository_selection": false
   },
-  "work_root": "${WORK_ROOT}",
-  "repository": "${REPO_DIR}",
-  "python": "${WORK_ROOT}/.venv/bin/python",
+  "work_root": "${MEMAGENT_GATEA_WORK_ROOT}",
+  "repository": "${MEMAGENT_GATEA_REPO_DIR}",
+  "python": "${MEMAGENT_GATEA_WORK_ROOT}/.venv/bin/python",
   "model": {
     "id": "Qwen/Qwen2.5-7B-Instruct",
-    "path": "${WORK_ROOT}/models/Qwen2.5-7B-Instruct",
+    "path": "${MEMAGENT_GATEA_WORK_ROOT}/models/Qwen2.5-7B-Instruct",
     "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
     "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"
   },
   "data": {
-    "train": "${WORK_ROOT}/datasets/hotpotqa/hotpotqa_train_32k.parquet",
-    "validation": "${WORK_ROOT}/datasets/hotpotqa/hotpotqa_dev.parquet",
+    "train": "${MEMAGENT_GATEA_WORK_ROOT}/datasets/hotpotqa/hotpotqa_train_32k.parquet",
+    "validation": "${MEMAGENT_GATEA_WORK_ROOT}/datasets/hotpotqa/hotpotqa_dev.parquet",
     "shuffle": false,
     "dataloader_num_workers": 0,
-    "manifest_sha256": "2535fcebcd4d09fd7ea5131185c276b388fc4d5f2fec355f15f81010cbabea0d"
+    "manifest_sha256": "8ab8258525c04c21d7091f74644f13c4c4557080d5bc0627b0c2ca39205bd4dc"
   },
   "gpu": {
     "declared_whitelist": [6, 7],
@@ -64,18 +65,18 @@
     "reward_manager": "naive"
   },
   "experiments": {
-    "p0": "qwen25_7b_h20_2gpu_gatea_preflight_gitclosed_seed2026_20260820",
-    "fresh": "qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
-    "resume": "qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820"
+    "p0": "qwen25_7b_h20_2gpu_gatea_preflight_gitclosed_seed2026_20260821r1",
+    "fresh": "qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r1",
+    "resume": "qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r1"
   },
   "paths": {
-    "checkpoint_root": "${WORK_ROOT}/logs/memory_agent",
-    "log_root": "${WORK_ROOT}/logs/gate_a_2gpu_frozen_20260820",
-    "certificate_root": "${WORK_ROOT}/logs/gate_a_2gpu_frozen_20260820/certificates",
-    "fresh_output": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820",
-    "resume_output": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260820",
-    "resume_source": "${WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260820/global_step_2",
-    "execution_ledger": "${WORK_ROOT}/logs/gate_a_2gpu_frozen_20260820/gate_a_execution_ledger.jsonl"
+    "checkpoint_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent",
+    "log_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r1",
+    "certificate_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r1/certificates",
+    "fresh_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r1",
+    "resume_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r1",
+    "resume_source": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r1/global_step_2",
+    "execution_ledger": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r1/gate_a_execution_ledger.jsonl"
   },
   "weight_sync": {
     "samples_per_tensor": 256,

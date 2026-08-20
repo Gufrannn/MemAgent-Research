@@ -53,27 +53,52 @@ class FrozenManifestTests(unittest.TestCase):
         self.assertFalse(commands["gpu_execution_authorized_by_this_manifest"])
         self.assertEqual(commands["contract"], {
             "kind": "formal_gate_a", "physical_gpus": [6, 7], "world_size": 2,
+            "execution_revision": "20260821r1",
         })
         self.assertEqual(commands["ledger_schema"], "gate_a_execution_ledger.schema.json")
-        self.assertEqual(commands["required_environment"], ["WORK_ROOT", "REPO_DIR"])
-        self.assertEqual(commands["working_directory"], "${REPO_DIR}")
+        self.assertEqual(commands["required_environment"], [
+            "MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR",
+        ])
+        self.assertEqual(commands["working_directory"], "${MEMAGENT_GATEA_REPO_DIR}")
         self.assertEqual(commands["required_sequence"], ["p0", "p1", "p2", "audit"])
         self.assertIn("weight_sync_ack", schema["properties"]["record_type"]["enum"])
+
+    def test_wrappers_spawn_child_environment_for_readonly_bindings(self):
+        for name in ("run_qwen25_7b_gatea_fresh2.sh", "resume_qwen25_7b_gatea_step2_to3.sh"):
+            script = (REPO / "scripts/h20" / name).read_text()
+            self.assertIn(
+                'env WORK_ROOT="$GATEA_WORK_ROOT" CODE="$GATEA_CODE" PYTHON="$GATEA_PYTHON"',
+                script,
+            )
+            self.assertNotIn("\nWORK_ROOT=$GATEA_WORK_ROOT", script)
+
+    def test_public_runtime_bindings_are_task_scoped(self):
+        common = (REPO / "scripts/h20/gatea_frozen_common.sh").read_text()
+        self.assertIn("MEMAGENT_GATEA_WORK_ROOT", common)
+        self.assertIn("MEMAGENT_GATEA_REPO_DIR", common)
+        self.assertNotIn("readonly WORK_ROOT", common)
+        self.assertNotIn("readonly REPO_DIR", common)
+        self.assertNotIn("readonly PYTHON", common)
 
     def test_runtime_paths_require_explicit_binding_without_selecting_repo(self):
         path = REPO / "manifests/h20/qwen25_7b_gatea_seed2026.yaml"
         first = load_frozen_manifest(path, {
-            "WORK_ROOT": "/data/cw/memagent_work",
-            "REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research",
+            "MEMAGENT_GATEA_WORK_ROOT": "/data/cw/memagent_work",
+            "MEMAGENT_GATEA_REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research",
         })
         second = load_frozen_manifest(path, {
-            "WORK_ROOT": "/data/cw/memagent_work",
-            "REPO_DIR": "/data/cw/memagent_work/MemAgent-Research",
+            "MEMAGENT_GATEA_WORK_ROOT": "/data/cw/memagent_work",
+            "MEMAGENT_GATEA_REPO_DIR": "/data/cw/memagent_work/MemAgent-Research",
         })
         self.assertEqual(first["repository"], "/data/cw/memagent_work/code/MemAgent-Research")
         self.assertEqual(second["repository"], "/data/cw/memagent_work/MemAgent-Research")
         with self.assertRaisesRegex(ValueError, "missing explicit runtime path bindings"):
             load_frozen_manifest(path, {})
+        with self.assertRaisesRegex(ValueError, "missing explicit runtime path bindings"):
+            load_frozen_manifest(path, {
+                "WORK_ROOT": "/somebody/elses/work",
+                "REPO_DIR": "/somebody/elses/repository",
+            })
 
 
 class DigestTests(unittest.TestCase):

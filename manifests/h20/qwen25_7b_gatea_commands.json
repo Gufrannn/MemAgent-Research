@@ -5,15 +5,16 @@
   "contract": {
     "kind": "formal_gate_a",
     "physical_gpus": [6, 7],
-    "world_size": 2
+    "world_size": 2,
+    "execution_revision": "20260821r1"
   },
-  "required_environment": ["WORK_ROOT", "REPO_DIR"],
-  "working_directory": "${REPO_DIR}",
+  "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
+  "working_directory": "${MEMAGENT_GATEA_REPO_DIR}",
   "commands": {
-    "p0": ["${WORK_ROOT}/.venv/bin/python", "tools/h20/preflight_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--check-runtime", "--write-certificate"],
+    "p0": ["${MEMAGENT_GATEA_WORK_ROOT}/.venv/bin/python", "tools/h20/preflight_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--check-runtime", "--write-certificate"],
     "p1": ["bash", "scripts/h20/run_qwen25_7b_gatea_fresh2.sh"],
     "p2": ["bash", "scripts/h20/resume_qwen25_7b_gatea_step2_to3.sh"],
-    "audit": ["${WORK_ROOT}/.venv/bin/python", "tools/h20/audit_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--write-report"]
+    "audit": ["${MEMAGENT_GATEA_WORK_ROOT}/.venv/bin/python", "tools/h20/audit_qwen25_7b_gatea.py", "--manifest", "manifests/h20/qwen25_7b_gatea_seed2026.yaml", "--write-report"]
   },
   "required_sequence": ["p0", "p1", "p2", "audit"],
   "gpu_execution_authorized_by_this_manifest": false
