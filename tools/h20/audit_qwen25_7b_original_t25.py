@@ -210,7 +210,7 @@ def _complete_checkpoint_steps(output: Path, world_size: int) -> tuple[list[int]
         if not missing:
             complete.append(step)
             inventories[step] = inventory
-    return complete, inventories
+    return sorted(complete), inventories
 
 
 def _checkpoint_anchor_evidence(
@@ -243,6 +243,16 @@ def _failures_for_persisted_anchor_record(
 def run_audit(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = load_manifest(manifest_path.resolve())
     failures: list[str] = []
+    audit_code_commit = subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()
+    audit_code_status = subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "status", "--porcelain"], text=True
+    ).strip()
+    if audit_code_status:
+        failures.append(
+            f"audit code worktree is dirty: {audit_code_status.splitlines()}"
+        )
     repo = Path(manifest["repository"])
     head = subprocess.check_output(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
@@ -472,7 +482,7 @@ def run_audit(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
                 break
             last_position = group_positions[-1]
 
-    seed_path = Path(paths["output"]) / "rollout_trajectory_seeds.jsonl"
+    seed_path = Path(paths["output"]) / "rollout_seed_audit.jsonl"
     seed_records = read_jsonl(seed_path)
     expected_cursor = p0_evidence.get("train_cursor_semantic_indices_0_to_99") or []
     seed_ok, seed_failures = audit_seeds(
@@ -550,6 +560,8 @@ def run_audit(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "study_label": "corrected Original-style 2-GPU pilot",
         "not_original_paper_7b_reproduction": True,
         "git_commit": head,
+        "audit_code_commit": audit_code_commit,
+        "audit_code_worktree_clean": not bool(audit_code_status),
         "branch": branch,
         "experiment_name": manifest["experiment_name"],
         "source_gate_a_commit": manifest["source_gate_a"]["commit"],
@@ -656,6 +668,7 @@ def run_audit(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             checkpoint_record.get("global_step") != 25
             or checkpoint_record.get("inventory") != step25_inventory
             or checkpoint_record.get("inventory_sha256") != step25_inventory_sha
+            or checkpoint_record.get("audit_code_commit") != audit_code_commit
         ):
             failures.append("persisted step25 inventory ledger suffix changed")
         failures.extend(
@@ -669,6 +682,7 @@ def run_audit(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             or Path(str(audit_record.get("report", ""))).resolve() != final_path.resolve()
             or not final_path.is_file()
             or audit_record.get("report_sha256") != sha256_file(final_path)
+            or audit_record.get("audit_code_commit") != audit_code_commit
         ):
             failures.append("persisted T25 final audit ledger suffix changed")
         if failures:
@@ -694,6 +708,7 @@ def persist_report(report: dict[str, Any], manifest: Mapping[str, Any]) -> None:
     identity = {
         "experiment_name": manifest["experiment_name"],
         "git_commit": report["git_commit"],
+        "audit_code_commit": report["audit_code_commit"],
         "run_id": json.loads(
             Path(manifest["paths"]["p0_certificate"]).read_text(encoding="utf-8")
         )["evidence"]["run_id"],
@@ -734,7 +749,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report, manifest = run_audit(args.manifest)
-        if args.write_report:
+        if args.write_report and report.get("status") == "PASS":
             persist_report(report, manifest)
     except Exception as error:
         report = {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -9,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -18,9 +21,11 @@ from recurrent.research.trajectory_seeding import (
     build_trajectory_seed_records,
     derive_turn_request_seeds,
 )
+from tools.h20 import audit_qwen25_7b_original_t25 as t25_audit
 from tools.h20.audit_qwen25_7b_original_t25 import (
     _audit_exact_turn_schedule,
     _checkpoint_anchor_evidence,
+    _complete_checkpoint_steps,
     _failures_for_persisted_anchor_record,
     _failures_for_resume_state_acks,
 )
@@ -255,6 +260,110 @@ class OriginalT25FrozenTests(unittest.TestCase):
         }
         failures = _failures_for_persisted_anchor_record(missing_record, anchors)
         self.assertTrue(any("anchor" in failure for failure in failures))
+
+    def test_complete_checkpoint_steps_are_sorted_numerically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            for step in (5, 10, 15, 20, 25):
+                actor = output / f"global_step_{step}" / "actor"
+                actor.mkdir(parents=True)
+                (actor.parent / "data.pt").write_bytes(b"cursor")
+                for rank in (0, 1):
+                    for prefix in ("model", "optim", "extra_state"):
+                        (actor / f"{prefix}_world_size_2_rank_{rank}.pt").write_bytes(
+                            f"{step}:{prefix}:{rank}".encode("ascii")
+                        )
+
+            complete_steps, inventories = _complete_checkpoint_steps(output, 2)
+
+        self.assertEqual(complete_steps, [5, 10, 15, 20, 25])
+        self.assertEqual(sorted(inventories), [5, 10, 15, 20, 25])
+
+    def test_rollout_seed_writer_and_t25_auditor_share_exact_filename(self) -> None:
+        trainer = (REPO / "verl/trainer/ppo/ray_trainer.py").read_text(
+            encoding="utf-8"
+        )
+        auditor = (
+            REPO / "tools/h20/audit_qwen25_7b_original_t25.py"
+        ).read_text(encoding="utf-8")
+        expected = 'rollout_seed_audit.jsonl'
+        self.assertIn(f'path = os.path.join(output_dir, "{expected}")', trainer)
+        self.assertIn(
+            f'seed_path = Path(paths["output"]) / "{expected}"', auditor
+        )
+        self.assertNotIn("rollout_trajectory_seeds.jsonl", auditor)
+
+    def test_failed_audit_is_not_persisted_or_masked(self) -> None:
+        underlying = {
+            "status": "FAIL",
+            "decision": "ORIGINAL_T25_NO_GO:AUDIT",
+            "failures": ["REAL_UNDERLYING_FAILURE"],
+        }
+        output = io.StringIO()
+        with (
+            patch.object(
+                t25_audit,
+                "run_audit",
+                return_value=(underlying, {}),
+            ),
+            patch.object(
+                t25_audit,
+                "persist_report",
+                side_effect=AssertionError("persist must not be called for FAIL"),
+            ) as persist,
+            patch.object(
+                sys,
+                "argv",
+                ["audit_qwen25_7b_original_t25.py", "--manifest", "unused", "--write-report"],
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            return_code = t25_audit.main()
+
+        visible = json.loads(output.getvalue())
+        self.assertEqual(return_code, 1)
+        self.assertEqual(visible, underlying)
+        persist.assert_not_called()
+
+    def test_persisted_suffix_distinguishes_training_and_audit_code_commits(self) -> None:
+        training_commit = "1" * 40
+        audit_code_commit = "2" * 40
+        run_id = "3" * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            p0 = root / "p0.json"
+            report_path = root / "final.json"
+            ledger_path = root / "ledger.jsonl"
+            p0.write_text(
+                json.dumps({"evidence": {"run_id": run_id}}), encoding="utf-8"
+            )
+            report = {
+                "status": "PASS",
+                "git_commit": training_commit,
+                "audit_code_commit": audit_code_commit,
+                "step25_checkpoint": {"inventory": [], "inventory_sha256": "4" * 64},
+                "checkpoint_anchors": [],
+            }
+            manifest = {
+                "experiment_name": "t25-audit-provenance-test",
+                "paths": {
+                    "final_report": str(report_path),
+                    "execution_ledger": str(ledger_path),
+                    "p0_certificate": str(p0),
+                },
+            }
+
+            t25_audit.persist_report(report, manifest)
+            persisted = json.loads(report_path.read_text(encoding="utf-8"))
+            suffix = t25_audit.read_jsonl(ledger_path)
+
+        self.assertEqual(persisted["git_commit"], training_commit)
+        self.assertEqual(persisted["audit_code_commit"], audit_code_commit)
+        self.assertEqual(len(suffix), 2)
+        self.assertTrue(all(row["git_commit"] == training_commit for row in suffix))
+        self.assertTrue(
+            all(row["audit_code_commit"] == audit_code_commit for row in suffix)
+        )
 
     def test_every_gpu67_launcher_uses_the_shared_lock(self) -> None:
         for relative in (
