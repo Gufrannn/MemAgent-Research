@@ -11,13 +11,19 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recurrent.research.gate_a_execution import checkpoint_inventory, load_frozen_manifest, sha256_file
+from recurrent.research.gate_a_execution import (
+    checkpoint_inventory,
+    load_frozen_manifest,
+    sha256_file,
+    validate_jsonl_chain,
+)
 from recurrent.research.trajectory_seeding import build_trajectory_seed_records, derive_turn_request_seeds
 
 
@@ -25,6 +31,100 @@ def read_jsonl(path: Path) -> list[dict]:
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def jsonl_records_sha256(records: list[dict]) -> str:
+    payload = "".join(
+        json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        for record in records
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _json_type_matches(value: object, expected: str) -> bool:
+    return {
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }.get(expected, True)
+
+
+def validate_ledger_schema(records: list[dict], schema: dict) -> list[str]:
+    """Validate the concrete schema subset used by the frozen ledger without a new dependency."""
+    failures: list[str] = []
+    properties = schema.get("properties", {})
+    base_required = set(schema.get("required", []))
+    record_types = set(properties.get("record_type", {}).get("enum", []))
+    for index, record in enumerate(records):
+        required = set(base_required)
+        record_type = record.get("record_type")
+        if record_type not in record_types:
+            failures.append(f"ledger record {index} has unknown record_type {record_type!r}")
+        for conditional in schema.get("allOf", []):
+            expected_type = (
+                conditional.get("if", {}).get("properties", {}).get("record_type", {}).get("const")
+            )
+            if record_type == expected_type:
+                required.update(conditional.get("then", {}).get("required", []))
+        missing = sorted(required - record.keys())
+        if missing:
+            failures.append(f"ledger record {index} missing schema fields {missing}")
+        for name, value in record.items():
+            rule = properties.get(name)
+            if not rule:
+                continue
+            allowed_types = rule.get("type")
+            if isinstance(allowed_types, str):
+                allowed_types = [allowed_types]
+            if allowed_types and not any(_json_type_matches(value, item) for item in allowed_types):
+                failures.append(f"ledger record {index} field {name} has invalid type")
+                continue
+            if "enum" in rule and value not in rule["enum"]:
+                failures.append(f"ledger record {index} field {name} is outside its enum")
+            if isinstance(value, str):
+                if len(value) < int(rule.get("minLength", 0)):
+                    failures.append(f"ledger record {index} field {name} is too short")
+                if rule.get("pattern") and re.fullmatch(rule["pattern"], value) is None:
+                    failures.append(f"ledger record {index} field {name} does not match its pattern")
+                if rule.get("format") == "date-time":
+                    try:
+                        datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    except ValueError:
+                        failures.append(f"ledger record {index} field {name} is not date-time")
+            if isinstance(value, (int, float)) and "minimum" in rule and value < rule["minimum"]:
+                failures.append(f"ledger record {index} field {name} is below its minimum")
+            if isinstance(value, list):
+                if len(value) < int(rule.get("minItems", 0)):
+                    failures.append(f"ledger record {index} field {name} has too few items")
+                if rule.get("uniqueItems") and len({json.dumps(item, sort_keys=True) for item in value}) != len(value):
+                    failures.append(f"ledger record {index} field {name} has duplicate items")
+            if isinstance(value, dict) and len(value) < int(rule.get("minProperties", 0)):
+                failures.append(f"ledger record {index} field {name} has too few properties")
+            if isinstance(value, dict) and isinstance(rule.get("additionalProperties"), dict):
+                child_rule = rule["additionalProperties"]
+                child_types = child_rule.get("type")
+                if isinstance(child_types, str):
+                    child_types = [child_types]
+                for child_name, child_value in value.items():
+                    if child_types and not any(
+                        _json_type_matches(child_value, child_type) for child_type in child_types
+                    ):
+                        failures.append(
+                            f"ledger record {index} field {name}.{child_name} has invalid type"
+                        )
+                    if (
+                        isinstance(child_value, (int, float))
+                        and "minimum" in child_rule
+                        and child_value < child_rule["minimum"]
+                    ):
+                        failures.append(
+                            f"ledger record {index} field {name}.{child_name} is below its minimum"
+                        )
+    return failures
 
 
 def component_inventory(step_dir: Path, expected_world_size: int) -> tuple[list[dict], list[str]]:
@@ -49,7 +149,14 @@ def component_inventory(step_dir: Path, expected_world_size: int) -> tuple[list[
     return inventory, missing
 
 
-def audit_seeds(seed_records: list[dict], seed: int, rollout_n: int) -> tuple[bool, list[str]]:
+def audit_seeds(
+    seed_records: list[dict],
+    seed: int,
+    rollout_n: int,
+    *,
+    expected_steps: list[int],
+    expected_batch_size: int,
+) -> tuple[bool, list[str]]:
     failures = []
     if not seed_records:
         return False, ["missing rollout seed records"]
@@ -59,35 +166,91 @@ def audit_seeds(seed_records: list[dict], seed: int, rollout_n: int) -> tuple[bo
         return False, ["missing base trajectory seed records"]
     if not turn_records:
         failures.append("missing recurrent turn seed records")
-    for step in sorted({int(row["global_step"]) for row in base_records}):
-        rows = [row for row in base_records if int(row["global_step"]) == step]
-        required = {"row", "group", "replica", "global_step", "trajectory_seed", "uid", "mode"}
+    expected_step_set = set(expected_steps)
+    base_step_set = {int(row.get("global_step", -1)) for row in base_records}
+    turn_step_set = {int(row.get("global_step", -1)) for row in turn_records}
+    if base_step_set != expected_step_set:
+        failures.append(
+            f"base trajectory step coverage {sorted(base_step_set)} != {sorted(expected_step_set)}"
+        )
+    if turn_step_set != expected_step_set:
+        failures.append(
+            f"turn trajectory step coverage {sorted(turn_step_set)} != {sorted(expected_step_set)}"
+        )
+    for step in sorted(expected_step_set):
+        rows = [row for row in base_records if int(row.get("global_step", -1)) == step]
+        if len(rows) != expected_batch_size:
+            failures.append(
+                f"step {step} base trajectory count {len(rows)} != {expected_batch_size}"
+            )
+        required = {
+            "row", "group", "replica", "global_step", "trajectory_seed", "uid",
+            "dataset_index", "mode",
+        }
         for index, row in enumerate(rows):
             missing = sorted(required - row.keys())
             if missing:
                 failures.append(f"seed row {index} at step {step} missing identity fields {missing}")
-        identity_keys = [
-            (row.get("uid"), int(row.get("replica", -1)), int(row.get("row", -1))) for row in rows
-        ]
+        actual_rows = sorted(int(row.get("row", -1)) for row in rows)
+        expected_rows = list(range(expected_batch_size))
+        if actual_rows != expected_rows:
+            failures.append(f"step {step} trajectory rows {actual_rows} != {expected_rows}")
+        identity_keys = [(row.get("uid"), int(row.get("replica", -1)), int(row.get("row", -1))) for row in rows]
         if len(identity_keys) != len(set(identity_keys)):
             failures.append(f"trajectory identity collision at step {step}")
-        actual = [int(row["trajectory_seed"]) for row in rows]
+        rows_by_index = {int(row.get("row", -1)): row for row in rows}
+        actual = [
+            int(rows_by_index[row]["trajectory_seed"])
+            for row in expected_rows
+            if row in rows_by_index
+        ]
         if len(actual) != len(set(actual)):
             failures.append(f"trajectory seed collision at step {step}")
         expected = build_trajectory_seed_records(
             base_seed=seed,
             global_step=step,
-            batch_size=len(rows),
+            batch_size=expected_batch_size,
             rollout_n=rollout_n,
             mode="independent",
         )
-        if actual != [int(row["trajectory_seed"]) for row in expected]:
+        if len(actual) != expected_batch_size or actual != [int(row["trajectory_seed"]) for row in expected]:
             failures.append(f"seed schedule is not reconstructable at step {step}")
 
-        base_by_row = {int(row["row"]): row for row in rows}
-        step_turns = [row for row in turn_records if int(row["global_step"]) == step]
+        base_by_row = rows_by_index
+        group_uids: dict[int, set[str]] = defaultdict(set)
+        group_dataset_indices: dict[int, set[int]] = defaultdict(set)
+        uid_groups: dict[str, set[int]] = defaultdict(set)
+        for source_row, row in base_by_row.items():
+            expected_group, expected_replica = divmod(source_row, rollout_n)
+            actual_group = int(row.get("group", -1))
+            actual_replica = int(row.get("replica", -1))
+            if (actual_group, actual_replica) != (expected_group, expected_replica):
+                failures.append(
+                    f"step {step} row {source_row} group/replica "
+                    f"{(actual_group, actual_replica)} != {(expected_group, expected_replica)}"
+                )
+            if row.get("mode") != "independent":
+                failures.append(f"step {step} row {source_row} is not independently seeded")
+            uid = str(row.get("uid", ""))
+            group_uids[actual_group].add(uid)
+            uid_groups[uid].add(actual_group)
+            group_dataset_indices[actual_group].add(int(row.get("dataset_index", -1)))
+        for group, uids in sorted(group_uids.items()):
+            if len(uids) != 1:
+                failures.append(f"step {step} group {group} does not share one prompt uid: {sorted(uids)}")
+        for uid, groups in uid_groups.items():
+            if len(groups) != 1:
+                failures.append(f"step {step} prompt uid {uid!r} is reused across groups {sorted(groups)}")
+        groups_per_step = expected_batch_size // rollout_n
+        for group, indices in sorted(group_dataset_indices.items()):
+            expected_index = (step - 1) * groups_per_step + group
+            if indices != {expected_index}:
+                failures.append(
+                    f"step {step} group {group} dataset cursor {sorted(indices)} != {expected_index}"
+                )
+        step_turns = [row for row in turn_records if int(row.get("global_step", -1)) == step]
         turn_keys = [
-            (row.get("uid"), int(row.get("replica", -1)), int(row.get("turn", -1)))
+            (int(row.get("sample_index", -1)), int(row.get("turn", -1)))
             for row in step_turns
         ]
         if len(turn_keys) != len(set(turn_keys)):
@@ -102,8 +265,11 @@ def audit_seeds(seed_records: list[dict], seed: int, rollout_n: int) -> tuple[bo
                 continue
             if (
                 row.get("uid") != base.get("uid")
+                or int(row.get("group", -1)) != int(base["group"])
                 or int(row.get("replica", -1)) != int(base["replica"])
                 or int(row.get("trajectory_seed", -1)) != int(base["trajectory_seed"])
+                or int(row.get("dataset_index", -1)) != int(base["dataset_index"])
+                or row.get("mode") != "independent"
             ):
                 failures.append(f"turn/base trajectory identity mismatch at step {step}, row {source_row}")
             turn = int(row.get("turn", -1))
@@ -162,10 +328,12 @@ def audit_sync(
     required_syncs: list[tuple[str, int, str]] | None = None,
     required_parameters: list[str] | None = None,
     required_transfer_format: str | None = None,
+    expected_loaded_parameter_count: int | None = None,
 ) -> tuple[bool, list[str], dict[int, str]]:
     failures = []
     digests_by_version: dict[int, set[str]] = defaultdict(set)
     master_digests_by_version: dict[int, set[str]] = defaultdict(set)
+    loaded_name_digests: set[str] = set()
     syncs = required_syncs or [("", version, "") for version in required_versions]
     for experiment, version, sync_kind in syncs:
         acks = [
@@ -216,6 +384,24 @@ def audit_sync(
                         f"sampled dtype coverage mismatch at sync {context}, "
                         f"rank {row['vllm_worker_rank']}"
                     )
+            if expected_loaded_parameter_count is not None:
+                loaded_count = int(row.get("loaded_parameter_count", -1))
+                model_count = int(row.get("model_parameter_count", -1))
+                if loaded_count != expected_loaded_parameter_count or model_count != expected_loaded_parameter_count:
+                    failures.append(
+                        f"full load count mismatch at sync {context}, rank {row['vllm_worker_rank']}: "
+                        f"loaded={loaded_count}, model={model_count}, "
+                        f"expected={expected_loaded_parameter_count}"
+                    )
+                loaded_names_digest = row.get("loaded_parameter_names_sha256")
+                model_names_digest = row.get("model_parameter_names_sha256")
+                if not loaded_names_digest or loaded_names_digest != model_names_digest:
+                    failures.append(
+                        f"full load name-set digest mismatch at sync {context}, "
+                        f"rank {row['vllm_worker_rank']}"
+                    )
+                else:
+                    loaded_name_digests.add(loaded_names_digest)
             if required_transfer_format is not None and row.get("weight_transfer_format") != required_transfer_format:
                 failures.append(
                     f"weight transfer format mismatch at sync {context}, rank "
@@ -230,6 +416,27 @@ def audit_sync(
             failures.append(f"sync {context} has split or missing actor digests")
         if len(master_digests_by_version[version]) != 1:
             failures.append(f"sync {context} has split or missing actor master digests")
+        summaries = [
+            row for row in records
+            if row.get("record_type") == "weight_sync_summary"
+            and int(row.get("actor_version", -1)) == version
+            and (not experiment or row.get("experiment_name") == experiment)
+            and (not sync_kind or row.get("sync_kind") == sync_kind)
+        ]
+        if len(summaries) != 1:
+            failures.append(f"sync {context} expected one driver summary, found {len(summaries)}")
+        else:
+            summary = summaries[0]
+            if sorted(summary.get("worker_ranks") or []) != ranks:
+                failures.append(f"sync {context} summary worker ranks do not match {ranks}")
+            if (
+                summary.get("sampled_tensor_digest") not in digests_by_version[version]
+                or summary.get("actor_master_sampled_tensor_digest")
+                not in master_digests_by_version[version]
+            ):
+                failures.append(f"sync {context} driver summary digest does not match worker acks")
+    if expected_loaded_parameter_count is not None and len(loaded_name_digests) != 1:
+        failures.append("vLLM full parameter name-set changed across workers or actor versions")
     collapsed = {version: next(iter(values)) for version, values in digests_by_version.items() if len(values) == 1}
     return not failures, failures, collapsed
 
@@ -238,6 +445,8 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
     paths = manifest["paths"]
     ledger_path = Path(paths["execution_ledger"])
     ledger = read_jsonl(ledger_path)
+    ledger_schema = json.loads((REPO_ROOT / manifest["ledger_schema"]).read_text(encoding="utf-8"))
+    ledger_failures = validate_jsonl_chain(ledger) + validate_ledger_schema(ledger, ledger_schema)
     fresh_experiment = manifest["experiments"]["fresh"]
     resume_experiment = manifest["experiments"]["resume"]
     accepted_experiments = {fresh_experiment} | ({resume_experiment} if phase == "final" else set())
@@ -246,11 +455,28 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
     resume_dir = Path(paths["resume_output"])
     fresh_seeds = read_jsonl(fresh_dir / "rollout_seed_audit.jsonl")
     resume_seeds = read_jsonl(resume_dir / "rollout_seed_audit.jsonl")
-    a1_ok, a1_failures = audit_seeds(
-        fresh_seeds + (resume_seeds if phase == "final" else []),
+    expected_trajectory_count = int(manifest["training"]["train_batch_size"]) * int(
+        manifest["training"]["rollout_n"]
+    )
+    fresh_a1_ok, fresh_a1_failures = audit_seeds(
+        fresh_seeds,
         manifest["training"]["seed"],
         manifest["training"]["rollout_n"],
+        expected_steps=[1, 2],
+        expected_batch_size=expected_trajectory_count,
     )
+    a1_ok = fresh_a1_ok
+    a1_failures = list(fresh_a1_failures)
+    if phase == "final":
+        resume_a1_ok, resume_a1_failures = audit_seeds(
+            resume_seeds,
+            manifest["training"]["seed"],
+            manifest["training"]["rollout_n"],
+            expected_steps=[3],
+            expected_batch_size=expected_trajectory_count,
+        )
+        a1_ok = a1_ok and resume_a1_ok
+        a1_failures.extend(f"resume: {failure}" for failure in resume_a1_failures)
 
     expected_world_size = int(manifest["gpu"]["world_size"])
     step2_inventory, step2_missing = component_inventory(
@@ -267,9 +493,36 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         if not p1_report_path.is_file():
             a2_failures.append("missing immutable P1 audit report")
         else:
-            frozen_step2 = json.loads(p1_report_path.read_text()).get("step2_inventory", [])
+            p1_report = json.loads(p1_report_path.read_text())
+            frozen_step2 = p1_report.get("step2_inventory", [])
             if frozen_step2 != step2_inventory:
                 a2_failures.append("step2 checkpoint inventory changed after P1 certification")
+            frozen_count = p1_report.get("ledger_record_count")
+            if not isinstance(frozen_count, int) or frozen_count < 1 or frozen_count > len(ledger):
+                a2_failures.append(f"invalid P1 ledger prefix length: {frozen_count}")
+            else:
+                frozen_prefix = ledger[:frozen_count]
+                if jsonl_records_sha256(frozen_prefix) != p1_report.get("ledger_sha256"):
+                    a2_failures.append("execution ledger P1 prefix changed after certification")
+                if frozen_prefix[-1].get("record_sha256") != p1_report.get("ledger_tail_record_sha256"):
+                    a2_failures.append("execution ledger P1 tail changed after certification")
+            p1_inventory_records = [
+                row for row in ledger
+                if row.get("record_type") == "checkpoint_inventory"
+                and row.get("experiment_name") == fresh_experiment
+                and int(row.get("global_step", -1)) == 2
+            ]
+            if len(p1_inventory_records) != 1 or p1_inventory_records[0].get("inventory") != frozen_step2:
+                a2_failures.append("ledger does not contain exactly one matching P1 checkpoint inventory")
+            p1_audit_records = [
+                row for row in ledger
+                if row.get("record_type") == "audit_result"
+                and row.get("experiment_name") == fresh_experiment
+                and row.get("phase") == "p1"
+                and row.get("status") == "PASS"
+            ]
+            if len(p1_audit_records) != 1:
+                a2_failures.append("ledger does not contain exactly one P1 PASS audit result")
 
     a3_failures = []
     if phase == "final":
@@ -292,8 +545,21 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
             for ack in load_acks:
                 if not all(ack.get(key) for key in ("model_loaded", "optimizer_loaded", "extra_loaded")):
                     a3_failures.append(f"incomplete actor checkpoint load ack: {ack}")
-                if ack.get("optimizer_step_min") is None or int(ack["optimizer_step_min"]) < 1:
-                    a3_failures.append(f"missing/non-positive loaded optimizer step: {ack}")
+                state_count = int(ack.get("optimizer_state_entry_count", 0))
+                step_count = int(ack.get("optimizer_step_entry_count", 0))
+                histogram = ack.get("optimizer_step_histogram") or {}
+                valid_histogram = isinstance(histogram, dict) and all(
+                    isinstance(value, int) and value > 0 for value in histogram.values()
+                )
+                if (
+                    state_count < 1
+                    or step_count != state_count
+                    or not valid_histogram
+                    or sum(histogram.values()) != step_count
+                ):
+                    a3_failures.append(f"incomplete loaded optimizer state evidence: {ack}")
+                if ack.get("optimizer_step_max") is None or int(ack["optimizer_step_max"]) < 1:
+                    a3_failures.append(f"loaded optimizer never advanced before resume: {ack}")
                 if ack.get("lr_scheduler_last_epoch") is None or int(ack["lr_scheduler_last_epoch"]) < 1:
                     a3_failures.append(f"missing/non-positive loaded scheduler epoch: {ack}")
             data_item = next((item for item in step2_inventory if item["path"] == "data.pt"), None)
@@ -321,14 +587,23 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
             if loaded is None or updated is None:
                 a3_failures.append(f"rank {rank} missing resume optimizer continuity evidence")
                 continue
-            loaded_step = loaded.get("optimizer_step_min")
-            updated_step = updated.get("optimizer_step_min")
+            loaded_step = loaded.get("optimizer_step_max")
+            updated_step = updated.get("optimizer_step_max")
             loaded_epoch = loaded.get("lr_scheduler_last_epoch")
             updated_epoch = updated.get("lr_scheduler_last_epoch")
             if loaded_step is None or updated_step is None or int(updated_step) <= int(loaded_step):
                 a3_failures.append(
                     f"rank {rank} optimizer step did not advance across resume: {loaded_step} -> {updated_step}"
                 )
+            loaded_state_count = int(loaded.get("optimizer_state_entry_count", 0))
+            updated_state_count = int(updated.get("optimizer_state_entry_count", 0))
+            if loaded_state_count < 1 or updated_state_count != loaded_state_count:
+                a3_failures.append(
+                    f"rank {rank} optimizer state entry count changed across resume: "
+                    f"{loaded_state_count} -> {updated_state_count}"
+                )
+            if loaded.get("optimizer_step_histogram") == updated.get("optimizer_step_histogram"):
+                a3_failures.append(f"rank {rank} optimizer step histogram did not change across resume")
             if loaded_epoch is None or updated_epoch is None or int(updated_epoch) <= int(loaded_epoch):
                 a3_failures.append(
                     f"rank {rank} scheduler epoch did not advance across resume: {loaded_epoch} -> {updated_epoch}"
@@ -352,21 +627,79 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         required_syncs,
         manifest["weight_sync"]["parameter_names"],
         manifest["weight_sync"]["transfer_format"],
+        manifest["weight_sync"]["expected_loaded_parameter_count"],
     )
 
-    signal_steps = {
-        int(row["global_step"]): row
-        for row in execution_records
-        if row.get("record_type") == "execution_signal"
+    rollout_starts = [row for row in execution_records if row.get("record_type") == "rollout_start"]
+    required_rollouts = [
+        (fresh_experiment, 1, 0),
+        (fresh_experiment, 2, 1),
+    ] + ([(resume_experiment, 3, 2)] if phase == "final" else [])
+    observed_rollouts = {
+        (row.get("experiment_name"), int(row.get("global_step", -1)), int(row.get("actor_version", -1)))
+        for row in rollout_starts
     }
+    if observed_rollouts != set(required_rollouts):
+        a4_failures.append(
+            f"rollout_start coverage {sorted(observed_rollouts)} != {sorted(required_rollouts)}"
+        )
+    for experiment, step, actor_version in required_rollouts:
+        matches = [
+            row for row in rollout_starts
+            if row.get("experiment_name") == experiment
+            and int(row.get("global_step", -1)) == step
+        ]
+        if len(matches) != 1:
+            a4_failures.append(
+                f"expected exactly one rollout_start for {experiment} step {step}, found {len(matches)}"
+            )
+            continue
+        record = matches[0]
+        if int(record.get("actor_version", -1)) != actor_version:
+            a4_failures.append(
+                f"rollout step {step} used actor version {record.get('actor_version')} != {actor_version}"
+            )
+        if record.get("sampled_tensor_digest") != digests.get(actor_version):
+            a4_failures.append(
+                f"rollout step {step} digest is not bound to actor version {actor_version}"
+            )
+    a4_ok = not a4_failures
+
+    signal_records = [
+        row for row in execution_records if row.get("record_type") == "execution_signal"
+    ]
+    signal_steps = {int(row["global_step"]): row for row in signal_records}
     required_signal_steps = [1, 2] + ([3] if phase == "final" else [])
     a5_failures = []
+    observed_signal_steps = {int(row.get("global_step", -1)) for row in signal_records}
+    if observed_signal_steps != set(required_signal_steps):
+        a5_failures.append(
+            f"execution signal step coverage {sorted(observed_signal_steps)} "
+            f"!= {required_signal_steps}"
+        )
     signal_summary: dict[int, dict] = {}
     for step in required_signal_steps:
-        record = signal_steps.get(step)
-        if record is None:
-            a5_failures.append(f"missing execution signal for step {step}")
+        step_records = [row for row in signal_records if int(row.get("global_step", -1)) == step]
+        if len(step_records) != 1:
+            a5_failures.append(
+                f"expected exactly one execution signal for step {step}, found {len(step_records)}"
+            )
             continue
+        record = step_records[0]
+        expected_experiment = fresh_experiment if step in (1, 2) else resume_experiment
+        if (
+            int(record.get("actor_version", -1)) != step
+            or record.get("experiment_name") != expected_experiment
+        ):
+            a5_failures.append(
+                f"step {step} execution signal identity drift: "
+                f"experiment={record.get('experiment_name')}, actor_version={record.get('actor_version')}"
+            )
+        nonfinite_names = record.get("nonfinite_metric_names")
+        if not isinstance(nonfinite_names, list):
+            a5_failures.append(f"step {step} is missing explicit non-finite metric evidence")
+        elif nonfinite_names:
+            a5_failures.append(f"step {step} contains non-finite metrics {sorted(nonfinite_names)}")
         values = record.get("metrics", {}).values()
         if any(not math.isfinite(float(value)) for value in values):
             a5_failures.append(f"non-finite execution metric at step {step}")
@@ -429,6 +762,9 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         frozen_resolved_manifest = json.loads(Path(p0_resolved_manifest_path).read_text(encoding="utf-8"))
         resolved_manifest_file_matches = frozen_resolved_manifest == manifest
     ledger_commits = {row.get("git_commit") for row in execution_records}
+    all_ledger_commits = {row.get("git_commit") for row in ledger}
+    p0_run_id = p0_certificate.get("evidence", {}).get("run_id")
+    ledger_run_ids = {row.get("run_id") for row in ledger}
     current_commit = subprocess.check_output(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -438,6 +774,9 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         and p0_resolved_manifest_sha256 == resolved_manifest_sha256
         and resolved_manifest_file_matches
         and ledger_commits == {current_commit}
+        and all_ledger_commits == {current_commit}
+        and ledger_run_ids == {p0_run_id}
+        and not ledger_failures
     )
     p1_pass = not step2_missing and all(step in signal_steps for step in (1, 2))
     p2_pass = phase != "final" or (
@@ -462,6 +801,9 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
         "gates": gates,
         "audits": audits,
         "ledger_sha256": sha256_file(ledger_path) if ledger_path.is_file() else None,
+        "ledger_record_count": len(ledger),
+        "ledger_tail_record_sha256": ledger[-1].get("record_sha256") if ledger else None,
+        "ledger_failures": ledger_failures,
         "step2_inventory": step2_inventory,
         "step3_inventory": step3_inventory,
     }
@@ -472,11 +814,92 @@ def build_report(manifest: dict, phase: str) -> tuple[dict, list[dict]]:
     return report, inventory_records
 
 
+def verify_resume_source(manifest: dict) -> dict:
+    paths = manifest["paths"]
+    failures: list[str] = []
+    p1_path = Path(paths["certificate_root"]) / "p1_audit_report.json"
+    if not p1_path.is_file():
+        failures.append("missing P1 audit report")
+        p1_report = {}
+    else:
+        p1_report = json.loads(p1_path.read_text(encoding="utf-8"))
+        if p1_report.get("status") != "PASS" or p1_report.get("decision") != "P1_AUDIT_PASS":
+            failures.append("P1 audit report is not an immutable PASS")
+    current_inventory, missing = component_inventory(
+        Path(paths["resume_source"]), int(manifest["gpu"]["world_size"])
+    )
+    failures.extend(f"resume source missing {item}" for item in missing)
+    if p1_report.get("step2_inventory") != current_inventory:
+        failures.append("resume source inventory differs from the P1-frozen step2 checkpoint")
+    ledger_path = Path(paths["execution_ledger"])
+    ledger = read_jsonl(ledger_path)
+    failures.extend(validate_jsonl_chain(ledger))
+    schema = json.loads((REPO_ROOT / manifest["ledger_schema"]).read_text(encoding="utf-8"))
+    failures.extend(validate_ledger_schema(ledger, schema))
+    p0_path = Path(paths["certificate_root"]) / "p0_preflight.json"
+    p0 = json.loads(p0_path.read_text(encoding="utf-8")) if p0_path.is_file() else {}
+    run_id = p0.get("evidence", {}).get("run_id")
+    if not run_id or {row.get("run_id") for row in ledger} != {run_id}:
+        failures.append("resume ledger is not bound to the P0 run ID")
+    frozen_count = p1_report.get("ledger_record_count")
+    if not isinstance(frozen_count, int) or frozen_count < 1 or frozen_count > len(ledger):
+        failures.append(f"invalid P1 ledger prefix length: {frozen_count}")
+    else:
+        prefix = ledger[:frozen_count]
+        if jsonl_records_sha256(prefix) != p1_report.get("ledger_sha256"):
+            failures.append("execution ledger P1 prefix differs before resume")
+        if prefix[-1].get("record_sha256") != p1_report.get("ledger_tail_record_sha256"):
+            failures.append("execution ledger P1 tail differs before resume")
+        suffix = ledger[frozen_count:]
+        if [row.get("record_type") for row in suffix] != ["checkpoint_inventory", "audit_result"]:
+            failures.append(
+                "unexpected ledger records were appended between P1 evidence and resume: "
+                f"{[row.get('record_type') for row in suffix]}"
+            )
+        elif (
+            int(suffix[0].get("global_step", -1)) != 2
+            or suffix[1].get("phase") != "p1"
+            or suffix[1].get("status") != "PASS"
+        ):
+            failures.append("P1 audit suffix does not describe the frozen step2 PASS")
+        else:
+            inventory_record, audit_record = suffix
+            expected_experiment = manifest["experiments"]["fresh"]
+            expected_commit = p0.get("evidence", {}).get("git_commit")
+            if (
+                inventory_record.get("inventory") != current_inventory
+                or inventory_record.get("inventory") != p1_report.get("step2_inventory")
+            ):
+                failures.append(
+                    "current step2, hash-chained P1 inventory and P1 report inventory differ"
+                )
+            for record, label in ((inventory_record, "inventory"), (audit_record, "audit")):
+                if (
+                    record.get("experiment_name") != expected_experiment
+                    or record.get("run_id") != run_id
+                    or record.get("git_commit") != expected_commit
+                ):
+                    failures.append(f"P1 {label} ledger identity is not bound to this run/commit")
+            if (
+                inventory_record.get("record_index") != frozen_count
+                or audit_record.get("record_index") != frozen_count + 1
+            ):
+                failures.append("P1 inventory/audit records are not at the certified chain positions")
+    return {
+        "gate": "P2_RESUME_PREFLIGHT",
+        "status": "PASS" if not failures else "FAIL",
+        "decision": "RESUME_SOURCE_PASS" if not failures else "GATE_A_NO_GO:P2",
+        "failures": failures,
+        "step2_inventory": current_inventory,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--phase", choices=("p1", "final"), default="final")
     parser.add_argument("--write-report", action="store_true")
+    parser.add_argument("--verify-resume-source", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
@@ -489,6 +912,12 @@ def main() -> int:
             "failures": [str(error)],
         }, indent=2, sort_keys=True))
         return 1
+    if args.verify_resume_source:
+        if args.write_report or args.output:
+            raise SystemExit("--verify-resume-source is read-only and cannot write a report")
+        result = verify_resume_source(manifest)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["status"] == "PASS" else 1
     report, inventory_records = build_report(manifest, args.phase)
     if args.write_report:
         name = "p1_audit_report.json" if args.phase == "p1" else "gate_a_final_report.json"

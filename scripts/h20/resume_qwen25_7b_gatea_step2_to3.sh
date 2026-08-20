@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/gatea_frozen_common.sh"
 gatea_require_clean_frozen_checkout
-gatea_export_audit_environment
-export GATE_A_EXPERIMENT_NAME=$GATEA_RESUME_EXP
+gatea_acquire_run_lock
+gatea_require_p0_commit
 
 [[ -d $GATEA_RESUME_SOURCE/actor && -f $GATEA_RESUME_SOURCE/data.pt ]] || {
   echo "GATE_A_NO_GO:P2 missing exact P1 step2 source: $GATEA_RESUME_SOURCE" >&2; exit 74;
@@ -17,9 +17,15 @@ readonly GATEA_LOG=$GATEA_LOG_ROOT/${GATEA_RESUME_EXP}.log
   echo 'GATE_A_NO_GO:P2 missing P1 audit certificate' >&2; exit 77;
 }
 gatea_require_p0_commit
+"$GATEA_PYTHON" "$GATEA_CODE/tools/h20/preflight_qwen25_7b_gatea.py" \
+  --manifest "$GATEA_MANIFEST" --phase resume --check-runtime
+"$GATEA_PYTHON" "$GATEA_CODE/tools/h20/audit_qwen25_7b_gatea.py" \
+  --manifest "$GATEA_MANIFEST" --verify-resume-source
 "$GATEA_PYTHON" -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["status"] != "PASS")' \
   "$GATEA_CERTIFICATE_ROOT/p1_audit_report.json"
 gatea_require_declared_gpus_idle
+gatea_export_audit_environment
+export GATE_A_EXPERIMENT_NAME=$GATEA_RESUME_EXP
 
 env WORK_ROOT="$GATEA_WORK_ROOT" CODE="$GATEA_CODE" PYTHON="$GATEA_PYTHON" \
 PHASE=resume EXP="$GATEA_RESUME_EXP" RESUME_FROM="$GATEA_RESUME_SOURCE" RUN_SEED=2026 \

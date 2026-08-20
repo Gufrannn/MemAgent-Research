@@ -18,6 +18,7 @@ The main entry point to run the PPO algorithm
 import logging
 import os
 import warnings
+from collections import Counter
 from typing import Union
 
 import psutil
@@ -55,6 +56,24 @@ from codetiming import Timer
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+def _optimizer_step_evidence(optimizer):
+    steps = []
+    for state in optimizer.state.values():
+        if "step" not in state:
+            continue
+        step = state["step"]
+        steps.append(int(step.item() if hasattr(step, "item") else step))
+    return {
+        "optimizer_state_entry_count": len(optimizer.state),
+        "optimizer_step_entry_count": len(steps),
+        "optimizer_step_min": min(steps) if steps else None,
+        "optimizer_step_max": max(steps) if steps else None,
+        "optimizer_step_histogram": {
+            str(step): count for step, count in sorted(Counter(steps).items())
+        },
+    }
 
 
 def create_device_mesh(world_size, fsdp_size):
@@ -591,18 +610,16 @@ class ActorRolloutRefWorker(Worker):
         assert self._is_actor and self._is_rollout
         if self.config.rollout.name != "vllm":
             raise RuntimeError(f"Gate A requires vLLM rollout, got {self.config.rollout.name!r}")
-        optimizer_steps = []
-        for state in self.actor_optimizer.state.values():
-            if "step" not in state:
-                continue
-            step = state["step"]
-            optimizer_steps.append(int(step.item() if hasattr(step, "item") else step))
+        optimizer_evidence = _optimizer_step_evidence(self.actor_optimizer)
         self.rollout_sharding_manager.set_gate_a_sync_context(
             global_step=global_step,
             actor_version=actor_version,
             sync_kind=sync_kind,
-            optimizer_step_min=min(optimizer_steps) if optimizer_steps else None,
-            optimizer_step_max=max(optimizer_steps) if optimizer_steps else None,
+            optimizer_step_min=optimizer_evidence["optimizer_step_min"],
+            optimizer_step_max=optimizer_evidence["optimizer_step_max"],
+            optimizer_state_entry_count=optimizer_evidence["optimizer_state_entry_count"],
+            optimizer_step_entry_count=optimizer_evidence["optimizer_step_entry_count"],
+            optimizer_step_histogram=optimizer_evidence["optimizer_step_histogram"],
             lr_scheduler_last_epoch=(
                 int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
             ),
@@ -701,19 +718,13 @@ class ActorRolloutRefWorker(Worker):
 
         gate_a_load_ack = None
         if os.getenv("GATE_A_FROZEN_AUDIT", "0") == "1":
-            optimizer_steps = []
-            for state in self.actor_optimizer.state.values():
-                if "step" not in state:
-                    continue
-                step = state["step"]
-                optimizer_steps.append(int(step.item() if hasattr(step, "item") else step))
+            optimizer_evidence = _optimizer_step_evidence(self.actor_optimizer)
             gate_a_load_ack = {
                 "rank": int(torch.distributed.get_rank()),
                 "model_loaded": True,
                 "optimizer_loaded": bool(self.actor_optimizer.state),
                 "extra_loaded": True,
-                "optimizer_step_min": min(optimizer_steps) if optimizer_steps else None,
-                "optimizer_step_max": max(optimizer_steps) if optimizer_steps else None,
+                **optimizer_evidence,
                 "lr_scheduler_last_epoch": (
                     int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
                 ),

@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import inspect
+import hashlib
+import json
 import logging
 import os
 
@@ -90,6 +92,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         sync_kind: str,
         optimizer_step_min: int | None,
         optimizer_step_max: int | None,
+        optimizer_state_entry_count: int,
+        optimizer_step_entry_count: int,
+        optimizer_step_histogram: dict[str, int],
         lr_scheduler_last_epoch: int | None,
     ) -> None:
         """Enable one fail-closed digest/ack record for the next weight sync."""
@@ -100,6 +105,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             "sync_kind": str(sync_kind),
             "optimizer_step_min": optimizer_step_min,
             "optimizer_step_max": optimizer_step_max,
+            "optimizer_state_entry_count": int(optimizer_state_entry_count),
+            "optimizer_step_entry_count": int(optimizer_step_entry_count),
+            "optimizer_step_histogram": dict(optimizer_step_histogram),
             "lr_scheduler_last_epoch": lr_scheduler_last_epoch,
         }
 
@@ -190,6 +198,16 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                     "the loader did not return parameter names"
                 )
             loaded_params = set(loaded_params)
+            vllm_parameter_names = set(vllm_params)
+            if loaded_params != vllm_parameter_names:
+                missing = sorted(vllm_parameter_names - loaded_params)
+                unexpected = sorted(loaded_params - vllm_parameter_names)
+                raise RuntimeError(
+                    "Gate A vLLM loader did not cover the exact local rollout model: "
+                    f"load_format={load_format}, loaded_parameter_count={len(loaded_params)}, "
+                    f"model_parameter_count={len(vllm_parameter_names)}, missing={missing}, "
+                    f"unexpected={unexpected}"
+                )
             missing_loaded_parameters = sorted(set(parameter_names) - loaded_params)
             if missing_loaded_parameters:
                 raise RuntimeError(
@@ -200,6 +218,12 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             samples_per_tensor = int(os.environ["GATE_A_WEIGHT_DIGEST_SAMPLES"])
             vllm_digest = sampled_tensor_digest(vllm_params, parameter_names, samples_per_tensor)
             worker_rank = torch.distributed.get_rank()
+            loaded_names_payload = json.dumps(
+                sorted(loaded_params), separators=(",", ":")
+            ).encode("utf-8")
+            model_names_payload = json.dumps(
+                sorted(vllm_parameter_names), separators=(",", ":")
+            ).encode("utf-8")
             ack = {
                 **gate_a_context,
                 "actor_master_sampled_tensor_digest": actor_master_digest,
@@ -212,6 +236,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 "vllm_sampled_tensor_digest": vllm_digest,
                 "weight_transfer_format": load_format,
                 "loaded_parameter_count": len(loaded_params),
+                "model_parameter_count": len(vllm_parameter_names),
+                "loaded_parameter_names_sha256": hashlib.sha256(loaded_names_payload).hexdigest(),
+                "model_parameter_names_sha256": hashlib.sha256(model_names_payload).hexdigest(),
                 "audited_loaded_parameters": sorted(set(parameter_names) & loaded_params),
                 "sampled_parameter_dtypes": parameter_dtypes,
                 "sync_started_at": sync_started_at,

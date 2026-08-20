@@ -1018,6 +1018,29 @@ class RayPPOTrainer:
             sampled_tensor_digest=next(iter(actor_digests)),
             actor_master_sampled_tensor_digest=next(iter(actor_master_digests)),
         )
+        self._gate_a_synced_actor_version = int(actor_version)
+        self._gate_a_synced_actor_digest = next(iter(actor_digests))
+
+    def _audit_gate_a_rollout_start(self, *, global_step: int) -> None:
+        from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
+
+        if not gate_a_enabled():
+            return
+        expected_version = int(global_step) - 1
+        actual_version = getattr(self, "_gate_a_synced_actor_version", None)
+        digest = getattr(self, "_gate_a_synced_actor_digest", None)
+        if actual_version != expected_version or not digest:
+            raise RuntimeError(
+                "Gate A rollout is not bound to the immediately preceding actor/vLLM sync: "
+                f"global_step={global_step}, expected_actor_version={expected_version}, "
+                f"synced_actor_version={actual_version}, digest={digest}"
+            )
+        append_gate_a_record(
+            "rollout_start",
+            global_step=int(global_step),
+            actor_version=actual_version,
+            sampled_tensor_digest=digest,
+        )
 
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
@@ -1229,16 +1252,27 @@ class RayPPOTrainer:
                                 trajectory_base_seeds = [
                                     int(record["trajectory_seed"]) for record in trajectory_seed_records
                                 ]
+                                if "index" in batch.batch:
+                                    dataset_indices = batch.batch["index"].detach().cpu().tolist()
+                                elif "index" in batch.non_tensor_batch:
+                                    dataset_indices = np.asarray(batch.non_tensor_batch["index"]).tolist()
+                                else:
+                                    raise RuntimeError(
+                                        "Gate A requires the frozen dataset index on every trajectory"
+                                    )
                                 gen_batch.meta_info["trajectory_base_seeds"] = trajectory_base_seeds
                                 batch.non_tensor_batch["rollout_trajectory_seed"] = np.asarray(
                                     trajectory_base_seeds, dtype=np.uint64
                                 )
                                 for record in trajectory_seed_records:
                                     record["record_type"] = "trajectory_seed"
-                                    record["uid"] = str(batch.non_tensor_batch["uid"][int(record["row"])])
+                                    source_row = int(record["row"])
+                                    record["uid"] = str(batch.non_tensor_batch["uid"][source_row])
+                                    record["dataset_index"] = int(dataset_indices[source_row])
                                 _append_rollout_seed_audit(
                                     str(self.config.trainer.default_local_dir), trajectory_seed_records
                                 )
+                            self._audit_gate_a_rollout_start(global_step=self.global_steps)
                             gen_batch_output, final_mask, sample_index = self.generation_manager.run_llm_loop(gen_batch, timing_raw)
 
                             assert final_mask.sum().item() == len(batch.batch), \
@@ -1300,6 +1334,7 @@ class RayPPOTrainer:
                                         "turn": int(turns[output_row]),
                                         "uid": str(source_uids[source_row]),
                                         "trajectory_seed": int(source_seeds[source_row]),
+                                        "dataset_index": int(dataset_indices[source_row]),
                                         "request_seed": int(request_seeds[output_row]),
                                         "is_final": bool(final_flags[output_row]),
                                         "mode": str(trajectory_seed_mode),
@@ -1590,14 +1625,20 @@ class RayPPOTrainer:
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
 
-                from recurrent.research.gate_a_execution import append_gate_a_record, finite_numeric_metrics, gate_a_enabled
+                from recurrent.research.gate_a_execution import (
+                    append_gate_a_record,
+                    gate_a_enabled,
+                    partition_numeric_metrics,
+                )
 
                 if gate_a_enabled():
+                    finite_metrics, nonfinite_metric_names = partition_numeric_metrics(metrics)
                     append_gate_a_record(
                         "execution_signal",
                         global_step=self.global_steps,
                         actor_version=self.global_steps,
-                        metrics=finite_numeric_metrics(metrics),
+                        metrics=finite_metrics,
+                        nonfinite_metric_names=nonfinite_metric_names,
                     )
 
                 # TODO: make a canonical logger that supports various backend

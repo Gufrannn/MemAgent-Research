@@ -3,17 +3,28 @@
   "$id": "gate_a_execution_ledger.schema.json",
   "title": "MemAgent H20 Gate A append-only execution ledger record",
   "type": "object",
-  "required": ["record_type", "experiment_name", "git_commit", "recorded_at"],
+  "required": ["record_type", "experiment_name", "git_commit", "run_id", "recorded_at", "record_index", "previous_record_sha256", "record_sha256"],
   "properties": {
-    "record_type": {"enum": ["p0_preflight", "resume_load", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
+    "record_type": {"enum": ["p0_preflight", "resume_load", "rollout_start", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
     "experiment_name": {"type": "string", "minLength": 1},
     "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
     "recorded_at": {"type": "string", "format": "date-time"},
+    "record_index": {"type": "integer", "minimum": 0},
+    "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "global_step": {"type": "integer", "minimum": 0},
     "actor_version": {"type": "integer", "minimum": 0},
     "actor_master_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "actor_rollout_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "actor_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "worker_ranks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    },
     "vllm_worker_rank": {"type": "integer", "minimum": 0},
     "vllm_ack_version": {"type": "integer", "minimum": 0},
     "vllm_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -21,9 +32,24 @@
     "sync_finished_at": {"type": "string", "format": "date-time"},
     "optimizer_step_min": {"type": ["integer", "null"], "minimum": 0},
     "optimizer_step_max": {"type": ["integer", "null"], "minimum": 0},
+    "optimizer_state_entry_count": {"type": "integer", "minimum": 0},
+    "optimizer_step_entry_count": {"type": "integer", "minimum": 0},
+    "optimizer_step_histogram": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 1}
+    },
     "lr_scheduler_last_epoch": {"type": ["integer", "null"], "minimum": 0},
     "weight_transfer_format": {"type": "string", "enum": ["dtensor", "hf"]},
     "loaded_parameter_count": {"type": "integer", "minimum": 1},
+    "model_parameter_count": {"type": "integer", "minimum": 1},
+    "loaded_parameter_names_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "model_parameter_names_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "metrics": {"type": "object"},
+    "nonfinite_metric_names": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
     "audited_loaded_parameters": {
       "type": "array",
       "minItems": 1,
@@ -39,7 +65,19 @@
   "allOf": [
     {
       "if": {"properties": {"record_type": {"const": "weight_sync_ack"}}},
-      "then": {"required": ["global_step", "actor_version", "actor_master_sampled_tensor_digest", "actor_rollout_sampled_tensor_digest", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "lr_scheduler_last_epoch", "weight_transfer_format", "loaded_parameter_count", "audited_loaded_parameters", "sampled_parameter_dtypes"]}
+      "then": {"required": ["global_step", "actor_version", "actor_master_sampled_tensor_digest", "actor_rollout_sampled_tensor_digest", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "optimizer_state_entry_count", "optimizer_step_entry_count", "optimizer_step_histogram", "lr_scheduler_last_epoch", "weight_transfer_format", "loaded_parameter_count", "model_parameter_count", "loaded_parameter_names_sha256", "model_parameter_names_sha256", "audited_loaded_parameters", "sampled_parameter_dtypes"]}
+    },
+    {
+      "if": {"properties": {"record_type": {"const": "rollout_start"}}},
+      "then": {"required": ["global_step", "actor_version", "sampled_tensor_digest"]}
+    },
+    {
+      "if": {"properties": {"record_type": {"const": "weight_sync_summary"}}},
+      "then": {"required": ["global_step", "actor_version", "sampled_tensor_digest", "actor_master_sampled_tensor_digest", "worker_ranks"]}
+    },
+    {
+      "if": {"properties": {"record_type": {"const": "execution_signal"}}},
+      "then": {"required": ["global_step", "actor_version", "metrics", "nonfinite_metric_names"]}
     }
   ],
   "additionalProperties": true

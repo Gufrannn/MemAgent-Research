@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "frozen_at": "2026-08-21T00:00:00+08:00",
   "branch": "h20/qwen25-7b-gatea-2gpu-frozen-20260820",
   "base_commit": "bf2efb6c25334b7382a35735bfbe6ec1a4a8d497",
@@ -9,10 +9,11 @@
     "kind": "formal_gate_a",
     "physical_gpus": [6, 7],
     "world_size": 2,
-    "execution_revision": "20260821r3"
+    "execution_revision": "20260821r4"
   },
   "runtime_binding": {
-    "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
+    "required_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR", "MEMAGENT_GATEA_EXPECTED_COMMIT"],
+    "path_environment": ["MEMAGENT_GATEA_WORK_ROOT", "MEMAGENT_GATEA_REPO_DIR"],
     "automatic_repository_selection": false
   },
   "work_root": "${MEMAGENT_GATEA_WORK_ROOT}",
@@ -22,14 +23,29 @@
     "id": "Qwen/Qwen2.5-7B-Instruct",
     "path": "${MEMAGENT_GATEA_WORK_ROOT}/models/Qwen2.5-7B-Instruct",
     "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
-    "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"
+    "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c",
+    "files": [
+      {"path": "config.json", "size": 663, "sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"},
+      {"path": "generation_config.json", "size": 243, "sha256": "3a8f9087e486054c8a4a08dae2e5a3ba62e23da212b5b8c08bc42cb983c3459f"},
+      {"path": "merges.txt", "size": 1671839, "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"},
+      {"path": "model-00001-of-00004.safetensors", "size": 3945441440, "sha256": "a1333e6293854747c481288ea83b348226af178dd565c49b6f9495ba1966aba7"},
+      {"path": "model-00002-of-00004.safetensors", "size": 3864726352, "sha256": "f5d25a2772cb825164a2a2c0fb6d51a87e282abf21e4dd75bc5cfb3cd0ea6185"},
+      {"path": "model-00003-of-00004.safetensors", "size": 3864726424, "sha256": "8efdec4c1bc12317ae1a38dc42b595ce777738a64deea3fcb8a0a91381bcdfd5"},
+      {"path": "model-00004-of-00004.safetensors", "size": 3556377672, "sha256": "1a72d403cdf0c1ec3cb7f289f17b394a01e64394c2e9b3c0f94dbce3faf879bd"},
+      {"path": "model.safetensors.index.json", "size": 27752, "sha256": "624bf7c47cd12468fdc16e38a47cf4f19e0415b859a223ba3c027eed2f0e1028"},
+      {"path": "tokenizer.json", "size": 7031645, "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"},
+      {"path": "tokenizer_config.json", "size": 7305, "sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583"},
+      {"path": "vocab.json", "size": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+    ]
   },
   "data": {
     "train": "${MEMAGENT_GATEA_WORK_ROOT}/datasets/hotpotqa/hotpotqa_train_32k.parquet",
     "validation": "${MEMAGENT_GATEA_WORK_ROOT}/datasets/hotpotqa/hotpotqa_dev.parquet",
+    "train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
+    "validation_sha256": "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6",
     "shuffle": false,
     "dataloader_num_workers": 0,
-    "manifest_sha256": "8ab8258525c04c21d7091f74644f13c4c4557080d5bc0627b0c2ca39205bd4dc"
+    "manifest_sha256": "15aac92ee100edd476a1c670b7c1ff8aceb6f3a2d6b66799926dce14e0239994"
   },
   "gpu": {
     "declared_whitelist": [6, 7],
@@ -65,18 +81,18 @@
     "reward_manager": "naive"
   },
   "experiments": {
-    "p0": "qwen25_7b_h20_2gpu_gatea_preflight_gitclosed_seed2026_20260821r3",
-    "fresh": "qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r3",
-    "resume": "qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r3"
+    "p0": "qwen25_7b_h20_2gpu_gatea_preflight_gitclosed_seed2026_20260821r4",
+    "fresh": "qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r4",
+    "resume": "qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r4"
   },
   "paths": {
     "checkpoint_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent",
-    "log_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r3",
-    "certificate_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r3/certificates",
-    "fresh_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r3",
-    "resume_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r3",
-    "resume_source": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r3/global_step_2",
-    "execution_ledger": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r3/gate_a_execution_ledger.jsonl"
+    "log_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r4",
+    "certificate_root": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r4/certificates",
+    "fresh_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r4",
+    "resume_output": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_resume2to3_strictvllm_naive_indseed_seed2026_20260821r4",
+    "resume_source": "${MEMAGENT_GATEA_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_2gpu_gatea_fresh2_strictvllm_naive_indseed_seed2026_20260821r4/global_step_2",
+    "execution_ledger": "${MEMAGENT_GATEA_WORK_ROOT}/logs/gate_a_2gpu_frozen_20260821r4/gate_a_execution_ledger.jsonl"
   },
   "weight_sync": {
     "samples_per_tensor": 256,
@@ -84,6 +100,7 @@
     "byte_order": "little",
     "comparison_semantics": "actor_projected_to_vllm_parameter_dtype",
     "transfer_format": "dtensor",
+    "expected_loaded_parameter_count": 199,
     "parameter_names": [
       "model.embed_tokens.weight",
       "model.layers.0.input_layernorm.weight",
