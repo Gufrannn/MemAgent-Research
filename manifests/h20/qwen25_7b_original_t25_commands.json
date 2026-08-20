@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "manifest": "manifests/h20/qwen25_7b_original_t25_seed2026.json",
+  "required_environment": [
+    "MEMAGENT_T25_WORK_ROOT",
+    "MEMAGENT_T25_REPO_DIR",
+    "MEMAGENT_T25_EXPECTED_COMMIT"
+  ],
+  "working_directory": "${MEMAGENT_T25_REPO_DIR}",
+  "commands": {
+    "p0": [
+      "${MEMAGENT_T25_WORK_ROOT}/.venv/bin/python",
+      "tools/h20/preflight_qwen25_7b_original_t25.py",
+      "--manifest",
+      "manifests/h20/qwen25_7b_original_t25_seed2026.json",
+      "--phase",
+      "p0",
+      "--check-runtime",
+      "--write-certificate"
+    ],
+    "train_step4_to25": [
+      "bash",
+      "scripts/h20/resume_qwen25_7b_original_step3_to25.sh"
+    ],
+    "readonly_audit": [
+      "${MEMAGENT_T25_WORK_ROOT}/.venv/bin/python",
+      "tools/h20/audit_qwen25_7b_original_t25.py",
+      "--manifest",
+      "manifests/h20/qwen25_7b_original_t25_seed2026.json"
+    ]
+  },
+  "required_sequence": ["p0", "train_step4_to25", "readonly_audit"],
+  "gpu_execution_authorized_by_this_manifest": false
+}

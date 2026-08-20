@@ -29,6 +29,14 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def runtime_config_sha256(config: Mapping[str, Any]) -> str:
+    """Return the canonical digest of a fully resolved Hydra trainer config."""
+    encoded = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def resolve_manifest_environment(value: Any, environment: Mapping[str, str] | None = None) -> Any:
     """Resolve only the task-scoped H20 path bindings; reject implicit defaults."""
     source = os.environ if environment is None else environment

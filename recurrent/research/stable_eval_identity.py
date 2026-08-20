@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -161,6 +162,76 @@ def stable_trajectory_id(
             "trajectory_seed": int(trajectory_seed),
         }
     )
+
+
+def validate_actor_only_checkpoint_acknowledgements(
+    acknowledgements: Sequence[Mapping[str, Any]],
+    frozen_shards: Sequence[Mapping[str, Any]],
+    *,
+    global_step_folder: str | Path,
+    world_size: int,
+) -> list[dict[str, Any]]:
+    """Bind every actor-only worker load to one exact P0-frozen FSDP shard."""
+    if world_size < 1:
+        raise ValueError("actor-only checkpoint world size must be positive")
+    root = Path(global_step_folder).resolve()
+    frozen_by_rank: dict[int, dict[str, Any]] = {}
+    for item in frozen_shards:
+        path = str(item.get("path", ""))
+        match = re.fullmatch(r"actor/model_world_size_(\d+)_rank_(\d+)\.pt", path)
+        if match is None:
+            raise ValueError(f"invalid frozen actor-only shard path: {path!r}")
+        shard_world, rank = map(int, match.groups())
+        if shard_world != world_size or rank in frozen_by_rank:
+            raise ValueError(
+                "frozen actor-only shard world-size/rank inventory differs: "
+                f"path={path}, runtime_world_size={world_size}"
+            )
+        if (
+            not isinstance(item.get("size"), int)
+            or isinstance(item.get("size"), bool)
+            or int(item["size"]) < 1
+        ):
+            raise ValueError(f"frozen actor-only shard has invalid size: {item}")
+        _require_sha256(item.get("sha256"), "actor shard sha256")
+        frozen_by_rank[rank] = dict(item)
+    expected_ranks = list(range(world_size))
+    if sorted(frozen_by_rank) != expected_ranks:
+        raise ValueError(
+            f"frozen actor-only ranks {sorted(frozen_by_rank)} != {expected_ranks}"
+        )
+    normalized = [dict(item) for item in acknowledgements]
+    actual_ranks = sorted(int(item.get("rank", -1)) for item in normalized)
+    if actual_ranks != expected_ranks:
+        raise ValueError(f"actor-only acknowledgement ranks {actual_ranks} != {expected_ranks}")
+    for acknowledgement in normalized:
+        rank = int(acknowledgement["rank"])
+        frozen = frozen_by_rank[rank]
+        expected_path = (root / frozen["path"]).resolve()
+        if int(acknowledgement.get("world_size", -1)) != world_size:
+            raise ValueError(f"rank {rank} actor-only world size differs")
+        if acknowledgement.get("model_loaded") is not True:
+            raise ValueError(f"rank {rank} did not acknowledge actor model load")
+        if Path(str(acknowledgement.get("model_shard_path", ""))).resolve() != expected_path:
+            raise ValueError(f"rank {rank} loaded a non-frozen actor shard path")
+        if int(acknowledgement.get("model_shard_size", -1)) != int(frozen["size"]):
+            raise ValueError(f"rank {rank} actor shard size differs from P0")
+        if acknowledgement.get("model_shard_sha256") != frozen["sha256"]:
+            raise ValueError(f"rank {rank} actor shard digest differs from P0")
+        for field in (
+            "optimizer_loaded", "lr_scheduler_loaded", "rng_loaded", "dataloader_loaded"
+        ):
+            if acknowledgement.get(field) is not False:
+                raise ValueError(f"rank {rank} forbidden state {field} was restored")
+        if acknowledgement.get("optimizer_state_entry_count_before") != 0 or acknowledgement.get(
+            "optimizer_state_entry_count_after"
+        ) != 0:
+            raise ValueError(f"rank {rank} optimizer was not empty throughout actor-only load")
+        if acknowledgement.get("lr_scheduler_last_epoch_before") != acknowledgement.get(
+            "lr_scheduler_last_epoch_after"
+        ):
+            raise ValueError(f"rank {rank} LR scheduler changed during actor-only load")
+    return sorted(normalized, key=lambda item: int(item["rank"]))
 
 
 def _require_sha256(value: object, field: str) -> str:

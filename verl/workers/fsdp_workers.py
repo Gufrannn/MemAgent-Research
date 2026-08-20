@@ -714,7 +714,11 @@ class ActorRolloutRefWorker(Worker):
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
 
-        self.checkpoint_manager.load_checkpoint(local_path=local_path, hdfs_path=hdfs_path, del_local_after_load=del_local_after_load)
+        checkpoint_load_evidence = self.checkpoint_manager.load_checkpoint(
+            local_path=local_path,
+            hdfs_path=hdfs_path,
+            del_local_after_load=del_local_after_load,
+        )
 
         gate_a_load_ack = None
         if os.getenv("GATE_A_FROZEN_AUDIT", "0") == "1":
@@ -723,7 +727,12 @@ class ActorRolloutRefWorker(Worker):
                 "rank": int(torch.distributed.get_rank()),
                 "model_loaded": True,
                 "optimizer_loaded": bool(self.actor_optimizer.state),
-                "extra_loaded": True,
+                "extra_loaded": bool(checkpoint_load_evidence.get("extra_loaded")),
+                "rng_state_keys": checkpoint_load_evidence.get("rng_state_keys", []),
+                "rng_restored": bool(checkpoint_load_evidence.get("rng_restored")),
+                "lr_scheduler_loaded": bool(
+                    checkpoint_load_evidence.get("lr_scheduler_loaded")
+                ),
                 **optimizer_evidence,
                 "lr_scheduler_last_epoch": (
                     int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
@@ -737,6 +746,69 @@ class ActorRolloutRefWorker(Worker):
             offload_fsdp_optimizer(self.actor_optimizer)
 
         return gate_a_load_ack
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_model_checkpoint_only(
+        self, local_path, hdfs_path=None, del_local_after_load=False
+    ):
+        """Load actor weights without restoring any training state."""
+        assert self._is_actor
+        before = _optimizer_step_evidence(self.actor_optimizer)
+        scheduler_epoch_before = (
+            int(self.actor_lr_scheduler.last_epoch)
+            if self.actor_lr_scheduler is not None
+            else None
+        )
+        if int(before["optimizer_state_entry_count"]) != 0:
+            raise RuntimeError(
+                "actor-only evaluation requires a newly initialized empty optimizer: "
+                f"rank={torch.distributed.get_rank()}, evidence={before}"
+            )
+        if self._is_offload_param:
+            load_fsdp_model_to_gpu(self.actor_module_fsdp)
+
+        acknowledgement = self.checkpoint_manager.load_model_checkpoint_only(
+            local_path=local_path,
+            hdfs_path=hdfs_path,
+            del_local_after_load=del_local_after_load,
+        )
+        # No rank may proceed to actor/vLLM attestation until every rank has
+        # successfully loaded its exact model shard.
+        torch.distributed.barrier()
+
+        after = _optimizer_step_evidence(self.actor_optimizer)
+        scheduler_epoch_after = (
+            int(self.actor_lr_scheduler.last_epoch)
+            if self.actor_lr_scheduler is not None
+            else None
+        )
+        if before != after or scheduler_epoch_before != scheduler_epoch_after:
+            raise RuntimeError(
+                "actor-only checkpoint load mutated optimizer or LR scheduler state: "
+                f"rank={torch.distributed.get_rank()}, before={before}, after={after}, "
+                f"scheduler_before={scheduler_epoch_before}, scheduler_after={scheduler_epoch_after}"
+            )
+
+        if self._is_offload_param:
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+        if self._is_offload_optimizer:
+            offload_fsdp_optimizer(self.actor_optimizer)
+
+        return {
+            **acknowledgement,
+            "optimizer_state_entry_count_before": int(
+                before["optimizer_state_entry_count"]
+            ),
+            "optimizer_state_entry_count_after": int(
+                after["optimizer_state_entry_count"]
+            ),
+            "lr_scheduler_last_epoch_before": scheduler_epoch_before,
+            "lr_scheduler_last_epoch_after": scheduler_epoch_after,
+            "optimizer_loaded": False,
+            "lr_scheduler_loaded": False,
+            "rng_loaded": False,
+            "dataloader_loaded": False,
+        }
 
 
 class CriticWorker(Worker):

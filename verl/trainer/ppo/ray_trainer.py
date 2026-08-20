@@ -19,6 +19,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import hashlib
 import json
 import os
+import re
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
@@ -428,6 +429,39 @@ class RayPPOTrainer:
         self.processor = processor
         self.config = config
         self._stable_eval_runtime_config_sha256 = None
+        expected_t25_config_sha = os.environ.get(
+            "ORIGINAL_T25_EXPECTED_RUNTIME_CONFIG_SHA256", ""
+        )
+        if expected_t25_config_sha:
+            from recurrent.research.gate_a_execution import (
+                append_gate_a_record,
+                gate_a_enabled,
+                runtime_config_sha256,
+            )
+
+            if not gate_a_enabled():
+                raise ValueError(
+                    "T25 runtime-config attestation requires the append-only evidence writer"
+                )
+            resolved_t25_config = OmegaConf.to_container(
+                config, resolve=True, throw_on_missing=True
+            )
+            actual_t25_config_sha = runtime_config_sha256(resolved_t25_config)
+            if actual_t25_config_sha != expected_t25_config_sha:
+                raise ValueError(
+                    "T25 resolved Hydra config differs from P0: "
+                    f"actual={actual_t25_config_sha}, expected={expected_t25_config_sha}"
+                )
+            override_argv_sha = os.environ.get(
+                "ORIGINAL_T25_TRAINER_OVERRIDE_ARGV_SHA256", ""
+            )
+            if re.fullmatch(r"[0-9a-f]{64}", override_argv_sha) is None:
+                raise ValueError("T25 trainer override argv SHA-256 is missing or invalid")
+            append_gate_a_record(
+                "runtime_config",
+                resolved_config_sha256=actual_t25_config_sha,
+                override_argv_sha256=override_argv_sha,
+            )
         early_eval_identity = config.trainer.get("eval_identity", None)
         if early_eval_identity is not None and bool(
             early_eval_identity.get("enabled", False)
@@ -465,6 +499,7 @@ class RayPPOTrainer:
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
         self._actor_update_calls = 0
+        self._stable_eval_actor_checkpoint_load_acks = None
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -621,10 +656,40 @@ class RayPPOTrainer:
                 failures.append("validation top_k must be -1")
             if int(config.trainer.get("save_freq", 0)) != -1:
                 failures.append("trainer.save_freq must be -1")
-            if str(config.trainer.get("resume_mode", "")) != "disable":
-                failures.append("trainer.resume_mode must be disable")
-            if config.trainer.get("resume_from_path", None) not in (None, ""):
-                failures.append("trainer.resume_from_path must be empty")
+            weight_source = str(
+                eval_identity_config.get("weight_source", "base_model")
+            )
+            expected_global_step = int(
+                eval_identity_config.get("expected_global_step", 0)
+            )
+            if weight_source == "base_model":
+                if str(config.trainer.get("resume_mode", "")) != "disable":
+                    failures.append("base-model evaluation requires trainer.resume_mode=disable")
+                if config.trainer.get("resume_from_path", None) not in (None, ""):
+                    failures.append("base-model evaluation requires an empty resume_from_path")
+                if expected_global_step != 0:
+                    failures.append("base-model evaluation expected_global_step must be zero")
+            elif weight_source == "actor_checkpoint":
+                if str(config.trainer.get("resume_mode", "")) != "actor_only_eval":
+                    failures.append(
+                        "checkpoint evaluation requires trainer.resume_mode=actor_only_eval"
+                    )
+                checkpoint_path = config.trainer.get("resume_from_path", None)
+                if not isinstance(checkpoint_path, str) or not checkpoint_path:
+                    failures.append("checkpoint evaluation requires an explicit resume_from_path")
+                elif os.path.basename(os.path.realpath(checkpoint_path)) != (
+                    f"global_step_{expected_global_step}"
+                ):
+                    failures.append(
+                        "checkpoint path basename must exactly equal "
+                        "eval_identity.expected_global_step"
+                    )
+                if expected_global_step <= 0:
+                    failures.append("checkpoint evaluation expected_global_step must be positive")
+            else:
+                failures.append(
+                    f"trainer.eval_identity.weight_source is invalid: {weight_source}"
+                )
             if not config.trainer.get("validation_data_dir", None):
                 failures.append("trainer.validation_data_dir is required")
             for key in (
@@ -1396,6 +1461,79 @@ class RayPPOTrainer:
         )
 
     def _load_checkpoint(self):
+        if self.config.trainer.resume_mode == "actor_only_eval":
+            eval_identity_config = self.config.trainer.get("eval_identity", None)
+            if not (
+                eval_identity_config is not None
+                and bool(eval_identity_config.get("enabled", False))
+                and str(eval_identity_config.get("weight_source", ""))
+                == "actor_checkpoint"
+            ):
+                raise ValueError(
+                    "trainer.resume_mode=actor_only_eval is reserved for strict "
+                    "validation-only actor-checkpoint evaluation"
+                )
+            global_step_folder = str(self.config.trainer.resume_from_path)
+            if not os.path.isabs(global_step_folder):
+                global_step_folder = os.path.join(os.getcwd(), global_step_folder)
+            global_step_folder = os.path.realpath(global_step_folder)
+            expected_global_step = int(eval_identity_config.expected_global_step)
+            expected_basename = f"global_step_{expected_global_step}"
+            if os.path.basename(global_step_folder) != expected_basename:
+                raise ValueError(
+                    "actor-only checkpoint must have the exact frozen global-step basename: "
+                    f"actual={os.path.basename(global_step_folder)}, expected={expected_basename}"
+                )
+            parsed_global_step = int(global_step_folder.rsplit("global_step_", 1)[-1])
+            if parsed_global_step != expected_global_step:
+                raise ValueError(
+                    "actor-only checkpoint global step differs from the frozen evaluation "
+                    f"contract: parsed={parsed_global_step}, expected={expected_global_step}"
+                )
+            actor_path = os.path.join(global_step_folder, "actor")
+            if not os.path.isdir(actor_path):
+                raise FileNotFoundError(
+                    f"actor-only evaluation checkpoint is missing actor directory: {actor_path}"
+                )
+            self.global_steps = expected_global_step
+            acknowledgements = self.actor_rollout_wg.load_model_checkpoint_only(
+                actor_path,
+                del_local_after_load=False,
+            )
+            from recurrent.research.stable_eval_identity import (
+                load_resolved_manifest,
+                validate_actor_only_checkpoint_acknowledgements,
+            )
+
+            resolved_eval_manifest = load_resolved_manifest(
+                str(eval_identity_config.resolved_manifest_path),
+                expected_hash=str(eval_identity_config.expected_manifest_hash),
+            )
+            interface_id = str(eval_identity_config.interface_id)
+            frozen_artifact = (
+                resolved_eval_manifest.get("execution_binding", {})
+                .get("model_artifacts", {})
+                .get(interface_id)
+            )
+            frozen_shards = (
+                frozen_artifact.get("actor_model_shards")
+                if isinstance(frozen_artifact, dict)
+                else None
+            )
+            if not isinstance(frozen_shards, list):
+                raise RuntimeError(
+                    "actor-only checkpoint evaluation lacks frozen actor shard inventory "
+                    f"for interface {interface_id}"
+                )
+            self._stable_eval_actor_checkpoint_load_acks = (
+                validate_actor_only_checkpoint_acknowledgements(
+                    acknowledgements,
+                    frozen_shards,
+                    global_step_folder=global_step_folder,
+                    world_size=self.actor_rollout_wg.world_size,
+                )
+            )
+            return self.global_steps
         if self.config.trainer.resume_mode == "disable":
             return 0
 
@@ -1569,6 +1707,25 @@ class RayPPOTrainer:
                         "optimizer_step_calls": 0,
                         "checkpoint_save_calls": 0,
                         "resume_mode": str(self.config.trainer.resume_mode),
+                        "weight_source": str(
+                            eval_identity_config.get("weight_source", "base_model")
+                        ),
+                        "checkpoint_load_mode": (
+                            "actor_only"
+                            if str(eval_identity_config.get("weight_source", "base_model"))
+                            == "actor_checkpoint"
+                            else "none"
+                        ),
+                        "checkpoint_source": (
+                            os.path.realpath(str(self.config.trainer.resume_from_path))
+                            if self.config.trainer.resume_from_path
+                            else None
+                        ),
+                        "actor_checkpoint_load_acks": (
+                            self._stable_eval_actor_checkpoint_load_acks
+                            if self._stable_eval_actor_checkpoint_load_acks is not None
+                            else []
+                        ),
                         "validation_only": True,
                         "weight_snapshot_before": stable_eval_weight_before,
                         "weight_snapshot_after": stable_eval_weight_after,

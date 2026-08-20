@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import os
 import warnings
 from typing import Optional, Union
@@ -93,6 +94,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 print(f"[rank-{self.rank}]: remove local resume ckpt file after loading failed, exception {e} will be ignored")
 
         lr_scheduler_state_dict = extra_state_dict["lr_scheduler"]
+        rng_state = extra_state_dict.get("rng")
+        rng_state_keys = sorted(rng_state) if isinstance(rng_state, dict) else []
 
         state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True)
         optim_cfg = ShardedOptimStateDictConfig(offload_to_cpu=True)
@@ -101,12 +104,77 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             if self.optimizer is not None:
                 self.optimizer.load_state_dict(optimizer_state_dict)
         # recover random state
-        if "rng" in extra_state_dict:
+        rng_restored = False
+        if rng_state is not None:
             # 'rng' may not exist for backward compatibility
-            self.load_rng_state(extra_state_dict["rng"])
+            self.load_rng_state(rng_state)
+            rng_restored = True
 
+        lr_scheduler_loaded = False
         if self.lr_scheduler is not None:
             self.lr_scheduler.load_state_dict(lr_scheduler_state_dict)
+            lr_scheduler_loaded = True
+
+        return {
+            "extra_loaded": True,
+            "rng_state_keys": rng_state_keys,
+            "rng_restored": rng_restored,
+            "lr_scheduler_loaded": lr_scheduler_loaded,
+        }
+
+    def load_model_checkpoint_only(
+        self, local_path: str, hdfs_path: str = None, del_local_after_load: bool = False
+    ) -> dict:
+        """Load only this rank's FSDP model shard for read-only evaluation.
+
+        Unlike :meth:`load_checkpoint`, this deliberately does not read or
+        restore optimizer, LR-scheduler, RNG, or trainer/dataloader state.
+        The explicit API prevents a validation-only checkpoint evaluation from
+        inheriting training-resume side effects.
+        """
+        if local_path is None:
+            raise ValueError("model-only checkpoint path is required")
+        if hdfs_path is not None:
+            raise NotImplementedError("model-only checkpoint load from HDFS is not supported")
+
+        remote_model_path = os.path.join(
+            local_path, f"model_world_size_{self.world_size}_rank_{self.rank}.pt"
+        )
+        local_model_path = copy_to_local(remote_model_path)
+        if not os.path.isfile(local_model_path):
+            raise FileNotFoundError(
+                f"rank {self.rank} model-only checkpoint shard is missing: {local_model_path}"
+            )
+
+        digest = hashlib.sha256()
+        with open(local_model_path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        shard_size = os.path.getsize(local_model_path)
+        model_state_dict = torch.load(local_model_path, weights_only=False)
+        state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True)
+        with FSDP.state_dict_type(
+            self.model, StateDictType.SHARDED_STATE_DICT, state_dict_cfg
+        ):
+            self.model.load_state_dict(model_state_dict)
+
+        if del_local_after_load:
+            try:
+                os.remove(local_model_path) if is_non_local(local_model_path) else None
+            except Exception as error:
+                print(
+                    "model-only checkpoint temporary-file cleanup failed; "
+                    f"the loaded model remains valid: {error}"
+                )
+
+        return {
+            "rank": int(self.rank),
+            "world_size": int(self.world_size),
+            "model_loaded": True,
+            "model_shard_path": os.path.realpath(remote_model_path),
+            "model_shard_size": int(shard_size),
+            "model_shard_sha256": digest.hexdigest(),
+        }
 
     def save_checkpoint(self, local_path: str, hdfs_path: str = None, global_step: int = 0, max_ckpt_to_keep=None):
         if local_path is None:

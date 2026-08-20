@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["record_type", "experiment_name", "git_commit", "run_id", "recorded_at", "record_index", "previous_record_sha256", "record_sha256"],
   "properties": {
-    "record_type": {"enum": ["p0_preflight", "resume_load", "rollout_start", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
+    "record_type": {"enum": ["p0_preflight", "runtime_config", "resume_load", "rollout_start", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
     "experiment_name": {"type": "string", "minLength": 1},
     "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
@@ -13,6 +13,8 @@
     "record_index": {"type": "integer", "minimum": 0},
     "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "resolved_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "override_argv_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "global_step": {"type": "integer", "minimum": 0},
     "actor_version": {"type": "integer", "minimum": 0},
     "actor_master_sampled_tensor_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -63,6 +65,10 @@
     }
   },
   "allOf": [
+    {
+      "if": {"properties": {"record_type": {"const": "runtime_config"}}},
+      "then": {"required": ["resolved_config_sha256", "override_argv_sha256"]}
+    },
     {
       "if": {"properties": {"record_type": {"const": "weight_sync_ack"}}},
       "then": {"required": ["global_step", "actor_version", "actor_master_sampled_tensor_digest", "actor_rollout_sampled_tensor_digest", "actor_sampled_tensor_digest", "vllm_worker_rank", "vllm_ack_version", "vllm_sampled_tensor_digest", "sync_started_at", "sync_finished_at", "optimizer_step_min", "optimizer_step_max", "optimizer_state_entry_count", "optimizer_step_entry_count", "optimizer_step_histogram", "lr_scheduler_last_epoch", "weight_transfer_format", "loaded_parameter_count", "model_parameter_count", "loaded_parameter_names_sha256", "model_parameter_names_sha256", "audited_loaded_parameters", "sampled_parameter_dtypes"]}

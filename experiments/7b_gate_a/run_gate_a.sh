@@ -19,11 +19,16 @@ N_GPUS=${N_GPUS:-2}
 FSDP_SIZE=${FSDP_SIZE:-$N_GPUS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.55}
 REWARD_MANAGER=${REWARD_MANAGER:-naive}
+FRESH_TOTAL_STEPS=${FRESH_TOTAL_STEPS:-2}
+RESUME_TOTAL_STEPS=${RESUME_TOTAL_STEPS:-3}
+RESUME_SOURCE_STEP=${RESUME_SOURCE_STEP:-2}
+SAVE_FREQ=${SAVE_FREQ:-1}
+MAX_ACTOR_CKPT_TO_KEEP=${MAX_ACTOR_CKPT_TO_KEEP:-3}
 OUT=$WORK_ROOT/logs/memory_agent/$EXP
 
 case "$PHASE" in
   fresh)
-    TOTAL_STEPS=2
+    TOTAL_STEPS=$FRESH_TOTAL_STEPS
     RESUME_MODE=disable
     RESUME_ARGS=()
     if [[ -e "$OUT" ]] && [[ -n "$(find "$OUT" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
@@ -32,17 +37,34 @@ case "$PHASE" in
     fi
     ;;
   resume)
-    TOTAL_STEPS=3
+    TOTAL_STEPS=$RESUME_TOTAL_STEPS
     RESUME_MODE=resume_path
-    RESUME_FROM=${RESUME_FROM:-$OUT/global_step_2}
+    RESUME_FROM=${RESUME_FROM:-$OUT/global_step_$RESUME_SOURCE_STEP}
     [[ -d "$RESUME_FROM/actor" && -f "$RESUME_FROM/data.pt" ]] || {
-      echo "Missing complete step-2 checkpoint: $RESUME_FROM" >&2
+      echo "Missing complete step-$RESUME_SOURCE_STEP checkpoint: $RESUME_FROM" >&2
+      exit 45
+    }
+    [[ $(basename -- "$RESUME_FROM") == "global_step_$RESUME_SOURCE_STEP" ]] || {
+      echo "Resume source basename must be global_step_$RESUME_SOURCE_STEP: $RESUME_FROM" >&2
       exit 45
     }
     RESUME_ARGS=(trainer.resume_from_path="$RESUME_FROM")
     ;;
   *) echo "PHASE must be fresh or resume" >&2; exit 46 ;;
 esac
+
+[[ $TOTAL_STEPS =~ ^[0-9]+$ && $RESUME_SOURCE_STEP =~ ^[0-9]+$ && $SAVE_FREQ =~ ^-?[0-9]+$ && $MAX_ACTOR_CKPT_TO_KEEP =~ ^[0-9]+$ ]] || {
+  echo "Step/checkpoint controls must be integers: TOTAL_STEPS=$TOTAL_STEPS RESUME_SOURCE_STEP=$RESUME_SOURCE_STEP SAVE_FREQ=$SAVE_FREQ MAX_ACTOR_CKPT_TO_KEEP=$MAX_ACTOR_CKPT_TO_KEEP" >&2
+  exit 53
+}
+[[ $TOTAL_STEPS -gt 0 && $SAVE_FREQ -ne 0 && $MAX_ACTOR_CKPT_TO_KEEP -gt 0 ]] || {
+  echo "Invalid step/checkpoint controls: TOTAL_STEPS=$TOTAL_STEPS SAVE_FREQ=$SAVE_FREQ MAX_ACTOR_CKPT_TO_KEEP=$MAX_ACTOR_CKPT_TO_KEEP" >&2
+  exit 54
+}
+if [[ $PHASE == resume && $TOTAL_STEPS -le $RESUME_SOURCE_STEP ]]; then
+  echo "Resume total steps must exceed the source step: TOTAL_STEPS=$TOTAL_STEPS RESUME_SOURCE_STEP=$RESUME_SOURCE_STEP" >&2
+  exit 55
+fi
 
 [[ -n ${CUDA_VISIBLE_DEVICES:-} ]] || {
   echo "CUDA_VISIBLE_DEVICES must explicitly name the GPUs already confirmed free." >&2
@@ -78,6 +100,90 @@ for path in "$PYTHON" "$MODEL/config.json" "$TRAIN" "$VAL"; do
   [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 49; }
 done
 
+TRAINER_OVERRIDES=(
+  recurrent.enable=memory
+  recurrent.memory.config.chunk_size=5000
+  recurrent.memory.config.max_chunks=8
+  algorithm.adv_estimator=grpo
+  algorithm.grpo_use_adv=False
+  "actor_rollout_ref.rollout.n=$ROLLOUT_N"
+  "+actor_rollout_ref.rollout.seed=$RUN_SEED"
+  +actor_rollout_ref.rollout.trajectory_seed_mode=independent
+  actor_rollout_ref.rollout.val_kwargs.n=2
+  "trainer.logger=['console']"
+  actor_rollout_ref.actor.optim.lr_warmup_steps=2
+  actor_rollout_ref.actor.clip_ratio_high=0.20
+  actor_rollout_ref.actor.entropy_coeff=0.000
+  "data.train_files=$TRAIN"
+  "data.val_files=$VAL"
+  data.shuffle=False
+  data.filter_overlong_prompts=True
+  "data.train_batch_size=$TRAIN_BATCH_SIZE"
+  +data.dataloader_num_workers=0
+  data.truncation=center
+  +data.context_key=context
+  data.max_prompt_length=8192
+  data.max_response_length=1024
+  "reward_model.reward_manager=$REWARD_MANAGER"
+  "custom_reward_function.path=$CODE/recurrent/research/hotpotqa_dense_reward.py"
+  custom_reward_function.name=compute_score
+  +custom_reward_function.reward_kwargs.f1_weight=0.95
+  +custom_reward_function.reward_kwargs.grounded_box_bonus=0.05
+  "actor_rollout_ref.model.path=$MODEL"
+  actor_rollout_ref.actor.optim.lr=1e-6
+  actor_rollout_ref.model.use_remove_padding=True
+  "actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE"
+  actor_rollout_ref.actor.use_dynamic_bsz=True
+  actor_rollout_ref.actor.ppo_max_token_len_per_gpu=16384
+  actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768
+  actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768
+  actor_rollout_ref.actor.ulysses_sequence_parallel_size=1
+  actor_rollout_ref.actor.use_kl_loss=True
+  actor_rollout_ref.actor.kl_loss_coef=0.001
+  actor_rollout_ref.actor.kl_loss_type=low_var_kl
+  actor_rollout_ref.model.enable_gradient_checkpointing=True
+  actor_rollout_ref.actor.fsdp_config.param_offload=True
+  actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
+  "actor_rollout_ref.actor.fsdp_config.fsdp_size=$FSDP_SIZE"
+  actor_rollout_ref.ref.fsdp_config.param_offload=True
+  actor_rollout_ref.rollout.name=vllm
+  actor_rollout_ref.rollout.load_format=dummy_dtensor
+  actor_rollout_ref.rollout.temperature=1
+  actor_rollout_ref.rollout.top_p=1.0
+  actor_rollout_ref.rollout.tensor_model_parallel_size=1
+  "actor_rollout_ref.rollout.gpu_memory_utilization=$GPU_MEMORY_UTILIZATION"
+  actor_rollout_ref.rollout.enforce_eager=False
+  actor_rollout_ref.rollout.free_cache_engine=False
+  actor_rollout_ref.rollout.max_num_batched_tokens=16384
+  actor_rollout_ref.rollout.max_num_seqs=16
+  actor_rollout_ref.rollout.val_kwargs.do_sample=True
+  actor_rollout_ref.rollout.val_kwargs.temperature=1.0
+  actor_rollout_ref.rollout.val_kwargs.top_p=0.7
+  algorithm.kl_ctrl.kl_coef=0.001
+  trainer.critic_warmup=0
+  trainer.project_name=memagent_7b_serialization_credit
+  "trainer.experiment_name=$EXP"
+  trainer.val_before_train=False
+  "trainer.n_gpus_per_node=$N_GPUS"
+  trainer.nnodes=1
+  "trainer.save_freq=$SAVE_FREQ"
+  trainer.test_freq=-1
+  trainer.total_epochs=30
+  "trainer.total_training_steps=$TOTAL_STEPS"
+  "trainer.resume_mode=$RESUME_MODE"
+  "trainer.max_actor_ckpt_to_keep=$MAX_ACTOR_CKPT_TO_KEEP"
+  trainer.default_hdfs_dir=null
+  "trainer.default_local_dir=$OUT"
+  ray_init.num_cpus=64
+  "${RESUME_ARGS[@]}"
+)
+
+if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
+  "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \
+    "${TRAINER_OVERRIDES[@]}"
+  exit 0
+fi
+
 mkdir -p "$OUT" "$WORK_ROOT/logs/gate_a"
 # Ray appends a long session/socket suffix. Keep the base below /tmp so the
 # resulting AF_UNIX socket path stays under Linux's 107-byte limit.
@@ -95,81 +201,6 @@ export WANDB_MODE=offline
 export VLLM_USE_V1=0
 export NCCL_DEBUG=WARN
 
-"$PYTHON" -m verl.trainer.main_ppo \
-  recurrent.enable=memory \
-  recurrent.memory.config.chunk_size=5000 \
-  recurrent.memory.config.max_chunks=8 \
-  algorithm.adv_estimator=grpo \
-  algorithm.grpo_use_adv=False \
-  actor_rollout_ref.rollout.n="$ROLLOUT_N" \
-  +actor_rollout_ref.rollout.seed="$RUN_SEED" \
-  +actor_rollout_ref.rollout.trajectory_seed_mode=independent \
-  actor_rollout_ref.rollout.val_kwargs.n=2 \
-  trainer.logger=['console'] \
-  actor_rollout_ref.actor.optim.lr_warmup_steps=2 \
-  actor_rollout_ref.actor.clip_ratio_high=0.20 \
-  actor_rollout_ref.actor.entropy_coeff=0.000 \
-  data.train_files="$TRAIN" \
-  data.val_files="$VAL" \
-  data.shuffle=False \
-  data.filter_overlong_prompts=True \
-  data.train_batch_size="$TRAIN_BATCH_SIZE" \
-  +data.dataloader_num_workers=0 \
-  data.truncation=center \
-  +data.context_key=context \
-  data.max_prompt_length=8192 \
-  data.max_response_length=1024 \
-  reward_model.reward_manager="$REWARD_MANAGER" \
-  custom_reward_function.path="$CODE/recurrent/research/hotpotqa_dense_reward.py" \
-  custom_reward_function.name=compute_score \
-  +custom_reward_function.reward_kwargs.f1_weight=0.95 \
-  +custom_reward_function.reward_kwargs.grounded_box_bonus=0.05 \
-  actor_rollout_ref.model.path="$MODEL" \
-  actor_rollout_ref.actor.optim.lr=1e-6 \
-  actor_rollout_ref.model.use_remove_padding=True \
-  actor_rollout_ref.actor.ppo_mini_batch_size="$PPO_MINI_BATCH_SIZE" \
-  actor_rollout_ref.actor.use_dynamic_bsz=True \
-  actor_rollout_ref.actor.ppo_max_token_len_per_gpu=16384 \
-  actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768 \
-  actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
-  actor_rollout_ref.actor.ulysses_sequence_parallel_size=1 \
-  actor_rollout_ref.actor.use_kl_loss=True \
-  actor_rollout_ref.actor.kl_loss_coef=0.001 \
-  actor_rollout_ref.actor.kl_loss_type=low_var_kl \
-  actor_rollout_ref.model.enable_gradient_checkpointing=True \
-  actor_rollout_ref.actor.fsdp_config.param_offload=True \
-  actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-  actor_rollout_ref.actor.fsdp_config.fsdp_size="$FSDP_SIZE" \
-  actor_rollout_ref.ref.fsdp_config.param_offload=True \
-  actor_rollout_ref.rollout.name=vllm \
-  actor_rollout_ref.rollout.load_format=dummy_dtensor \
-  actor_rollout_ref.rollout.temperature=1 \
-  actor_rollout_ref.rollout.top_p=1.0 \
-  actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-  actor_rollout_ref.rollout.gpu_memory_utilization="$GPU_MEMORY_UTILIZATION" \
-  actor_rollout_ref.rollout.enforce_eager=False \
-  actor_rollout_ref.rollout.free_cache_engine=False \
-  actor_rollout_ref.rollout.max_num_batched_tokens=16384 \
-  actor_rollout_ref.rollout.max_num_seqs=16 \
-  actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-  actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
-  actor_rollout_ref.rollout.val_kwargs.top_p=0.7 \
-  algorithm.kl_ctrl.kl_coef=0.001 \
-  trainer.critic_warmup=0 \
-  trainer.project_name=memagent_7b_serialization_credit \
-  trainer.experiment_name="$EXP" \
-  trainer.val_before_train=False \
-  trainer.n_gpus_per_node="$N_GPUS" \
-  trainer.nnodes=1 \
-  trainer.save_freq=1 \
-  trainer.test_freq=-1 \
-  trainer.total_epochs=30 \
-  trainer.total_training_steps="$TOTAL_STEPS" \
-  trainer.resume_mode="$RESUME_MODE" \
-  trainer.max_actor_ckpt_to_keep=3 \
-  trainer.default_hdfs_dir=null \
-  trainer.default_local_dir="$OUT" \
-  ray_init.num_cpus=64 \
-  "${RESUME_ARGS[@]}"
+"$PYTHON" -m verl.trainer.main_ppo "${TRAINER_OVERRIDES[@]}"
 
 echo "Gate A phase=$PHASE finished; Ray temp was $RAY_TMP"

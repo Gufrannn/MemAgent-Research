@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-08-21T00:00:00+08:00",
+  "branch": "h20/qwen25-7b-original-t25-s128-frozen-20260821",
+  "base_commit": "bd8b804c2cbf333f0f0650b729fd03a143d445b2",
+  "ledger_schema": "s128_it_execution_ledger.schema.json",
+  "contract": {
+    "kind": "existing_s128_recurrent_i_vs_original_t25",
+    "physical_gpus": [6, 7],
+    "world_size": 2,
+    "execution_revision": "20260821-s128-it-v1"
+  },
+  "scope": {
+    "claim": "paired descriptive performance evaluation of base recurrent-I and corrected Original-style 2-GPU pilot T25",
+    "existing_s128_only": true,
+    "no_resampling": true,
+    "interfaces_run": ["I", "T25"],
+    "raw_context_r_not_rerun": true,
+    "raw_context_r_source": "paper/paper.pdf",
+    "paired_difference_is_descriptive_not_causal": true,
+    "same_prompt_and_recurrent_protocol": true,
+    "not_original_paper_7b_reproduction": true,
+    "published_results_are_historical_reference_only": true
+  },
+  "runtime_binding": {
+    "required_environment": [
+      "MEMAGENT_S128_IT_WORK_ROOT",
+      "MEMAGENT_S128_IT_REPO_DIR",
+      "MEMAGENT_S128_IT_EXPECTED_COMMIT"
+    ],
+    "automatic_repository_selection": false
+  },
+  "work_root": "${MEMAGENT_S128_IT_WORK_ROOT}",
+  "repository": "${MEMAGENT_S128_IT_REPO_DIR}",
+  "python": "${MEMAGENT_S128_IT_WORK_ROOT}/.venv/bin/python",
+  "model": {
+    "id": "Qwen/Qwen2.5-7B-Instruct",
+    "path": "${MEMAGENT_S128_IT_WORK_ROOT}/models/Qwen2.5-7B-Instruct",
+    "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+    "loading_relevant_inventory_policy": "exact recursive inventory; undeclared model/tokenizer/index/adapter loading files are forbidden",
+    "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c",
+    "files": [
+      {"path": "config.json", "size": 663, "sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"},
+      {"path": "generation_config.json", "size": 243, "sha256": "3a8f9087e486054c8a4a08dae2e5a3ba62e23da212b5b8c08bc42cb983c3459f"},
+      {"path": "merges.txt", "size": 1671839, "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"},
+      {"path": "model-00001-of-00004.safetensors", "size": 3945441440, "sha256": "a1333e6293854747c481288ea83b348226af178dd565c49b6f9495ba1966aba7"},
+      {"path": "model-00002-of-00004.safetensors", "size": 3864726352, "sha256": "f5d25a2772cb825164a2a2c0fb6d51a87e282abf21e4dd75bc5cfb3cd0ea6185"},
+      {"path": "model-00003-of-00004.safetensors", "size": 3864726424, "sha256": "8efdec4c1bc12317ae1a38dc42b595ce777738a64deea3fcb8a0a91381bcdfd5"},
+      {"path": "model-00004-of-00004.safetensors", "size": 3556377672, "sha256": "1a72d403cdf0c1ec3cb7f289f17b394a01e64394c2e9b3c0f94dbce3faf879bd"},
+      {"path": "model.safetensors.index.json", "size": 27752, "sha256": "624bf7c47cd12468fdc16e38a47cf4f19e0415b859a223ba3c027eed2f0e1028"},
+      {"path": "tokenizer.json", "size": 7031645, "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"},
+      {"path": "tokenizer_config.json", "size": 7305, "sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583"},
+      {"path": "vocab.json", "size": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+    ]
+  },
+  "data": {
+    "validation": "${MEMAGENT_S128_IT_WORK_ROOT}/datasets/hotpotqa/hotpotqa_dev.parquet",
+    "validation_sha256": "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6",
+    "dataset_role": "existing_project_fixed_s128",
+    "sampling_semantics": "curated fixed memory challenge produced by the original project question-only filter followed by head(128); not a random HotpotQA development sample",
+    "expected_raw_rows": 128,
+    "expected_effective_rows": 128,
+    "source_order_indices": "all contiguous production-effective positions 0..127",
+    "shuffle": false,
+    "filter_overlong_prompts": true,
+    "filter_overlong_prompts_workers": 1,
+    "dataloader_num_workers": 0,
+    "include_source_order_index": true,
+    "production_effective_prompt_limit": 40000,
+    "canary_source_order_indices": [0, 1, 2, 3],
+    "canary_prerequisite_semantics": "the already-passed stable-I prefix; the formal performance cohort remains every source order 0..127"
+  },
+  "training_anchor": {
+    "experiment_name": "qwen25_7b_h20_corrected_original_style_2gpu_pilot_resume3to25_strictvllm_naive_indseed_seed2026_20260821",
+    "final_report": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json",
+    "execution_ledger": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/original_t25_2gpu_frozen_20260821/original_t25_execution_ledger.jsonl",
+    "checkpoint": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_corrected_original_style_2gpu_pilot_resume3to25_strictvllm_naive_indseed_seed2026_20260821/global_step_25",
+    "global_step": 25,
+    "load_mode": "actor_only",
+    "fsdp_world_size": 2,
+    "required_actor_shards": [
+      "actor/model_world_size_2_rank_0.pt",
+      "actor/model_world_size_2_rank_1.pt"
+    ],
+    "forbidden_restores": ["optimizer", "lr_scheduler", "rng", "dataloader"]
+  },
+  "stable_identity_canary": {
+    "final_report": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/stable_i4x2_final_report.json",
+    "resolved_manifest": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json",
+    "execution_ledger": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/stable_identity_execution_ledger.jsonl",
+    "required_status": "PASS",
+    "required_decision": "I_RECURRENT_IDENTITY_CANARY_PASS",
+    "required_git_commit": "bd8b804c2cbf333f0f0650b729fd03a143d445b2",
+    "required_eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a"
+  },
+  "gpu": {
+    "declared_whitelist": [6, 7],
+    "visible_devices": "6,7",
+    "world_size": 2,
+    "fsdp_size": 2,
+    "trainer_gpus": 2,
+    "tensor_parallel_size": 1
+  },
+  "evaluation": {
+    "base_seed": 2026,
+    "examples": 128,
+    "replicas": 1,
+    "interfaces": ["I", "T25"],
+    "attempt_ids": {"I": "base_i", "T25": "original_t25"},
+    "validation_only": true,
+    "actor_update_calls": 0,
+    "optimizer_step_calls": 0,
+    "checkpoint_save_calls": 0,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "primary_metrics": ["normalized_exact_match", "token_f1"],
+    "diagnostic_metrics": ["format_success", "historical_sub_exact_match"],
+    "training_dense_reward_excluded_from_evaluation_claims": true,
+    "metrics_recomputed_from_terminal_output_and_parquet_ground_truth": true,
+    "answer_extraction_route": "corrected-project compatible boxed then explicit then last non-empty line; composite dense reward excluded",
+    "paired_summary": "T25 minus I per stable example; descriptive only, no causal or population claim",
+    "contrast_interpretation": "base to 25 corrected Original-style updates in total; this run adds only steps 4 through 25 (22 updates) after the shared Gate A step3 anchor"
+  },
+  "recurrent": {
+    "enable": "memory",
+    "context_key": "context",
+    "chunk_size": 5000,
+    "max_chunks": 8,
+    "max_prompt_length": 1024,
+    "max_memorization_length": 1024,
+    "max_final_response_length": 1024,
+    "data_truncation": "center"
+  },
+  "backend": {
+    "rollout": "vllm",
+    "evaluation": "vllm",
+    "rollout_mode": "sync",
+    "allow_hf_fallback": false,
+    "reward_manager": "naive"
+  },
+  "runtime": {
+    "gpu_memory_utilization": 0.55,
+    "max_num_batched_tokens": 16384,
+    "max_num_seqs": 16,
+    "ray_num_cpus": 64
+  },
+  "weight_snapshot": {
+    "samples_per_tensor": 256,
+    "expected_loaded_parameter_count": 199,
+    "expected_sampled_parameter_dtype": "torch.bfloat16",
+    "transfer_format": "dtensor",
+    "parameter_names": [
+      "model.embed_tokens.weight",
+      "model.layers.0.input_layernorm.weight",
+      "model.layers.0.self_attn.o_proj.weight",
+      "model.layers.0.mlp.down_proj.weight",
+      "model.layers.27.input_layernorm.weight",
+      "model.layers.27.self_attn.o_proj.weight",
+      "model.layers.27.mlp.down_proj.weight",
+      "model.norm.weight"
+    ],
+    "required_worker_ranks": [0, 1]
+  },
+  "paths": {
+    "log_root": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821",
+    "certificate_root": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates",
+    "p0_certificate": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/p0_resolved_manifest.json",
+    "final_report": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/s128_it_final_report.json",
+    "execution_ledger": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/s128_it_execution_ledger.jsonl",
+    "I": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/interface_i_base",
+    "T25": "${MEMAGENT_S128_IT_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/interface_t25_original"
+  }
+}
