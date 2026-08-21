@@ -429,8 +429,10 @@ def _validate_numeric_contract(manifest: Mapping[str, Any]) -> None:
     if not isinstance(whitelist, list) or [
         require_int(value, f"gpu.physical_whitelist[{index}]", minimum=0)
         for index, value in enumerate(whitelist)
-    ] != [6, 7]:
-        raise ValueError("GPU physical whitelist must be the strict integer array [6, 7]")
+    ] != [2, 3]:
+        raise ValueError("GPU physical whitelist must be the strict integer array [2, 3]")
+    if gpu.get("visible_devices") != "2,3":
+        raise ValueError("GPU visible_devices must be exactly 2,3")
     if require_int(gpu.get("tensor_parallel_size"), "gpu.tensor_parallel_size", minimum=1) != 2:
         raise ValueError("tensor parallel size must be 2")
     if require_int(gpu.get("max_num_seqs"), "gpu.max_num_seqs", minimum=1) != 1:
@@ -697,9 +699,16 @@ def run_preflight(
             "tetrad_adjudication", "final_audit",
         ]:
             failures.append("command sequence drifted")
+        if commands.get("branch") != raw_manifest["branch"]:
+            failures.append("command manifest branch differs from the frozen branch")
         if commands.get("gpu_execution_authorized_by_this_manifest") is not False:
             failures.append("command manifest improperly self-authorizes GPU execution")
         command_execution = commands.get("execution", {})
+        if (
+            command_execution.get("physical_gpus") != manifest["gpu"]["physical_whitelist"]
+            or command_execution.get("visible_devices") != manifest["gpu"]["visible_devices"]
+        ):
+            failures.append("command manifest GPU binding differs from the frozen manifest")
         for field in (
             "full_model_sha_per_fresh_child",
             "actual_gpu_uuid_name_bound_per_child",
@@ -785,11 +794,11 @@ def run_preflight(
             check=False,
         )
         if completed.returncode:
-            failures.append(f"cannot identify GPU6-7: {completed.stderr.strip()}")
+            failures.append(f"cannot identify GPU2-3: {completed.stderr.strip()}")
         else:
             gpu_identity = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
             if len(gpu_identity) != 2 or any("NVIDIA H20" not in line for line in gpu_identity):
-                failures.append(f"GPU6-7 are not both NVIDIA H20: {gpu_identity}")
+                failures.append(f"GPU2-3 are not both NVIDIA H20: {gpu_identity}")
     evidence["runtime_versions"] = runtime_versions
     evidence["physical_gpu_identity"] = gpu_identity
 

@@ -3,7 +3,9 @@
 This closure tests the new serialization-credit idea without training or changing the
 Gate A checkpoint. It uses the existing fixed HotpotQA S128, the project-native
 recurrent memory templates, Qwen2.5-7B-Instruct, strict vLLM 0.8.2, and physical H20
-GPUs 6 and 7. It never changes `sources/` and never calls an actor update.
+GPUs 2 and 3. This GPU2-3 variant is isolated from the concurrent S128 job on GPU6-7
+and the COMMIT/RETAIN capture on GPU4-5. It never changes `sources/` and never calls
+an actor update.
 
 ## Scientific boundary
 
@@ -50,7 +52,7 @@ export MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT=<FULL_40_CHAR_COMMIT>
 export MEMAGENT_SERIAL_CREDIT_RUN_ID=scpilot4_20260821r1
 
 cd "$MEMAGENT_SERIAL_CREDIT_REPO_DIR"
-git switch h20/qwen25-7b-serialization-credit-pilots-20260821
+git switch h20/qwen25-7b-serialization-credit-gpu23-20260821
 test "$(git rev-parse HEAD)" = "$MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"
 test -z "$(git status --porcelain)"
 

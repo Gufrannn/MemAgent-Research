@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "branch": "h20/qwen25-7b-serialization-credit-pilots-20260821",
+  "branch": "h20/qwen25-7b-serialization-credit-gpu23-20260821",
   "required_sequence": [
     "p0",
     "smsb_capture",
@@ -20,8 +20,8 @@
     "tetrad": "scripts/h20/run_qwen25_7b_tetrad4.sh"
   },
   "execution": {
-    "physical_gpus": [6, 7],
-    "visible_devices": "6,7",
+    "physical_gpus": [2, 3],
+    "visible_devices": "2,3",
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "rollout_and_reader_backend": "strict_vllm",

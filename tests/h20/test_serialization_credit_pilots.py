@@ -157,7 +157,7 @@ def capture(index: int, call_start: int, *, process_generate_count: int = 12) ->
             "execution": {
                 "strict_vllm": True,
                 "tensor_parallel_size": 2,
-                "physical_gpu_whitelist": [6, 7],
+                "physical_gpu_whitelist": [2, 3],
                 "physical_gpu_identity": GPU_IDENTITIES,
                 "cuda_device_order": "PCI_BUS_ID",
                 "prefix_cache_enabled": False,
@@ -220,7 +220,7 @@ def replay_payload(item: dict, regime: str, ordinal: int) -> dict:
         "answer_token_ids": answer,
         "answer_token_ids_sha256": canonical_sha256(answer),
         "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [6, 7],
+        "physical_gpu_whitelist": [2, 3],
         "physical_gpu_identity": GPU_IDENTITIES,
         "cuda_device_order": "PCI_BUS_ID",
         "process_instance_uuid": str(uuid.UUID(int=100 + ordinal)),
@@ -447,7 +447,7 @@ def tetrad_fixture() -> tuple[list[dict], list[dict], list[dict]]:
                 "fresh_engine_verified": True,
                 "single_request_execution_verified": True,
                 "tensor_parallel_size": 2,
-                "physical_gpu_whitelist": [6, 7],
+                "physical_gpu_whitelist": [2, 3],
                 "physical_gpu_identity": GPU_IDENTITIES,
                 "cuda_device_order": "PCI_BUS_ID",
                 "max_num_seqs": 1,
@@ -1585,7 +1585,11 @@ def test_ledger_schema_rejects_numeric_strings_and_bool_indices(tmp_path: Path) 
 def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     commands = json.loads(COMMANDS.read_text(encoding="utf-8"))
-    assert manifest["gpu"]["physical_whitelist"] == [6, 7]
+    assert manifest["gpu"]["physical_whitelist"] == [2, 3]
+    assert manifest["gpu"]["visible_devices"] == "2,3"
+    assert commands["execution"]["physical_gpus"] == [2, 3]
+    assert commands["execution"]["visible_devices"] == "2,3"
+    assert commands["branch"] == manifest["branch"]
     assert all(type(value) is int for value in manifest["gpu"]["physical_whitelist"])
     assert manifest["gpu"]["tensor_parallel_size"] == 2
     assert manifest["backend"]["required_version"] == "0.8.2"
