@@ -430,6 +430,120 @@ def compute_policy_loss(
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
+def compute_rwwpo_policy_loss(
+    old_log_prob,
+    log_prob,
+    advantages,
+    response_mask,
+    writer_mask,
+    final_mask,
+    sample_index,
+    trajectory_turn,
+    cliprange=None,
+    cliprange_low=None,
+    cliprange_high=None,
+    clip_ratio_c=3.0,
+):
+    """RWWPO writer-prefix surrogate plus unchanged final-answer token PPO.
+
+    The common denominator is the number of active response tokens.  Consequently,
+    at ``log_prob == old_log_prob`` the writer derivative is exactly the writer
+    component of Original token-mean PPO (not merely collinear or rescaled).
+    Each trajectory contributes its last available writer-prefix ratio.  Prefix
+    ESS/chi-square statistics are returned for every observed writer turn.
+    """
+    tensors = (old_log_prob, log_prob, advantages, response_mask, writer_mask)
+    if any(t.shape != response_mask.shape for t in tensors):
+        raise ValueError("RWWPO token tensors and masks must have identical shapes")
+    if final_mask.ndim != 1 or sample_index.ndim != 1 or trajectory_turn.ndim != 1:
+        raise ValueError("RWWPO row metadata must be rank-one")
+    if not (len(final_mask) == len(sample_index) == len(trajectory_turn) == len(response_mask)):
+        raise ValueError("RWWPO row metadata is not aligned with the batch")
+    response_mask = response_mask.bool()
+    writer_mask = writer_mask.bool()
+    final_mask = final_mask.bool()
+    expected_writer = response_mask & (~final_mask).unsqueeze(-1)
+    if not torch.equal(writer_mask, expected_writer):
+        raise ValueError("RWWPO writer/answer mask closure failed")
+    denominator = response_mask.sum()
+    if denominator.item() <= 0:
+        raise ValueError("RWWPO has zero active-token denominator")
+
+    log_ratio = log_prob - old_log_prob
+    answer_mask = response_mask & final_mask.unsqueeze(-1)
+    answer_loss, answer_clipfrac, answer_kl, answer_clipfrac_lower = compute_policy_loss(
+        old_log_prob=old_log_prob,
+        log_prob=log_prob,
+        advantages=advantages,
+        response_mask=answer_mask,
+        cliprange=cliprange,
+        cliprange_low=cliprange_low,
+        cliprange_high=cliprange_high,
+        clip_ratio_c=clip_ratio_c,
+        loss_agg_mode="token-mean",
+    ) if answer_mask.any() else (
+        log_prob.sum() * 0.0,
+        log_prob.new_zeros(()),
+        log_prob.new_zeros(()),
+        log_prob.new_zeros(()),
+    )
+    # Undo answer-only token mean so writer and answer share Original's denominator.
+    answer_numerator = answer_loss * answer_mask.sum()
+
+    writer_rows = torch.nonzero(writer_mask.any(dim=-1), as_tuple=False).flatten()
+    if writer_rows.numel() == 0:
+        raise ValueError("RWWPO requires at least one active writer row")
+    writer_row_log_ratio = (log_ratio * writer_mask).sum(dim=-1)
+    writer_row_adv = torch.stack([
+        advantages[row][writer_mask[row]].mean() for row in writer_rows
+    ])
+    trajectory_losses = []
+    prefix_rows = []
+    for sid in torch.unique(sample_index[writer_rows], sorted=True):
+        rows = writer_rows[sample_index[writer_rows] == sid]
+        order = torch.argsort(trajectory_turn[rows], stable=True)
+        rows = rows[order]
+        turns = trajectory_turn[rows]
+        if torch.unique(turns).numel() != turns.numel():
+            raise ValueError("RWWPO duplicate writer turn inside a trajectory")
+        prefix_log_ratio = torch.cumsum(writer_row_log_ratio[rows], dim=0)
+        final_row = rows[-1]
+        final_adv = advantages[final_row][writer_mask[final_row]].mean()
+        trajectory_losses.append(-torch.exp(prefix_log_ratio[-1]) * final_adv)
+        for turn, value in zip(turns, prefix_log_ratio):
+            prefix_rows.append((int(turn.item()), value, int(sid.item())))
+    # At behavior point each trajectory loss differentiates through every writer
+    # token exactly once.  Multiplying by writer token count is unnecessary: the
+    # derivative of the summed log-ratio already is the token-gradient sum.
+    writer_numerator = torch.stack(trajectory_losses).sum()
+    loss = (writer_numerator + answer_numerator) / denominator
+
+    prefix_stats = []
+    for turn in sorted({row[0] for row in prefix_rows}):
+        values = torch.stack([row[1] for row in prefix_rows if row[0] == turn])
+        weights = torch.softmax(values.detach().to(torch.float64), dim=0)
+        batch_size = int(values.numel())
+        ess_fraction = float((1.0 / (batch_size * weights.square().sum())).item())
+        chi2 = float((batch_size * weights.square().sum() - 1.0).item())
+        prefix_stats.append({"turn": turn, "batch_size": batch_size,
+                             "ess_fraction": ess_fraction, "chi2": chi2})
+    metrics = {
+        "answer_clipfrac": answer_clipfrac,
+        "answer_ppo_kl": answer_kl,
+        "answer_clipfrac_lower": answer_clipfrac_lower,
+        "denominator": denominator.detach(),
+        "writer_trajectory_count": len(trajectory_losses),
+        "prefix_stats": prefix_stats,
+        "prefix_log_ratios": [
+            {"turn": turn, "sample_index": sid, "log_ratio": float(value.detach().item())}
+            for turn, value, sid in prefix_rows
+        ],
+        "log_ratio": log_ratio,
+        "answer_mask": answer_mask,
+    }
+    return loss, metrics
+
+
 def compute_entropy_loss(logits, response_mask):
     """Compute Categorical entropy loss
 

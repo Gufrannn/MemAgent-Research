@@ -2113,7 +2113,41 @@ class RayPPOTrainer:
                             ########
                             # ADD: paddding for actor updating.
                             ########
-                            if len(batch) % wsz != 0:
+                            rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
+                            rwwpo_capture = bool(rwwpo_cfg.get("enable", False) or
+                                                 rwwpo_cfg.get("collect_original_only", False))
+                            if rwwpo_capture:
+                                from recurrent.utils import indexing_proto
+                                # Keep every materialized prefix on one DP rank.
+                                groups = []
+                                for sid in torch.unique(batch.batch["sample_index"], sorted=True):
+                                    idx = torch.nonzero(batch.batch["sample_index"] == sid,
+                                                        as_tuple=False).flatten().cpu()
+                                    groups.append(idx)
+                                if len(groups) < wsz:
+                                    raise ValueError("RWWPO requires at least one complete trajectory per actor rank")
+                                bins, loads = [[] for _ in range(wsz)], [0] * wsz
+                                for group in sorted(groups, key=len, reverse=True):
+                                    slot = min(range(wsz), key=lambda value: loads[value])
+                                    bins[slot].append(group)
+                                    loads[slot] += len(group)
+                                width = max(loads)
+                                packed, valid = [], []
+                                for parts, load in zip(bins, loads):
+                                    rank_rows = torch.cat(parts)
+                                    packed.append(rank_rows)
+                                    valid.extend([True] * load)
+                                    if load < width:
+                                        packed.append(rank_rows[-1:].repeat(width - load))
+                                        valid.extend([False] * (width - load))
+                                packed_index = torch.cat(packed)
+                                no_padding_mask = torch.tensor(valid, dtype=torch.bool)
+                                batch = indexing_proto(batch, packed_index)
+                                batch.batch['attention_mask'][~no_padding_mask, :] = 0
+                                batch.batch['response_mask'][~no_padding_mask, :] = 0
+                                batch.batch['no_padding_mask'] = no_padding_mask
+                                batch.meta_info['padded'] = bool((~no_padding_mask).any())
+                            elif len(batch) % wsz != 0:
                                 from recurrent.utils import graceful_padding, indexing_proto
                                 padding_index, no_padding_mask = graceful_padding(len(batch), wsz)
                                 # use batch[-1] as padding, masked out
@@ -2148,6 +2182,12 @@ class RayPPOTrainer:
 
                         # update actor
                         with _timer("update_actor", timing_raw):
+                            batch.meta_info["global_step"] = int(self.global_steps)
+                            rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
+                            if bool(rwwpo_cfg.get("enable", False) or rwwpo_cfg.get("collect_original_only", False)):
+                                batch.batch["rwwpo_global_step"] = torch.full(
+                                    (len(batch),), int(self.global_steps), dtype=torch.long,
+                                    device=batch.batch["responses"].device)
                             eval_identity_config = self.config.trainer.get("eval_identity", None)
                             if eval_identity_config is not None and bool(
                                 eval_identity_config.get("enabled", False)

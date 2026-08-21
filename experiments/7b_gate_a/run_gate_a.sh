@@ -178,6 +178,31 @@ TRAINER_OVERRIDES=(
   "${RESUME_ARGS[@]}"
 )
 
+if [[ ${RWWPO_ENABLE:-0} == 1 || ${RWWPO_COLLECT_ORIGINAL:-0} == 1 ]]; then
+  [[ -n ${RWWPO_LEDGER_DIR:-} && $RWWPO_LEDGER_DIR == /* ]] || {
+    echo 'RWWPO_NO_GO: RWWPO_LEDGER_DIR must be an explicit absolute path' >&2
+    exit 56
+  }
+  [[ ${RWWPO_Q_MIN:-} =~ ^0\.[0-9]+$ ]] || {
+    echo 'RWWPO_NO_GO: RWWPO_Q_MIN must be explicit in (0,1)' >&2
+    exit 57
+  }
+  [[ ${RWWPO_ATTEMPT_ID:-} =~ ^[a-z0-9][a-z0-9_-]{2,63}$ ]] || {
+    echo 'RWWPO_NO_GO: RWWPO_ATTEMPT_ID must be an explicit semantic identity' >&2
+    exit 58
+  }
+  TRAINER_OVERRIDES+=(
+    "actor_rollout_ref.actor.rwwpo.ledger_dir=$RWWPO_LEDGER_DIR"
+    "actor_rollout_ref.actor.rwwpo.q_min=$RWWPO_Q_MIN"
+    "actor_rollout_ref.actor.rwwpo.attempt_id=$RWWPO_ATTEMPT_ID"
+  )
+  if [[ ${RWWPO_ENABLE:-0} == 1 ]]; then
+    TRAINER_OVERRIDES+=(actor_rollout_ref.actor.rwwpo.enable=true)
+  else
+    TRAINER_OVERRIDES+=(actor_rollout_ref.actor.rwwpo.collect_original_only=true)
+  fi
+fi
+
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \
     "${TRAINER_OVERRIDES[@]}"

@@ -27,7 +27,8 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, kl_penalty, grad_acc_mode
+from verl.trainer.ppo.core_algos import (agg_loss, compute_policy_loss,
+                                        compute_rwwpo_policy_loss, kl_penalty, grad_acc_mode)
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.py_functional import append_to_dict
 from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
@@ -243,6 +244,20 @@ class DataParallelPPOActor(BasePPOActor):
         # ADD: loss mask
         ######
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "response_mask"]
+        rwwpo_config = self.config.get("rwwpo", {})
+        rwwpo_enabled = bool(rwwpo_config.get("enable", False))
+        rwwpo_collect_original = bool(rwwpo_config.get("collect_original_only", False))
+        if rwwpo_enabled and rwwpo_collect_original:
+            raise ValueError("RWWPO method and Original collection modes are mutually exclusive")
+        rwwpo_capture = rwwpo_enabled or rwwpo_collect_original
+        if rwwpo_capture:
+            select_keys.extend(["final_mask", "sample_index", "trajectory_turn", "rwwpo_global_step"])
+            if self.config.loss_agg_mode != "token-mean":
+                raise ValueError("RWWPO exact first-order contract requires Original token-mean aggregation")
+            if not rwwpo_config.get("ledger_dir"):
+                raise ValueError("RWWPO requires an explicit append-only actual-loss ledger_dir")
+            if not rwwpo_config.get("attempt_id"):
+                raise ValueError("RWWPO requires an explicit semantic attempt_id")
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -288,7 +303,18 @@ class DataParallelPPOActor(BasePPOActor):
         #     proto_split is similar to `np.array_split`/`torch.tensor_split`, support inequally-sized chunks.
         #     note that self.config.train_batch_size has been injected in verl/workers/fsdp_workers.py
         ######
-        if padded:
+        if rwwpo_capture:
+            # A recurrent writer prefix is indivisible: never split its turns
+            # across optimizer minibatches.
+            groups = [torch.nonzero(batch["sample_index"] == sid, as_tuple=False).flatten()
+                      for sid in torch.unique(batch["sample_index"], sorted=True)]
+            target_sections = max(1, self.config.train_batch_size // self.config.ppo_mini_batch_size)
+            bins, loads = [[] for _ in range(target_sections)], [0] * target_sections
+            for group in sorted(groups, key=len, reverse=True):
+                slot = min(range(target_sections), key=lambda idx: loads[idx])
+                bins[slot].append(group); loads[slot] += len(group)
+            dataloader = [batch[torch.cat(parts)] for parts in bins if parts]
+        elif padded:
             from recurrent.utils import td_split
             dataloader = td_split(batch, self.config.train_batch_size // self.config.ppo_mini_batch_size)
         else:
@@ -342,6 +368,98 @@ class DataParallelPPOActor(BasePPOActor):
                     from warnings import warn
                     warn("Using dynamic bsz is highly recomended for multiturn since there will be padding samples")
                 mini_batch_token_nums = data['response_mask'].sum()
+
+                if rwwpo_capture:
+                    forwarded = []
+                    for micro_data in micro_batches:
+                        if isinstance(micro_data, DataProto):
+                            micro_data = {**micro_data.batch.to(torch.cuda.current_device()), **micro_data.non_tensor_batch}
+                        else:
+                            micro_data = micro_data.to(torch.cuda.current_device())
+                        entropy, current = self._forward_micro_batch(
+                            micro_batch=micro_data, temperature=temperature,
+                            calculate_entropy=self.config.entropy_coeff != 0)
+                        forwarded.append((micro_data, entropy, current))
+                    def joined(key):
+                        return torch.cat([item[0][key] for item in forwarded], dim=0)
+                    current_log_prob = torch.cat([item[2] for item in forwarded], dim=0)
+                    old_log_prob = joined("old_log_probs")
+                    response_mask = joined("response_mask").bool()
+                    final_mask = joined("final_mask").bool()
+                    writer_mask = response_mask & (~final_mask).unsqueeze(-1)
+                    policy_loss, rwwpo_metrics = compute_rwwpo_policy_loss(
+                        old_log_prob=old_log_prob, log_prob=current_log_prob,
+                        advantages=joined("advantages"), response_mask=response_mask,
+                        writer_mask=writer_mask, final_mask=final_mask,
+                        sample_index=joined("sample_index"), trajectory_turn=joined("trajectory_turn"),
+                        cliprange=self.config.clip_ratio,
+                        cliprange_low=self.config.clip_ratio_low,
+                        cliprange_high=self.config.clip_ratio_high,
+                        clip_ratio_c=self.config.get("clip_ratio_c", 3.0))
+                    if rwwpo_collect_original:
+                        policy_loss, original_clipfrac, original_kl, original_lower = compute_policy_loss(
+                            old_log_prob=old_log_prob, log_prob=current_log_prob,
+                            advantages=joined("advantages"), response_mask=response_mask,
+                            cliprange=self.config.clip_ratio, cliprange_low=self.config.clip_ratio_low,
+                            cliprange_high=self.config.clip_ratio_high,
+                            clip_ratio_c=self.config.get("clip_ratio_c", 3.0), loss_agg_mode="token-mean")
+                        rwwpo_metrics["answer_clipfrac"] = original_clipfrac
+                        rwwpo_metrics["answer_ppo_kl"] = original_kl
+                        rwwpo_metrics["answer_clipfrac_lower"] = original_lower
+                    if self.config.entropy_coeff != 0:
+                        entropy = torch.cat([item[1] for item in forwarded], dim=0)
+                        policy_loss = policy_loss - agg_loss(entropy, response_mask, "token-mean") * self.config.entropy_coeff
+                    if self.config.use_kl_loss:
+                        ref_log_prob = joined("ref_log_prob")
+                        kld = kl_penalty(logprob=current_log_prob, ref_logprob=ref_log_prob,
+                                         kl_penalty=self.config.kl_loss_type)
+                        kl_loss = agg_loss(kld, response_mask, "token-mean")
+                        policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
+                        metrics["actor/kl_loss"] = kl_loss.detach().item()
+                        metrics["actor/kl_coef"] = self.config.kl_loss_coef
+                    prefix_rows = rwwpo_metrics["prefix_log_ratios"]
+                    if torch.distributed.is_initialized():
+                        gathered = [None] * torch.distributed.get_world_size()
+                        torch.distributed.all_gather_object(gathered, prefix_rows)
+                        prefix_rows = [row for rank_rows in gathered for row in rank_rows]
+                    global_prefix_stats = []
+                    for turn in sorted({row["turn"] for row in prefix_rows}):
+                        values = torch.tensor([row["log_ratio"] for row in prefix_rows if row["turn"] == turn],
+                                              dtype=torch.float64)
+                        weights = torch.softmax(values, dim=0)
+                        count = len(values)
+                        chi2 = float((count * weights.square().sum() - 1).item())
+                        global_prefix_stats.append({"turn": turn, "batch_size": count,
+                            "ess_fraction": 1.0 / (1.0 + chi2), "chi2": chi2})
+                    q_min = float(rwwpo_config.get("q_min", 0.5))
+                    constraint_pass = rwwpo_collect_original or all(
+                        row["ess_fraction"] >= q_min for row in global_prefix_stats)
+                    from recurrent.research.rwwpo_ledger import append_actual_loss_record
+                    append_actual_loss_record(
+                        ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
+                        mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
+                        global_step=int(joined("rwwpo_global_step")[0].item()),
+                        epoch=epoch, minibatch=batch_idx, old_log_prob=old_log_prob,
+                        current_log_prob=current_log_prob, response_mask=response_mask,
+                        writer_mask=writer_mask, answer_mask=rwwpo_metrics["answer_mask"],
+                        trajectory_turn=joined("trajectory_turn"), sample_index=joined("sample_index"),
+                        advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
+                        prefix_stats=global_prefix_stats, q_min=q_min,
+                        constraint_pass=constraint_pass)
+                    if rwwpo_enabled and not constraint_pass:
+                        self.actor_optimizer.zero_grad()
+                        raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
+                    policy_loss.backward()
+                    append_to_dict(metrics, {
+                        "actor/pg_loss": policy_loss.detach().item(),
+                        "actor/pg_clipfrac": rwwpo_metrics["answer_clipfrac"].detach().item(),
+                        "actor/ppo_kl": rwwpo_metrics["answer_ppo_kl"].detach().item(),
+                        "actor/pg_clipfrac_lower": rwwpo_metrics["answer_clipfrac_lower"].detach().item(),
+                        "rwwpo/min_prefix_ess": min(row["ess_fraction"] for row in global_prefix_stats),
+                    })
+                    grad_norm = self._optimizer_step()
+                    append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item()})
+                    continue
 
                 for data in micro_batches:
                     # Support all hardwares

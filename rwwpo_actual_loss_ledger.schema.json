@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RWWPO actual-loss append-only record",
+  "type": "object",
+  "required": ["schema_version", "attempt_id", "mode", "global_step", "rank", "epoch", "minibatch",
+    "old_log_prob", "current_log_prob", "response_mask", "writer_mask",
+    "answer_mask", "trajectory_turn", "sample_index", "advantages",
+    "denominator", "prefix_stats", "q_min", "constraint_pass", "record_sha256"],
+  "properties": {
+    "schema_version": {"const": "rwwpo-actual-loss-v1"},
+    "attempt_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"},
+    "mode": {"enum": ["rwwpo_method", "original_collection"]},
+    "global_step": {"type": "integer", "minimum": 1},
+    "rank": {"type": "integer", "minimum": 0},
+    "epoch": {"type": "integer", "minimum": 0},
+    "minibatch": {"type": "integer", "minimum": 0},
+    "old_log_prob": {"type": "array"}, "current_log_prob": {"type": "array"},
+    "response_mask": {"type": "array"}, "writer_mask": {"type": "array"},
+    "answer_mask": {"type": "array"}, "trajectory_turn": {"type": "array"},
+    "sample_index": {"type": "array"}, "advantages": {"type": "array"},
+    "denominator": {"type": "integer", "minimum": 1},
+    "prefix_stats": {"type": "array", "items": {"type": "object", "required": ["turn", "batch_size", "ess_fraction", "chi2"]}},
+    "q_min": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "constraint_pass": {"type": "boolean"},
+    "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}
