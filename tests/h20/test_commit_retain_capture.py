@@ -31,6 +31,7 @@ from tools.h20.preflight_qwen25_7b_commit_retain import (
     _code_objects,
     _gpu_profile,
     _validate_manifest,
+    expected_pair_binding,
     experiment_name,
     load_manifest,
     validate_capture_credential,
@@ -44,6 +45,10 @@ HEX = "a" * 64
 GPU_IDENTITIES = [
     "6, GPU-deadbeef-0006, NVIDIA H20",
     "7, GPU-deadbeef-0007, NVIDIA H20",
+]
+GPU45_IDENTITIES = [
+    "4, GPU-deadbeef-0004, NVIDIA H20",
+    "5, GPU-deadbeef-0005, NVIDIA H20",
 ]
 
 
@@ -427,6 +432,37 @@ def test_candidate_count_and_handwritten_pass_are_not_trusted() -> None:
         validate_pair_record({"status": "PASS", "decision": "looks-good"})
 
 
+def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> None:
+    gpu67 = canonical_pair()
+    assert validate_pair_record(gpu67)["execution"]["visible_devices"] == "6,7"
+
+    gpu45_payload = pair_payload()
+    gpu45_payload["execution"].update(
+        physical_gpu_whitelist=[4, 5],
+        visible_devices="4,5",
+        physical_gpu_identity=GPU45_IDENTITIES,
+    )
+    gpu45 = build_pair_record(gpu45_payload)
+    assert validate_pair_record(gpu45)["execution"]["physical_gpu_whitelist"] == [4, 5]
+
+    mismatched_identity = copy.deepcopy(gpu45)
+    mismatched_identity["execution"]["physical_gpu_identity"] = GPU_IDENTITIES
+    with pytest.raises(ValueError, match="identity indices differ from physical whitelist"):
+        validate_pair_record(mismatched_identity)
+
+    arbitrary = copy.deepcopy(gpu45)
+    arbitrary["execution"].update(
+        physical_gpu_whitelist=[0, 1],
+        visible_devices="0,1",
+        physical_gpu_identity=[
+            "0, GPU-deadbeef-0000, NVIDIA H20",
+            "1, GPU-deadbeef-0001, NVIDIA H20",
+        ],
+    )
+    with pytest.raises(ValueError, match="GPU binding is not preregistered"):
+        validate_pair_record(arbitrary)
+
+
 def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_path) -> None:
     path = tmp_path / "captures.jsonl"
     pairs = [canonical_pair(index, offset * 6) for offset, index in enumerate((7, 8, 9, 10))]
@@ -489,6 +525,8 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
             "reader_prompt_template_sha256": "5" * 64,
             "writer_decode": pairs[0]["shared_contract"]["writer_decode"],
             "reader_decode": pairs[0]["shared_contract"]["reader_decode"],
+            "physical_gpu_whitelist": [6, 7],
+            "visible_devices": "6,7",
             "physical_gpu_identity": GPU_IDENTITIES,
             "engine_config_sha256": "e" * 64,
             "worker_multiproc_method": "spawn",
@@ -500,6 +538,38 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
         },
     )
     assert report["decision"] == "COMMIT_RETAIN_CAPTURE_AUDIT_COMPLETE"
+    gpu45_expected = {
+        "writer_checkpoint_sha256": HEX,
+        "reader_checkpoint_sha256": HEX,
+        "writer_prompt_template_sha256": "4" * 64,
+        "reader_prompt_template_sha256": "5" * 64,
+        "writer_decode": pairs[0]["shared_contract"]["writer_decode"],
+        "reader_decode": pairs[0]["shared_contract"]["reader_decode"],
+        "physical_gpu_whitelist": [4, 5],
+        "visible_devices": "4,5",
+        "physical_gpu_identity": GPU45_IDENTITIES,
+        "engine_config_sha256": "e" * 64,
+        "worker_multiproc_method": "spawn",
+        "vllm_observed_worker_multiproc_method": "spawn",
+        "multiprocessing_context_method": "spawn",
+        "parent_cuda_initialization_policy": "record_observed_spawn_required",
+        "global_generate_call_count": 24,
+        "eos_token_id": 999,
+    }
+    with pytest.raises(
+        ValueError, match="pair execution differs from P0 physical_gpu_whitelist"
+    ):
+        validate_capture_ledger(
+            records,
+            frozen_pairs=frozen,
+            experiment_name="fixture",
+            git_commit="f" * 40,
+            run_id="fixture1",
+            execution_binding_sha256="6" * 64,
+            runtime_binding_sha256="7" * 64,
+            current_binding_sha256="8" * 64,
+            expected_pair_binding=gpu45_expected,
+        )
     with pytest.raises(ValueError, match="prompt was not reconstructed from exact loaded bytes"):
         validate_capture_ledger(
             records,
@@ -613,6 +683,38 @@ def test_gpu45_overlay_is_fully_independent_and_keeps_gpu67_default() -> None:
     profile_objects = _code_objects(gpu45)
     assert "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json" in profile_objects
     assert "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_seed2026.json" in profile_objects
+
+
+@pytest.mark.parametrize(
+    "profile,whitelist,visible,identities",
+    [
+        ("gpu45", [4, 5], "4,5", GPU45_IDENTITIES),
+        ("gpu67", [6, 7], "6,7", GPU_IDENTITIES),
+    ],
+)
+def test_expected_pair_binding_freezes_current_gpu_profile(
+    profile, whitelist, visible, identities
+) -> None:
+    manifest = {
+        "execution_profile": profile,
+        "intervention": {"writer_decode": {"temperature": 1.0}, "reader_decode": {"temperature": 0.0}},
+    }
+    resolved = {
+        "runtime_binding": {"physical_gpu_identity": identities},
+        "execution_binding": {
+            "model_manifest_sha256": HEX,
+            "writer_prompt_template_sha256": "4" * 64,
+            "reader_prompt_template_sha256": "5" * 64,
+            "engine_config_sha256": "e" * 64,
+            "expected_global_generate_call_count": 24,
+        },
+    }
+    binding = expected_pair_binding(
+        manifest, resolved, types.SimpleNamespace(eos_token_id=999)
+    )
+    assert binding["physical_gpu_whitelist"] == whitelist
+    assert binding["visible_devices"] == visible
+    assert binding["physical_gpu_identity"] == identities
 
 
 def test_gpu45_manifest_rejects_gpu_or_path_cross_wiring() -> None:

@@ -1153,6 +1153,8 @@ def expected_pair_binding(
         "reader_prompt_template_sha256": execution["reader_prompt_template_sha256"],
         "writer_decode": manifest["intervention"]["writer_decode"],
         "reader_decode": manifest["intervention"]["reader_decode"],
+        "physical_gpu_whitelist": _gpu_profile(manifest)["physical_whitelist"],
+        "visible_devices": _gpu_profile(manifest)["visible_devices"],
         "physical_gpu_identity": resolved["runtime_binding"]["physical_gpu_identity"],
         "engine_config_sha256": execution["engine_config_sha256"],
         "worker_multiproc_method": "spawn",

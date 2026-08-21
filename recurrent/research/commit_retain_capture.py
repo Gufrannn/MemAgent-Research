@@ -571,6 +571,16 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
         or any(not isinstance(item, str) or not item for item in identities)
     ):
         raise ValueError("execution.physical_gpu_identity must bind two devices")
+    try:
+        identity_indices = [int(item.split(",", 1)[0].strip()) for item in identities]
+    except (ValueError, IndexError) as error:
+        raise ValueError(
+            "execution.physical_gpu_identity has invalid physical indices"
+        ) from error
+    if identity_indices != physical_whitelist:
+        raise ValueError(
+            "execution.physical_gpu_identity indices differ from physical whitelist"
+        )
     process_uuid = str(value.get("process_instance_uuid"))
     try:
         uuid.UUID(process_uuid)
@@ -1083,6 +1093,7 @@ def validate_capture_ledger(
                 if canonical_json(pair["shared_contract"].get(field)) != canonical_json(expected):
                     raise ValueError(f"pair shared contract differs from P0 {field}")
             for field in (
+                "physical_gpu_whitelist", "visible_devices",
                 "physical_gpu_identity", "engine_config_sha256",
                 "global_generate_call_count", "worker_multiproc_method",
                 "vllm_observed_worker_multiproc_method",
@@ -1201,7 +1212,8 @@ def validate_capture_ledger(
     executions = [pair["execution"] for pair in pairs]
     process_fields = (
         "engine_id", "cache_namespace", "process_instance_uuid", "process_pid",
-        "physical_gpu_identity", "global_generate_call_count", "parent_credential_id",
+        "physical_gpu_whitelist", "visible_devices", "physical_gpu_identity",
+        "global_generate_call_count", "parent_credential_id",
         "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
         "multiprocessing_context_method", "parent_cuda_initialized_before_engine",
         "parent_cuda_initialization_policy",
