@@ -31,6 +31,7 @@ from recurrent.research.serialization_credit_pilots import (
     validate_tetrad_manifest,
 )
 from recurrent.research.s128_hotpot_metrics import score_terminal_output
+from recurrent.research.stable_eval_identity import validate_resolved_manifest
 from recurrent.research.trajectory_seeding import derive_turn_request_seeds
 from tools.h20.preflight_qwen25_7b_serialization_credit import (
     _validate_numeric_contract,
@@ -1139,6 +1140,81 @@ def test_pilot_selection_is_outcome_blind_and_uses_existing_s128() -> None:
         eval_manifest_hash="1" * 64,
     )
     assert [row["raw_row_position"] for row in changed_selected] == [15, 47, 79, 111]
+
+
+def test_pilot_selection_projects_real_resolved_manifest_hash_into_row_identities() -> None:
+    parquet_rows = []
+    stable_rows = []
+    for index in range(128):
+        question = f"resolved-q{index}"
+        context = "z" * (index + 1)
+        truth = [f"resolved-answer-{index}"]
+        parquet_rows.append(
+            {
+                "prompt": [{"role": "user", "content": question}],
+                "context": context,
+                "reward_model": {"ground_truth": truth},
+                "extra_info": {"index": index},
+            }
+        )
+        # This is the real Stable-I resolved shape: eval_manifest_hash is a
+        # manifest-level binding, not a duplicated MANIFEST_ROW_FIELDS member.
+        stable_rows.append(
+            {
+                "example_id": str(index),
+                "semantic_dataset_index": index,
+                "source_order_index": index,
+                "raw_row_position": index,
+                "production_effective_position": index,
+                "context_token_count": len(context),
+                "source_question_hash": hashlib.sha256(question.encode()).hexdigest(),
+                "source_context_hash": hashlib.sha256(context.encode()).hexdigest(),
+                "ground_truth_hash": canonical_sha256(truth),
+            }
+        )
+    identity_payload = {"schema_version": 1, "rows": stable_rows}
+    eval_manifest_hash = canonical_sha256(identity_payload)
+    resolved = validate_resolved_manifest(
+        {
+            "identity_payload": identity_payload,
+            "eval_manifest_hash": eval_manifest_hash,
+        }
+    )
+
+    selected = select_pilot_rows(
+        parquet_rows=parquet_rows,
+        stable_rows=resolved["identity_payload"]["rows"],
+        tokenizer=FakeTokenizer(),
+        writer_prompt_builder=lambda question, memory, chunk: [*question, *memory, *chunk],
+        sorted_positions=[15, 47, 79, 111],
+        eval_manifest_hash=resolved["eval_manifest_hash"],
+    )
+    assert [row["raw_row_position"] for row in selected] == [15, 47, 79, 111]
+    assert {row["eval_manifest_hash"] for row in selected} == {eval_manifest_hash}
+
+    missing_hash = copy.deepcopy(resolved)
+    missing_hash.pop("eval_manifest_hash")
+    with pytest.raises(ValueError, match="eval_manifest_hash"):
+        validate_resolved_manifest(missing_hash)
+
+    tampered_hash = copy.deepcopy(resolved)
+    tampered_hash["eval_manifest_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="manifest hash mismatch"):
+        validate_resolved_manifest(tampered_hash)
+
+    duplicated_mismatch = copy.deepcopy(resolved["identity_payload"]["rows"])
+    duplicated_mismatch[0]["eval_manifest_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="row evaluation hash disagrees"):
+        select_pilot_rows(
+            parquet_rows=parquet_rows,
+            stable_rows=duplicated_mismatch,
+            tokenizer=FakeTokenizer(),
+            writer_prompt_builder=lambda question, memory, chunk: [
+                *question, *memory, *chunk
+            ],
+            sorted_positions=[15, 47, 79, 111],
+            eval_manifest_hash=resolved["eval_manifest_hash"],
+        )
 
 
 def test_current_binding_mismatch_is_fail_closed() -> None:

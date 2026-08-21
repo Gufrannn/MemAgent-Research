@@ -204,6 +204,7 @@ def select_pilot_rows(
         raise ValueError("pilot selection requires the complete existing S128")
     base_seed = require_int(base_seed, "base_seed", minimum=0)
     chunk_size = require_int(chunk_size, "chunk_size", minimum=1)
+    eval_manifest_hash = require_sha256(eval_manifest_hash, "eval_manifest_hash")
     if not isinstance(sorted_positions, list):
         raise ValueError("pilot sorted positions must be an integer array")
     sorted_positions = [
@@ -220,6 +221,15 @@ def select_pilot_rows(
         stable = stable_by_raw.get(raw_position)
         if stable is None:
             raise ValueError(f"stable identity has no row for raw position {raw_position}")
+        row_eval_manifest_hash = stable.get("eval_manifest_hash")
+        if (
+            row_eval_manifest_hash is not None
+            and row_eval_manifest_hash != eval_manifest_hash
+        ):
+            raise ValueError(
+                "stable identity row evaluation hash disagrees with the resolved "
+                f"manifest at raw row {raw_position}"
+            )
         question = _question(source)
         context = str(source.get("context"))
         ground_truth = source.get("reward_model", {}).get("ground_truth")
@@ -247,6 +257,12 @@ def select_pilot_rows(
         candidates.append(
             {
                 **dict(stable),
+                # Stable-I deliberately stores this binding once at the resolved
+                # manifest top level; identity_payload.rows contain only the
+                # row-local fields committed by that hash.  Downstream pilot
+                # records are executable identities and therefore must carry the
+                # top-level binding explicitly.
+                "eval_manifest_hash": eval_manifest_hash,
                 "writer_turn0_prompt_token_length": len(writer_prompt_ids),
                 "writer_turn0_prompt_token_sha256": canonical_sha256(writer_prompt_ids),
                 "trajectory_seed": trajectory_seed,
