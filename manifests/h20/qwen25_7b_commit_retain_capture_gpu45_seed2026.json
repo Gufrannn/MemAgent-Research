@@ -1,0 +1,32 @@
+{
+  "extends_manifest": "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
+  "schema_version": 1,
+  "frozen_at": "2026-08-21T00:00:00+08:00",
+  "execution_profile": "gpu45",
+  "branch": "h20/qwen25-7b-commit-retain-capture-gpu45-20260821",
+  "base_commit": "e019e7655046f34d368a82e7d5ea6d72c464ffc7",
+  "command_manifest": "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_commands.json",
+  "gpu": {
+    "physical_whitelist": [4, 5],
+    "visible_devices": "4,5",
+    "cuda_device_order": "PCI_BUS_ID",
+    "tensor_parallel_size": 2,
+    "max_num_seqs": 1,
+    "one_prompt_per_generate_call": true
+  },
+  "execution_resources": {
+    "project_lock": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_gate_a_gpu_4_5.lock",
+    "output_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}"
+  },
+  "paths": {
+    "log_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}",
+    "certificate_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates",
+    "p0_certificate": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/p0_resolved_manifest.json",
+    "execution_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/commit_retain_capture_execution_ledger.jsonl",
+    "capture_credential": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/credentials/capture_child.json",
+    "capture_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/captures/commit_retain_pairs.jsonl",
+    "capture_run_receipt": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/captures/run_receipt.json",
+    "final_report": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/commit_retain_capture_final_report.json"
+  }
+}

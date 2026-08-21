@@ -22,8 +22,26 @@ readonly COMMIT_RETAIN_REPO_DIR=$MEMAGENT_COMMIT_RETAIN_REPO_DIR
 readonly COMMIT_RETAIN_EXPECTED_COMMIT=$MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT
 readonly COMMIT_RETAIN_RUN_ID=$MEMAGENT_COMMIT_RETAIN_RUN_ID
 readonly COMMIT_RETAIN_PYTHON=$COMMIT_RETAIN_WORK_ROOT/.venv/bin/python
-readonly COMMIT_RETAIN_MANIFEST=$COMMIT_RETAIN_REPO_DIR/manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json
-readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_frozen_20260821/$COMMIT_RETAIN_RUN_ID
+readonly COMMIT_RETAIN_PROFILE=${COMMIT_RETAIN_CAPTURE_PROFILE:-gpu67}
+case $COMMIT_RETAIN_PROFILE in
+  gpu67)
+    readonly COMMIT_RETAIN_BRANCH=h20/qwen25-7b-commit-retain-capture-20260821
+    readonly COMMIT_RETAIN_MANIFEST=$COMMIT_RETAIN_REPO_DIR/manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json
+    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_frozen_20260821/$COMMIT_RETAIN_RUN_ID
+    readonly COMMIT_RETAIN_LOCK=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_gate_a_gpu_6_7.lock
+    readonly COMMIT_RETAIN_GPUS=6,7
+    ;;
+  gpu45)
+    readonly COMMIT_RETAIN_BRANCH=h20/qwen25-7b-commit-retain-capture-gpu45-20260821
+    readonly COMMIT_RETAIN_MANIFEST=$COMMIT_RETAIN_REPO_DIR/manifests/h20/qwen25_7b_commit_retain_capture_gpu45_seed2026.json
+    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_gpu45_frozen_20260821/$COMMIT_RETAIN_RUN_ID
+    readonly COMMIT_RETAIN_LOCK=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_gate_a_gpu_4_5.lock
+    readonly COMMIT_RETAIN_GPUS=4,5
+    ;;
+  *)
+    echo "COMMIT_RETAIN_NO_GO:P0 unknown capture profile: $COMMIT_RETAIN_PROFILE" >&2; exit 60
+    ;;
+esac
 readonly COMMIT_RETAIN_CERT_ROOT=$COMMIT_RETAIN_LOG_ROOT/certificates
 readonly COMMIT_RETAIN_P0=$COMMIT_RETAIN_CERT_ROOT/p0_preflight.json
 readonly COMMIT_RETAIN_RESOLVED=$COMMIT_RETAIN_CERT_ROOT/p0_resolved_manifest.json
@@ -32,8 +50,6 @@ readonly COMMIT_RETAIN_CREDENTIAL=$COMMIT_RETAIN_LOG_ROOT/credentials/capture_ch
 readonly COMMIT_RETAIN_CAPTURE=$COMMIT_RETAIN_LOG_ROOT/captures/commit_retain_pairs.jsonl
 readonly COMMIT_RETAIN_RUN_RECEIPT=$COMMIT_RETAIN_LOG_ROOT/captures/run_receipt.json
 readonly COMMIT_RETAIN_FINAL=$COMMIT_RETAIN_CERT_ROOT/commit_retain_capture_final_report.json
-readonly COMMIT_RETAIN_LOCK=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_gate_a_gpu_6_7.lock
-readonly COMMIT_RETAIN_GPUS=6,7
 
 commit_retain_sanitize_environment() {
   local inherited prefix
@@ -56,7 +72,7 @@ commit_retain_require_checkout() {
   [[ $(cd -- "$COMMIT_RETAIN_REPO_DIR" && pwd -P) == "$script_repo" ]] || {
     echo 'COMMIT_RETAIN_NO_GO:P0 invoked checkout differs from explicit repository' >&2; exit 68;
   }
-  [[ $(cd "$COMMIT_RETAIN_REPO_DIR" && git branch --show-current) == h20/qwen25-7b-commit-retain-capture-20260821 ]] || {
+  [[ $(cd "$COMMIT_RETAIN_REPO_DIR" && git branch --show-current) == "$COMMIT_RETAIN_BRANCH" ]] || {
     echo 'COMMIT_RETAIN_NO_GO:P0 wrong branch' >&2; exit 70;
   }
   [[ -z $(cd "$COMMIT_RETAIN_REPO_DIR" && git status --porcelain) ]] || {
@@ -74,7 +90,7 @@ commit_retain_acquire_lock() {
   mkdir -p "$(dirname "$COMMIT_RETAIN_LOCK")"
   exec 8>"$COMMIT_RETAIN_LOCK"
   flock -n 8 || {
-    echo 'COMMIT_RETAIN_NO_GO:P0 GPU6-7 project lock is held' >&2; exit 62;
+    echo "COMMIT_RETAIN_NO_GO:P0 GPU$COMMIT_RETAIN_GPUS project lock is held" >&2; exit 62;
   }
 }
 
@@ -85,7 +101,7 @@ commit_retain_require_idle() {
   local processes
   processes=$(nvidia-smi -i "$COMMIT_RETAIN_GPUS" --query-compute-apps=pid --format=csv,noheader,nounits)
   [[ -z ${processes//[[:space:]]/} ]] || {
-    echo "COMMIT_RETAIN_NO_GO:P0 GPU6-7 are busy; no process was changed: $processes" >&2; exit 79;
+    echo "COMMIT_RETAIN_NO_GO:P0 GPU$COMMIT_RETAIN_GPUS are busy; no process was changed: $processes" >&2; exit 79;
   }
 }
 
@@ -96,7 +112,7 @@ commit_retain_wait_idle() {
     [[ -z ${processes//[[:space:]]/} ]] && return 0
     sleep 2
   done
-  echo "COMMIT_RETAIN_NO_GO:CLEANUP GPU6-7 did not become idle: $processes" >&2
+  echo "COMMIT_RETAIN_NO_GO:CLEANUP GPU$COMMIT_RETAIN_GPUS did not become idle: $processes" >&2
   return 81
 }
 

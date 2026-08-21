@@ -36,12 +36,13 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
 )
 from recurrent.research.trajectory_seeding import derive_turn_request_seeds  # noqa: E402
 from tools.h20.preflight_qwen25_7b_commit_retain import (  # noqa: E402
-    EXPERIMENT_NAME,
     MANIFEST_REL,
-    REQUIRED_ENV,
+    _gpu_profile,
     _current_binding,
     _expected_run_receipt,
+    expected_git_commit,
     expected_pair_binding,
+    experiment_name,
     load_manifest,
     validate_capture_credential,
     validate_p0,
@@ -59,8 +60,12 @@ def _runtime(
 ) -> tuple[dict[str, Any], dict[str, Any], str, list[str]]:
     manifest = load_manifest(manifest_path)
     _, resolved = validate_p0(manifest_path)
-    if os.environ.get("CUDA_VISIBLE_DEVICES") != "6,7":
-        raise ValueError("CUDA_VISIBLE_DEVICES must be exactly physical GPU6,7")
+    profile = _gpu_profile(manifest)
+    visible_devices = profile["visible_devices"]
+    if os.environ.get("CUDA_VISIBLE_DEVICES") != visible_devices:
+        raise ValueError(
+            f"CUDA_VISIBLE_DEVICES must be exactly physical GPU{visible_devices}"
+        )
     if os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID":
         raise ValueError("CUDA_DEVICE_ORDER must be PCI_BUS_ID")
     if os.environ.get("VLLM_USE_V1") != "0":
@@ -68,7 +73,7 @@ def _runtime(
     current_sha = _current_binding(manifest, resolved, full_model_sha=True)
     completed = subprocess.run(
         [
-            "nvidia-smi", "-i", "6,7", "--query-gpu=index,uuid,name",
+            "nvidia-smi", "-i", visible_devices, "--query-gpu=index,uuid,name",
             "--format=csv,noheader,nounits",
         ],
         text=True,
@@ -76,8 +81,18 @@ def _runtime(
         check=False,
     )
     if completed.returncode:
-        raise ValueError(f"cannot authenticate GPU6-7: {completed.stderr.strip()}")
+        raise ValueError(
+            f"cannot authenticate GPU{visible_devices}: {completed.stderr.strip()}"
+        )
     identities = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    try:
+        observed_indices = [int(line.split(",", 1)[0].strip()) for line in identities]
+    except (ValueError, IndexError):
+        observed_indices = []
+    if observed_indices != profile["physical_whitelist"]:
+        raise ValueError(
+            f"physical GPU indices {observed_indices} != {profile['physical_whitelist']}"
+        )
     if identities != resolved["runtime_binding"]["physical_gpu_identity"]:
         raise ValueError("physical GPU UUID/name binding differs from P0")
     return manifest, resolved, current_sha, identities
@@ -107,7 +122,7 @@ def _engine(manifest: Mapping[str, Any]):
         model=manifest["model"]["path"],
         tokenizer=manifest["model"]["path"],
         trust_remote_code=True,
-        tensor_parallel_size=2,
+        tensor_parallel_size=int(manifest["gpu"]["tensor_parallel_size"]),
         dtype=backend["dtype"],
         seed=int(backend["engine_seed"]),
         gpu_memory_utilization=float(backend["gpu_memory_utilization"]),
@@ -317,6 +332,7 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
     writer_template_text = chat_template(tokenizer).format(message=TEMPLATE)
     reader_template_text = chat_template(tokenizer).format(message=TEMPLATE_FINAL_BOXED)
     execution_binding = resolved["execution_binding"]
+    profile = _gpu_profile(manifest)
     writer_template_sha = hashlib.sha256(writer_template_text.encode("utf-8")).hexdigest()
     reader_template_sha = hashlib.sha256(reader_template_text.encode("utf-8")).hexdigest()
     if writer_template_sha != execution_binding["writer_prompt_template_sha256"]:
@@ -340,10 +356,10 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
         "backend": "vllm",
         "vllm_version": vllm.__version__,
         "strict_vllm": True,
-        "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [6, 7],
+        "tensor_parallel_size": int(manifest["gpu"]["tensor_parallel_size"]),
+        "physical_gpu_whitelist": profile["physical_whitelist"],
         "physical_gpu_identity": physical_gpu_identity,
-        "visible_devices": "6,7",
+        "visible_devices": profile["visible_devices"],
         "cuda_device_order": "PCI_BUS_ID",
         "prefix_cache_enabled": False,
         "max_num_seqs": 1,
@@ -547,8 +563,8 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
             raise RuntimeError("runtime stable write differs from P0")
         envelope = build_capture_envelope(
             pair,
-            experiment_name=EXPERIMENT_NAME,
-            git_commit=os.environ[REQUIRED_ENV[2]],
+            experiment_name=experiment_name(manifest),
+            git_commit=expected_git_commit(),
             run_id=manifest["run_id"],
             execution_binding_sha256=resolved["execution_binding_sha256"],
             runtime_binding_sha256=resolved["runtime_binding_sha256"],
@@ -565,8 +581,8 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
     report = validate_capture_ledger(
         read_jsonl(capture_path),
         frozen_pairs=resolved["frozen_pairs"],
-        experiment_name=EXPERIMENT_NAME,
-        git_commit=os.environ[REQUIRED_ENV[2]],
+        experiment_name=experiment_name(manifest),
+        git_commit=expected_git_commit(),
         run_id=manifest["run_id"],
         execution_binding_sha256=resolved["execution_binding_sha256"],
         runtime_binding_sha256=resolved["runtime_binding_sha256"],
