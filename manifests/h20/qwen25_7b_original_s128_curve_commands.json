@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "manifest": "manifests/h20/qwen25_7b_original_s128_curve_seed2026.json",
+  "ledger_schema": "original_s128_curve_execution_ledger.schema.json",
+  "inherited_common_trainer_overrides": {
+    "path": "manifests/h20/qwen25_7b_s128_it_commands.json",
+    "sha256": "b8b745780fb38fb13e796fc6a36c0640bbcf8e145feadb02f15313dbe4327288",
+    "key": "common_trainer_overrides"
+  },
+  "interface_overrides": {
+    "I": [
+      "trainer.resume_mode=disable",
+      "trainer.resume_from_path=null",
+      "+trainer.eval_identity.weight_source=base_model",
+      "+trainer.eval_identity.expected_global_step=0"
+    ],
+    "actor_checkpoint": [
+      "trainer.resume_mode=actor_only_eval",
+      "trainer.resume_from_path=${CHECKPOINT}",
+      "+trainer.eval_identity.weight_source=actor_checkpoint",
+      "+trainer.eval_identity.expected_global_step=${GLOBAL_STEP}"
+    ]
+  },
+  "commands": {
+    "p0": ["${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/.venv/bin/python", "tools/h20/preflight_qwen25_7b_original_s128_curve.py", "--manifest", "manifests/h20/qwen25_7b_original_s128_curve_seed2026.json", "--check-runtime", "--write-certificate"],
+    "curve": ["bash", "scripts/h20/run_qwen25_7b_original_s128_curve.sh"],
+    "readonly_reaudit": ["${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/.venv/bin/python", "tools/h20/audit_qwen25_7b_original_s128_curve.py", "--manifest", "manifests/h20/qwen25_7b_original_s128_curve_seed2026.json"]
+  },
+  "required_sequence": ["P0", "I", "Original5", "Original10", "Original15", "Original20", "Original25", "audit"],
+  "gpu_execution_authorized_by_this_manifest": false,
+  "causal_claim_authorized_by_this_manifest": false
+}

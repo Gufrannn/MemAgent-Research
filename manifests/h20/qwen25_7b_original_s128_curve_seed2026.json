@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-08-21T00:00:00+08:00",
+  "branch": "h20/qwen25-7b-original-all-anchor-s128-frozen-20260821",
+  "base_commit": "b7bf64937b5825513df86ab963816b73604f102c",
+  "ledger_schema": "original_s128_curve_execution_ledger.schema.json",
+  "contract": {
+    "kind": "existing_s128_corrected_original_all_anchor_curve",
+    "physical_gpus": [6, 7],
+    "world_size": 2,
+    "execution_revision": "20260821-original-s128-curve-v1"
+  },
+  "runtime_binding": {
+    "required_environment": [
+      "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT",
+      "MEMAGENT_ORIGINAL_CURVE_REPO_DIR",
+      "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT"
+    ],
+    "automatic_repository_selection": false
+  },
+  "work_root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}",
+  "repository": "${MEMAGENT_ORIGINAL_CURVE_REPO_DIR}",
+  "python": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/.venv/bin/python",
+  "inherited_s128_contract": {
+    "source_commit": "b7bf64937b5825513df86ab963816b73604f102c",
+    "manifest": "manifests/h20/qwen25_7b_s128_it_seed2026.json",
+    "manifest_sha256": "af9b34d332b793537dd2a981f0e84e1d5f2a7f3bc0a53c14c7678b0ec016e2b1",
+    "commands": "manifests/h20/qwen25_7b_s128_it_commands.json",
+    "commands_sha256": "b8b745780fb38fb13e796fc6a36c0640bbcf8e145feadb02f15313dbe4327288",
+    "metric_code": "recurrent/research/s128_hotpot_metrics.py",
+    "metric_code_sha256": "addc282e3d48dc5e7b6ccf30205fde58a0c0515cb6a2341fd293a5b5b83da286",
+    "required_eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a"
+  },
+  "scope": {
+    "claim": "descriptive fixed-S128 learning curve for base recurrent-I and corrected Original-style checkpoints 5,10,15,20,25",
+    "interfaces": ["I", "Original5", "Original10", "Original15", "Original20", "Original25"],
+    "existing_s128_only": true,
+    "no_resampling": true,
+    "no_training": true,
+    "raw_context_r_not_rerun": true,
+    "same_prompt_recurrent_and_decode_protocol": true,
+    "paired_differences_are_descriptive_not_causal": true,
+    "not_original_paper_7b_reproduction": true,
+    "published_results_are_historical_reference_only": true
+  },
+  "training_source": {
+    "required_git_commit": "b7bf64937b5825513df86ab963816b73604f102c",
+    "required_status": "PASS",
+    "required_decision": "ORIGINAL_T25_PASS",
+    "experiment_name": "qwen25_7b_h20_corrected_original_style_2gpu_pilot_resume3to25_strictvllm_naive_indseed_seed2026_20260821",
+    "final_report": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json",
+    "execution_ledger": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/original_t25_2gpu_frozen_20260821/original_t25_execution_ledger.jsonl",
+    "checkpoint_root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/memory_agent/qwen25_7b_h20_corrected_original_style_2gpu_pilot_resume3to25_strictvllm_naive_indseed_seed2026_20260821",
+    "anchor_steps": [5, 10, 15, 20, 25],
+    "fsdp_world_size": 2,
+    "required_actor_shard_template": "actor/model_world_size_2_rank_{rank}.pt",
+    "load_mode": "actor_only",
+    "forbidden_restores": ["optimizer", "lr_scheduler", "rng", "dataloader"]
+  },
+  "stable_identity_canary": {
+    "final_report": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/stable_i4x2_final_report.json",
+    "resolved_manifest": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json",
+    "execution_ledger": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/stable_i4x2_frozen_20260821r2/stable_identity_execution_ledger.jsonl",
+    "required_status": "PASS",
+    "required_decision": "I_RECURRENT_IDENTITY_CANARY_PASS",
+    "required_git_commit": "bd8b804c2cbf333f0f0650b729fd03a143d445b2",
+    "required_eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a"
+  },
+  "prior_s128_it_import": {
+    "policy": "require_complete_verified_read_only_import; missing_partial_or_invalid_evidence_fails_closed",
+    "source_commit": "b7bf64937b5825513df86ab963816b73604f102c",
+    "root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821",
+    "p0_certificate": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/p0_resolved_manifest.json",
+    "final_report": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/certificates/s128_it_final_report.json",
+    "execution_ledger": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/s128_it_execution_ledger.jsonl",
+    "interfaces": {
+      "I": {"source_interface": "I", "source_attempt": "base_i", "global_step": 0, "root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/interface_i_base"},
+      "Original25": {"source_interface": "T25", "source_attempt": "original_t25", "global_step": 25, "root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_it_original_t25_frozen_20260821/interface_t25_original"}
+    },
+    "copy_artifacts": false,
+    "overwrite_source_artifacts": false
+  },
+  "evaluation": {
+    "base_seed": 2026,
+    "examples": 128,
+    "replicas": 1,
+    "interfaces": ["I", "Original5", "Original10", "Original15", "Original20", "Original25"],
+    "attempt_ids": {
+      "I": "base_i_curve",
+      "Original5": "original_step5",
+      "Original10": "original_step10",
+      "Original15": "original_step15",
+      "Original20": "original_step20",
+      "Original25": "original_step25"
+    },
+    "global_steps": {"I": 0, "Original5": 5, "Original10": 10, "Original15": 15, "Original20": 20, "Original25": 25},
+    "validation_only": true,
+    "actor_update_calls": 0,
+    "optimizer_step_calls": 0,
+    "checkpoint_save_calls": 0,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "primary_metrics": ["normalized_exact_match", "token_f1"],
+    "diagnostic_metrics": ["format_success", "historical_sub_exact_match"],
+    "training_dense_reward_excluded_from_evaluation_claims": true,
+    "metrics_recomputed_from_terminal_output_and_parquet_ground_truth": true
+  },
+  "gpu": {
+    "declared_whitelist": [6, 7],
+    "visible_devices": "6,7",
+    "world_size": 2,
+    "fsdp_size": 2,
+    "trainer_gpus": 2,
+    "tensor_parallel_size": 1
+  },
+  "paths": {
+    "log_root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821",
+    "certificate_root": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/certificates",
+    "p0_certificate": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json",
+    "final_report": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json",
+    "execution_ledger": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/original_s128_curve_execution_ledger.jsonl",
+    "I": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_i_base",
+    "Original5": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_original_step5",
+    "Original10": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_original_step10",
+    "Original15": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_original_step15",
+    "Original20": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_original_step20",
+    "Original25": "${MEMAGENT_ORIGINAL_CURVE_WORK_ROOT}/logs/s128_original_all_anchor_frozen_20260821/interface_original_step25"
+  }
+}
