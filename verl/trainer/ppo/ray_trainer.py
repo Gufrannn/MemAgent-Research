@@ -18,6 +18,7 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import hashlib
 import json
+import math
 import os
 import re
 import uuid
@@ -1335,6 +1336,407 @@ class RayPPOTrainer:
         self._gate_a_synced_actor_version = int(actor_version)
         self._gate_a_synced_actor_digest = next(iter(actor_digests))
 
+    def _coral_e1_rebase_behavior(self, value: DataProto) -> DataProto:
+        """Recompute PPO behavior/reference logits at the fixed proposal weights."""
+        result = deepcopy(value)
+        result.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+        padded, pad_size = pad_dataproto_to_divisor(
+            result, self.actor_rollout_wg.world_size,
+        )
+        old = self.actor_rollout_wg.compute_log_prob(padded)
+        old = unpad_dataproto(old, pad_size)
+        result.batch["old_log_probs"] = old.batch["old_log_probs"]
+        if self.use_reference_policy:
+            ref = self.ref_policy_wg.compute_ref_log_prob(padded)
+            ref = unpad_dataproto(ref, pad_size)
+            result.batch["ref_log_prob"] = ref.batch["ref_log_prob"]
+        return result
+
+    def _coral_e1_regenerate(self, gen_batch: DataProto, original_batch: DataProto,
+                             timing_raw: dict) -> DataProto:
+        """Regenerate a full trajectory only to materialize proposal-memory prompts."""
+        self._audit_coral_e1_rollout_start("refreshed_memory_materialization")
+        refreshed, final_mask, sample_index = self.generation_manager.run_llm_loop(
+            deepcopy(gen_batch), timing_raw,
+        )
+        if int(final_mask.sum().item()) != len(original_batch):
+            raise RuntimeError("CORAL_E1_NO_GO: refreshed final/root cardinality drift")
+        source_rows = sample_index.detach().cpu().numpy()
+        source_uids = np.asarray(original_batch.non_tensor_batch["uid"], dtype=object)
+        refreshed.non_tensor_batch["uid"] = source_uids[source_rows]
+        refreshed.batch["sample_index"] = sample_index.to(refreshed.batch["responses"].device)
+        refreshed.batch["final_mask"] = final_mask
+        if "rollout_trajectory_seed" not in original_batch.non_tensor_batch:
+            raise RuntimeError("CORAL_E1_NO_GO: common trajectory seeds missing")
+        source_seeds = np.asarray(
+            original_batch.non_tensor_batch["rollout_trajectory_seed"], dtype=np.uint64,
+        )
+        refreshed.non_tensor_batch["trajectory_seed"] = source_seeds[source_rows]
+        refreshed.non_tensor_batch["trajectory_id"] = np.asarray([
+            f"{source_uids[row]}:{int(source_seeds[row])}" for row in source_rows
+        ], dtype=object)
+        if "index" in original_batch.batch:
+            source_dataset_indices = original_batch.batch["index"].detach().cpu().numpy()
+        elif "index" in original_batch.non_tensor_batch:
+            source_dataset_indices = np.asarray(original_batch.non_tensor_batch["index"])
+        else:
+            raise RuntimeError("CORAL_E1_NO_GO: dataset root identity missing")
+        refreshed.non_tensor_batch["dataset_index"] = source_dataset_indices[source_rows]
+        refreshed.batch["response_mask"] = compute_response_mask(refreshed)
+        return refreshed
+
+    def _audit_coral_e1_rollout_start(self, branch: str) -> None:
+        """Bind every extra E1 rollout to the just-synchronized proposal actor."""
+        from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
+        if not gate_a_enabled():
+            raise RuntimeError("CORAL_E1_NO_GO: Gate A audit must own diagnostic rollout")
+        if getattr(self, "_gate_a_synced_actor_version", None) != int(self.global_steps) \
+                or not getattr(self, "_gate_a_synced_actor_digest", None):
+            raise RuntimeError("CORAL_E1_NO_GO: diagnostic rollout is not proposal-bound")
+        append_gate_a_record(
+            "coral_e1_rollout_start",
+            global_step=int(self.global_steps),
+            actor_version=int(self._gate_a_synced_actor_version),
+            sampled_tensor_digest=str(self._gate_a_synced_actor_digest),
+            branch=str(branch),
+        )
+
+    def _coral_e1_resample_terminal(self, materialized: DataProto,
+                                    original_batch: DataProto,
+                                    branch: str) -> DataProto:
+        """Sample terminal answers at θ_W from one branch's materialized prompt.
+
+        Both cached-old-memory and regenerated-memory branches call this method
+        after the same proposal sync.  Source-policy terminal actions, rewards,
+        and advantages are discarded.
+        """
+        final_rows = torch.nonzero(
+            materialized.batch["final_mask"], as_tuple=False,
+        ).flatten()
+        if len(final_rows) != len(original_batch):
+            raise RuntimeError("CORAL_E1_NO_GO: terminal prompt/root cardinality")
+        final_source_rows = materialized.batch["sample_index"][final_rows].long()
+        if sorted(final_source_rows.detach().cpu().tolist()) != list(range(len(original_batch))):
+            raise RuntimeError("CORAL_E1_NO_GO: terminal prompt source permutation")
+        selected = materialized[final_rows]
+        prompts = selected.batch["prompts"]
+        prompt_length = prompts.size(-1)
+        prompt_attention = selected.batch["attention_mask"][:, :prompt_length]
+        prompt_positions = selected.batch["position_ids"][..., :prompt_length]
+        trajectory_seeds = np.asarray(
+            original_batch.non_tensor_batch["rollout_trajectory_seed"], dtype=np.uint64,
+        )[final_source_rows.detach().cpu().numpy()]
+        from recurrent.research.trajectory_seeding import (
+            derive_coral_terminal_contrast_seeds,
+        )
+        terminal_request_seeds = derive_coral_terminal_contrast_seeds(
+            trajectory_seeds.tolist()
+        )
+        self._audit_coral_e1_rollout_start(f"{branch}_terminal_answer")
+        terminal = self.generation_manager.generate_with_graceful_padding(
+            prompts, prompt_attention, prompt_positions,
+            {
+                "do_sample": True,
+                "validate": False,
+                "pad_to": int(selected.batch["responses"].size(-1)),
+                "generation_kwargs": {
+                    "max_tokens": int(selected.batch["responses"].size(-1)), "n": 1,
+                },
+                "request_seeds": terminal_request_seeds,
+            },
+        )
+        terminal.batch["response_mask"] = compute_response_mask(terminal)
+        terminal.batch["final_mask"] = torch.ones(len(terminal), dtype=torch.bool)
+        terminal.batch["sample_index"] = final_source_rows.to(
+            terminal.batch["responses"].device
+        )
+        source_indices = final_source_rows.detach().cpu().numpy()
+        source_uids = np.asarray(original_batch.non_tensor_batch["uid"], dtype=object)
+        if "index" in original_batch.batch:
+            dataset_indices = original_batch.batch["index"].detach().cpu().numpy()
+        else:
+            dataset_indices = np.asarray(original_batch.non_tensor_batch["index"])
+        terminal.non_tensor_batch = {
+            "uid": source_uids[source_indices],
+            "trajectory_seed": trajectory_seeds,
+            "trajectory_id": np.asarray([
+                f"{source_uids[index]}:{int(trajectory_seeds[row])}"
+                for row, index in enumerate(source_indices)
+            ], dtype=object),
+            "dataset_index": dataset_indices[source_indices],
+            "request_seed": np.asarray(terminal_request_seeds, dtype=np.uint64),
+        }
+
+        nonfinal_rows = torch.nonzero(
+            ~materialized.batch["final_mask"], as_tuple=False,
+        ).flatten()
+        nonfinal_source = materialized[nonfinal_rows]
+        batch_keys = [
+            "prompts", "responses", "input_ids", "attention_mask", "position_ids",
+            "response_mask", "final_mask", "sample_index",
+        ]
+        non_tensor_keys = [
+            "uid", "trajectory_seed", "trajectory_id", "dataset_index", "request_seed",
+        ]
+        nonfinal_source = nonfinal_source.select(
+            batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_keys,
+        )
+        terminal = terminal.select(
+            batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_keys,
+        )
+        combined = DataProto.concat([nonfinal_source, terminal])
+        final_mask = combined.batch["final_mask"]
+        sample_index = combined.batch["sample_index"]
+        from recurrent.utils import final_batch
+        reward_batch = final_batch(combined, final_mask, sample_index).union(
+            deepcopy(original_batch)
+        )
+        reward_tensor, _ = compute_reward(reward_batch, self.reward_fn)
+        advantage_scalar = compute_1D_grpo_advantage(
+            token_level_rewards=reward_tensor,
+            index=reward_batch.non_tensor_batch["uid"],
+            use_adv=self.config.algorithm.grpo_use_adv,
+        )[sample_index]
+        response_length = combined.batch["responses"].size(-1)
+        advantages = advantage_scalar.unsqueeze(-1).tile([1, response_length]) \
+            * combined.batch["response_mask"]
+        combined.batch["advantages"] = advantages
+        combined.batch["returns"] = advantages
+        combined.batch["token_level_scores"] = reward_tensor[sample_index]
+        combined.batch["token_level_rewards"] = reward_tensor[sample_index]
+        combined.meta_info["coral_e1_branch"] = branch
+        combined.meta_info["coral_e1_terminal_request_seeds"] = terminal_request_seeds
+        return self._coral_e1_rebase_behavior(combined)
+
+    def _coral_e1_measure_root(self, value: DataProto, root_id: str,
+                               phase: str) -> dict:
+        """Run one root-cluster actual-loss backward and verify rank agreement."""
+        uids = np.asarray(value.non_tensor_batch["uid"], dtype=object)
+        rows = np.flatnonzero(uids == root_id)
+        if not len(rows):
+            raise RuntimeError("CORAL_E1_NO_GO: root missing from materialized batch")
+        root = value[rows]
+        root, pad_size = pad_dataproto_to_divisor(
+            root, self.actor_rollout_wg.world_size,
+        )
+        valid_rows = torch.ones(len(root), dtype=torch.bool)
+        if pad_size:
+            valid_rows[-pad_size:] = False
+            root.batch["response_mask"][~valid_rows] = 0
+            root.batch["final_mask"][~valid_rows] = False
+        from recurrent.research.coral import role_covered_order
+        root.reorder(role_covered_order(
+            root.batch["final_mask"], self.actor_rollout_wg.world_size, valid_rows,
+        ))
+        root.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+        root.meta_info["global_token_num"] = torch.sum(
+            root.batch["attention_mask"], dim=-1,
+        ).tolist()
+        output = self.actor_rollout_wg.measure_coral_role_gradient(root, phase)
+        sketches = output.batch["gradient_sketch"].detach().cpu().double()
+        norms = output.batch["gradient_squared_norm"].detach().cpu().double().sqrt()
+        if len(sketches) != self.actor_rollout_wg.world_size \
+                or not torch.allclose(sketches, sketches[0].expand_as(sketches), rtol=0, atol=0) \
+                or not torch.allclose(norms, norms[0].expand_as(norms), rtol=0, atol=0):
+            raise RuntimeError("CORAL_E1_NO_GO: distributed gradient receipt disagreement")
+        vector = sketches[0].tolist()
+        from recurrent.research.cosi import canonical_sha256
+        return {
+            "sketch": vector,
+            "sketch_sha256": canonical_sha256(vector),
+            "gradient_norm": math.sqrt(math.fsum(item * item for item in vector)),
+            "full_gradient_norm": float(norms[0].item()),
+            "actual_loss": float(output.batch["actual_loss"][0].item()),
+            "active_tokens": int(output.batch["active_tokens"][0].item()),
+            "full_tokens": int(output.batch["full_tokens"][0].item()),
+        }
+
+    def _coral_e1_write_proposal(self, cached: DataProto, refreshed: DataProto,
+                                 capture_dir: str, source_weight_digest: str) -> None:
+        """Write an exclusive, trainer-produced cached/refreshed E1 proposal."""
+        from recurrent.research.coral_e1 import SKETCH_BASIS_SHA256
+        from recurrent.research.cosi import canonical_sha256
+
+        if cached.meta_info.get("coral_e1_branch") != "cached_old_memory" \
+                or refreshed.meta_info.get("coral_e1_branch") != "refreshed_memory":
+            raise RuntimeError("CORAL_E1_NO_GO: both terminal branches must be proposal-resampled")
+        cached_uids = sorted(set(map(str, cached.non_tensor_batch["uid"])))
+        refreshed_uids = sorted(set(map(str, refreshed.non_tensor_batch["uid"])))
+        if cached_uids != refreshed_uids or len(cached_uids) != 4:
+            raise RuntimeError("CORAL_E1_NO_GO: exact b4 outcome-blind root inventory")
+
+        def cosine(left, right):
+            dot = math.fsum(a * b for a, b in zip(left, right))
+            nl = math.sqrt(math.fsum(a * a for a in left))
+            nr = math.sqrt(math.fsum(a * a for a in right))
+            return dot / max(nl * nr, 1e-30)
+
+        records = []
+        for root_id in cached_uids:
+            cached_answer = self._coral_e1_measure_root(
+                cached, root_id, "terminal_answer",
+            )
+            cached_duplicate = self._coral_e1_measure_root(
+                cached, root_id, "terminal_answer",
+            )
+            refreshed_answer = self._coral_e1_measure_root(
+                refreshed, root_id, "terminal_answer",
+            )
+            cached_writer = self._coral_e1_measure_root(
+                cached, root_id, "memory_writer",
+            )
+            response = [b - a for a, b in zip(
+                cached_answer["sketch"], refreshed_answer["sketch"],
+            )]
+            duplicate = [b - a for a, b in zip(
+                cached_answer["sketch"], cached_duplicate["sketch"],
+            )]
+            response_norm = math.sqrt(math.fsum(x * x for x in response))
+            duplicate_norm = math.sqrt(math.fsum(x * x for x in duplicate))
+            denominator = max(
+                cached_answer["gradient_norm"] + refreshed_answer["gradient_norm"],
+                1e-12,
+            )
+            cached_rows = np.flatnonzero(
+                np.asarray(cached.non_tensor_batch["uid"], dtype=object) == root_id
+            )
+            refreshed_rows = np.flatnonzero(
+                np.asarray(refreshed.non_tensor_batch["uid"], dtype=object) == root_id
+            )
+
+            def tensor_hash(value, rows, key, final):
+                selected = value[rows]
+                mask = selected.batch["final_mask"] == final
+                tensor = selected.batch[key][mask].detach().cpu().tolist()
+                return canonical_sha256(tensor), tensor
+
+            cached_memory_hash, _ = tensor_hash(
+                cached, cached_rows, "responses", False,
+            )
+            refreshed_memory_hash, _ = tensor_hash(
+                refreshed, refreshed_rows, "responses", False,
+            )
+            cached_prompt_hash, _ = tensor_hash(
+                cached, cached_rows, "input_ids", True,
+            )
+            refreshed_prompt_hash, _ = tensor_hash(
+                refreshed, refreshed_rows, "input_ids", True,
+            )
+            cached_answer_hash, _ = tensor_hash(
+                cached, cached_rows, "responses", True,
+            )
+            refreshed_answer_hash, _ = tensor_hash(
+                refreshed, refreshed_rows, "responses", True,
+            )
+            cached_root_value = cached[cached_rows]
+            refreshed_root_value = refreshed[refreshed_rows]
+            cached_final_mask = cached_root_value.batch["final_mask"]
+            refreshed_final_mask = refreshed_root_value.batch["final_mask"]
+            cached_reward_hash = canonical_sha256(
+                cached_root_value.batch["token_level_scores"][cached_final_mask]
+                .detach().cpu().tolist()
+            )
+            refreshed_reward_hash = canonical_sha256(
+                refreshed_root_value.batch["token_level_scores"][refreshed_final_mask]
+                .detach().cpu().tolist()
+            )
+            cached_advantage_hash = canonical_sha256(
+                cached_root_value.batch["advantages"][cached_final_mask]
+                .detach().cpu().tolist()
+            )
+            refreshed_advantage_hash = canonical_sha256(
+                refreshed_root_value.batch["advantages"][refreshed_final_mask]
+                .detach().cpu().tolist()
+            )
+            cached_seed_values = sorted(set(map(
+                int, np.asarray(cached.non_tensor_batch["trajectory_seed"])[cached_rows]
+            )))
+            refreshed_seed_values = sorted(set(map(
+                int, np.asarray(refreshed.non_tensor_batch["trajectory_seed"])[refreshed_rows]
+            )))
+            if cached_seed_values != refreshed_seed_values or len(cached_seed_values) != 2:
+                raise RuntimeError("CORAL_E1_NO_GO: common future seed coupling drift")
+            cached_terminal_seeds = sorted(set(map(
+                int,
+                np.asarray(cached_root_value.non_tensor_batch["request_seed"])[
+                    cached_root_value.batch["final_mask"].detach().cpu().numpy()
+                ],
+            )))
+            refreshed_terminal_seeds = sorted(set(map(
+                int,
+                np.asarray(refreshed_root_value.non_tensor_batch["request_seed"])[
+                    refreshed_root_value.batch["final_mask"].detach().cpu().numpy()
+                ],
+            )))
+            if cached_terminal_seeds != refreshed_terminal_seeds \
+                    or len(cached_terminal_seeds) != 2:
+                raise RuntimeError("CORAL_E1_NO_GO: terminal request seed coupling drift")
+            cached_dataset_indices = sorted(set(map(
+                int, np.asarray(cached.non_tensor_batch["dataset_index"])[cached_rows]
+            )))
+            refreshed_dataset_indices = sorted(set(map(
+                int, np.asarray(refreshed.non_tensor_batch["dataset_index"])[refreshed_rows]
+            )))
+            if cached_dataset_indices != refreshed_dataset_indices \
+                    or len(cached_dataset_indices) != 1:
+                raise RuntimeError("CORAL_E1_NO_GO: dataset root coupling drift")
+            cached_memory_tokens = int(
+                cached[cached_rows].batch["response_mask"]
+                [~cached[cached_rows].batch["final_mask"]].sum().item()
+            )
+            refreshed_memory_tokens = int(
+                refreshed[refreshed_rows].batch["response_mask"]
+                [~refreshed[refreshed_rows].batch["final_mask"]].sum().item()
+            )
+            records.append({
+                "root_id": root_id,
+                "dataset_index": cached_dataset_indices[0],
+                "writer_replicas": 2,
+                "common_trajectory_seeds": cached_seed_values,
+                "common_terminal_request_seeds": cached_terminal_seeds,
+                "cached_memory_token_ids_sha256": cached_memory_hash,
+                "refreshed_memory_token_ids_sha256": refreshed_memory_hash,
+                "cached_prompt_token_ids_sha256": cached_prompt_hash,
+                "refreshed_prompt_token_ids_sha256": refreshed_prompt_hash,
+                "cached_terminal_answer_token_ids_sha256": cached_answer_hash,
+                "refreshed_terminal_answer_token_ids_sha256": refreshed_answer_hash,
+                "cached_reward_sha256": cached_reward_hash,
+                "refreshed_reward_sha256": refreshed_reward_hash,
+                "cached_advantage_sha256": cached_advantage_hash,
+                "refreshed_advantage_sha256": refreshed_advantage_hash,
+                "terminal_action_policy": "both_branches_freshly_sampled_at_fixed_proposal_weights",
+                "cached_memory_token_count": cached_memory_tokens,
+                "refreshed_memory_token_count": refreshed_memory_tokens,
+                "cached_gradient_sha256": cached_answer["sketch_sha256"],
+                "refreshed_gradient_sha256": refreshed_answer["sketch_sha256"],
+                "cached_gradient_norm": cached_answer["gradient_norm"],
+                "refreshed_gradient_norm": refreshed_answer["gradient_norm"],
+                "symmetric_relative_response": 2 * response_norm / denominator,
+                "duplicate_control_response_norm": duplicate_norm,
+                "same_batch_writer_answer_cosine": cosine(
+                    cached_writer["sketch"], cached_answer["sketch"],
+                ),
+                "tensor_source": "actual_terminal_answer_loss_backward",
+            })
+        proposal = {
+            "schema": "memagent.coral.e1-proposal.v3",
+            "producer": "ray_ppo_trainer_actual_loss_backward",
+            "git_commit": str(os.environ.get("GATE_A_GIT_COMMIT", "")),
+            "global_step": int(self.global_steps),
+            "source_weight_sample_digest": str(source_weight_digest),
+            "proposal_weight_sample_digest": str(self._gate_a_synced_actor_digest),
+            "gradient_sketch_basis_sha256": SKETCH_BASIS_SHA256,
+            "root_inventory_sha256": canonical_sha256(cached_uids),
+            "records": records,
+        }
+        proposal["proposal_sha256"] = canonical_sha256(proposal)
+        destination = os.path.join(
+            capture_dir, f"proposal_step_{int(self.global_steps):02d}.json",
+        )
+        os.makedirs(capture_dir, exist_ok=True)
+        with open(destination, "x", encoding="utf-8") as stream:
+            stream.write(json.dumps(proposal, indent=2, sort_keys=True) + "\n")
+
     def _stable_eval_weight_snapshot(self, *, sync_kind: str) -> dict:
         """Synchronize and attest actor/vLLM weights without writing Gate A evidence."""
         from recurrent.research.gate_a_execution import gate_a_enabled
@@ -1633,6 +2035,33 @@ class RayPPOTrainer:
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+        coral_config = self.config.algorithm.get("coral", None)
+        coral_enabled = bool(coral_config is not None and coral_config.get("enabled", False))
+        coral_e1_capture_dir = os.getenv("CORAL_E1_CAPTURE_DIR")
+        if coral_e1_capture_dir is not None and (
+            not os.path.isabs(coral_e1_capture_dir) or not coral_enabled
+        ):
+            raise ValueError(
+                "CORAL_E1_NO_GO: capture directory must be absolute and CORAL active"
+            )
+        if coral_enabled:
+            from recurrent.research.coral import validate_config
+            from recurrent.research.gate_a_execution import gate_a_enabled
+            validate_config(coral_config)
+            if not self.config.recurrent.enable \
+                    or self.config.algorithm.adv_estimator != AdvantageEstimator.GRPO:
+                raise ValueError("CORAL_NO_GO: CORAL requires recurrent GRPO")
+            if int(self.config.data.train_batch_size) != int(
+                self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+            ) or str(self.config.actor_rollout_ref.actor.loss_agg_mode) != "token-mean" \
+                    or str(self.config.actor_rollout_ref.rollout.get(
+                        "trajectory_seed_mode", ""
+                    )) != "independent":
+                raise ValueError(
+                    "CORAL_NO_GO: frozen full-batch denominator and independent seeds required"
+                )
+            if not gate_a_enabled():
+                raise ValueError("CORAL_NO_GO: audited actor/vLLM weight sync is required")
         self._audit_gate_a_weight_sync(
             global_step=self.global_steps,
             actor_version=self.global_steps,
@@ -1774,6 +2203,7 @@ class RayPPOTrainer:
                 ####################
                 # original code here
 
+                coral_e1_context = None
                 with _timer('step', timing_raw):
                     with _timer('gen', timing_raw):
                         if not self.config.recurrent.enable:
@@ -1808,8 +2238,21 @@ class RayPPOTrainer:
                         else:
                             if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                                 raise NotImplementedError("REMAX is not implemented for recurrent.")
-                            batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
-                                                                    dtype=object)
+                            from recurrent.research.trajectory_seeding import stable_training_group_id
+                            if "index" in batch.batch:
+                                pre_repeat_indices = batch.batch["index"].detach().cpu().tolist()
+                            elif "index" in batch.non_tensor_batch:
+                                pre_repeat_indices = np.asarray(batch.non_tensor_batch["index"]).tolist()
+                            else:
+                                raise RuntimeError("recurrent training requires deterministic dataset index identity")
+                            batch.non_tensor_batch['uid'] = np.array([
+                                stable_training_group_id(
+                                    base_seed=int(self.config.actor_rollout_ref.rollout.get("seed", 0)),
+                                    global_step=int(self.global_steps),
+                                    dataset_index=int(dataset_index),
+                                )
+                                for dataset_index in pre_repeat_indices
+                            ], dtype=object)
                             # Note that we repeat outside the loop, since the generated responses are not aligned and we cannot
                             # simply union them.
                             # Also, just as what happened in validate, we will always set n=1 in generation_kwargs.
@@ -1891,6 +2334,9 @@ class RayPPOTrainer:
                             gen_batch_output.non_tensor_batch["trajectory_id"] = source_trajectory_ids[
                                 source_rows
                             ]
+                            gen_batch_output.non_tensor_batch["dataset_index"] = np.asarray(
+                                dataset_indices, dtype=np.int64
+                            )[source_rows]
                             if "trajectory_turn" in gen_batch_output.batch:
                                 request_seeds = np.asarray(
                                     gen_batch_output.non_tensor_batch["request_seed"], dtype=np.uint64
@@ -2081,6 +2527,18 @@ class RayPPOTrainer:
                             
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
+                            if coral_e1_capture_dir:
+                                from recurrent.research.coral import phase_for_step
+                                if phase_for_step(int(self.global_steps)) == "memory_writer":
+                                    coral_e1_context = {
+                                        "cached": deepcopy(batch),
+                                        "gen_batch": deepcopy(gen_batch),
+                                        "original_batch": deepcopy(original_batch),
+                                        "source_weight_digest": str(
+                                            self._gate_a_synced_actor_digest
+                                        ),
+                                    }
+
 
                     # update critic
                     if self.use_critic:
@@ -2155,6 +2613,31 @@ class RayPPOTrainer:
                                 raise RuntimeError(
                                     "strict stable evaluation reached actor update; refusing before mutation"
                                 )
+                            if coral_enabled:
+                                from recurrent.research.coral import (
+                                    phase_for_step, role_covered_order, role_masks,
+                                )
+                                coral_phase = phase_for_step(int(self.global_steps))
+                                valid_rows = None
+                                if "no_padding_mask" in batch.batch:
+                                    valid_rows = batch.batch["no_padding_mask"].to(dtype=torch.bool)
+                                batch.reorder(role_covered_order(
+                                    batch.batch["final_mask"],
+                                    int(self.actor_rollout_wg.world_size),
+                                    valid_rows,
+                                ))
+                                batch.meta_info["coral_phase"] = coral_phase
+                                audit_batch = batch
+                                if "no_padding_mask" in batch.batch:
+                                    audit_batch = batch[batch.batch["no_padding_mask"].to(dtype=torch.bool)]
+                                active_role_mask, inactive_role_mask = role_masks(
+                                    audit_batch.batch["response_mask"],
+                                    audit_batch.batch["final_mask"],
+                                    coral_phase,
+                                )
+                                coral_active_tokens = int(active_role_mask.sum().item())
+                                coral_inactive_tokens = int(inactive_role_mask.sum().item())
+                                metrics[f"coral/phase_{coral_phase}"] = 1.0
                             self._actor_update_calls += 1
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
@@ -2164,6 +2647,58 @@ class RayPPOTrainer:
                             actor_version=self.global_steps,
                             sync_kind="post_actor_update",
                         )
+                        if coral_e1_context is not None:
+                            refreshed_materialized_e1 = self._coral_e1_regenerate(
+                                coral_e1_context["gen_batch"],
+                                coral_e1_context["original_batch"],
+                                timing_raw,
+                            )
+                            cached_e1 = self._coral_e1_resample_terminal(
+                                coral_e1_context["cached"],
+                                coral_e1_context["original_batch"],
+                                "cached_old_memory",
+                            )
+                            refreshed_e1 = self._coral_e1_resample_terminal(
+                                refreshed_materialized_e1,
+                                coral_e1_context["original_batch"],
+                                "refreshed_memory",
+                            )
+                            self._coral_e1_write_proposal(
+                                cached_e1, refreshed_e1,
+                                str(coral_e1_capture_dir),
+                                coral_e1_context["source_weight_digest"],
+                            )
+                        if coral_enabled:
+                            coral_ledger = os.getenv("CORAL_EXECUTION_LEDGER")
+                            if not coral_ledger:
+                                raise RuntimeError(
+                                    "CORAL_NO_GO: CORAL_EXECUTION_LEDGER is required"
+                                )
+                            from recurrent.research.cosi import append_ledger
+                            active_grad_norm = float(
+                                actor_output_metrics.get("actor/grad_norm", float("nan"))
+                            )
+                            pg_loss = float(actor_output_metrics.get("actor/pg_loss", float("nan")))
+                            if not math.isfinite(active_grad_norm) or active_grad_norm <= 0 \
+                                    or not math.isfinite(pg_loss) \
+                                    or coral_active_tokens < 1 or coral_inactive_tokens < 1:
+                                raise RuntimeError(
+                                    "CORAL_NO_GO: missing/non-finite role mechanism metrics"
+                                )
+                            append_ledger(coral_ledger, {
+                                "event": "coral_role_update",
+                                "global_step": int(self.global_steps),
+                                "phase": str(coral_phase),
+                                "actor_update_calls": int(self._actor_update_calls),
+                                "weight_sync_required": True,
+                                "actor_vllm_sampled_tensor_digest": str(
+                                    self._gate_a_synced_actor_digest
+                                ),
+                                "active_grad_norm": active_grad_norm,
+                                "active_pg_loss": pg_loss,
+                                "active_tokens": coral_active_tokens,
+                                "inactive_tokens": coral_inactive_tokens,
+                            })
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)

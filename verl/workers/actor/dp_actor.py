@@ -242,7 +242,13 @@ class DataParallelPPOActor(BasePPOActor):
         ######
         # ADD: loss mask
         ######
+        coral_phase = data.meta_info.get("coral_phase")
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "response_mask"]
+        if coral_phase is not None:
+            from recurrent.research.coral import PHASES
+            if coral_phase not in PHASES:
+                raise ValueError("CORAL_NO_GO: invalid actor dispatch phase")
+            select_keys.append("final_mask")
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -258,6 +264,20 @@ class DataParallelPPOActor(BasePPOActor):
             batch = indexing_proto(proto, data.batch['no_padding_mask']).batch
         else:
             batch = data.select(batch_keys=select_keys).batch
+        coral_full_token_total = None
+        if coral_phase is not None:
+            from recurrent.research.coral import role_masks
+            active_mask, inactive_mask = role_masks(
+                batch["response_mask"], batch["final_mask"], str(coral_phase)
+            )
+            coral_full_token_total = int(batch["response_mask"].sum().item())
+            active_rows = active_mask.sum(dim=-1) > 0
+            batch["response_mask"] = active_mask
+            batch = batch[active_rows]
+            # The inactive mask is audited for a complete partition, but it is
+            # not optimized.  A behavior-point KL has zero first-order signal
+            # under the frozen one-epoch Original protocol and is therefore not
+            # represented as a fictitious trust-region guarantee.
         from recurrent.research.actor_batch import DIAG_PREFIX
         rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         response_valid_tokens = int(batch["response_mask"].sum().item())
@@ -400,6 +420,14 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_loss_coef
 
+                    if coral_phase is not None:
+                        if loss_agg_mode != "token-mean" or not coral_full_token_total:
+                            raise ValueError("CORAL_NO_GO: Original total-token denominator required")
+                        denominator_scale = response_mask.sum() / coral_full_token_total
+                        policy_loss = policy_loss * denominator_scale
+                        metrics["coral/original_denominator_scale"] = denominator_scale.detach().item()
+                        metrics[f"coral/phase_{coral_phase}"] = 1.0
+
                     ######
                     # MODIFY: we have to fix grad_acc computation: weighted averaging by token num in stead of len(data)
                     #         See 
@@ -412,7 +440,9 @@ class DataParallelPPOActor(BasePPOActor):
                         loss = policy_loss * (len(data) / len(mini_batch)) # self.gradient_accumulation
                     elif acc_grad_mode == "token":
                         # weights by token nums, note that we want to apply a simple scalar, or the compute-graph will be extremely large.
-                        loss = policy_loss * (response_mask.sum().item() / mini_batch_token_nums.item())
+                        loss = policy_loss if coral_phase is not None else policy_loss * (
+                            response_mask.sum().item() / mini_batch_token_nums.item()
+                        )
                     else:
                         raise NotImplementedError(f"Unsupported acc_grad_mode: {acc_grad_mode}")
 
@@ -432,3 +462,85 @@ class DataParallelPPOActor(BasePPOActor):
             append_to_dict(metrics, data)
         self.actor_optimizer.zero_grad()
         return metrics
+
+    def measure_coral_role_gradient(self, data: DataProto, phase: str):
+        """Backprop the actual role loss without mutating optimizer state.
+
+        E1 calls this only on one outcome-blind root (two GRPO replicas) at a
+        time.  The old log probabilities must have been recomputed at the fixed
+        proposal weights, so the cached/refreshed contrast changes occupancy,
+        not the PPO behavior reference.
+        """
+        from recurrent.research.coral import role_masks
+        from recurrent.research.coral_e1 import fixed_count_sketch
+
+        if self.config.loss_agg_mode != "token-mean" or self.config.ppo_epochs != 1:
+            raise ValueError("CORAL_E1_NO_GO: actual frozen actor-loss contract drifted")
+        required = {
+            "responses", "input_ids", "attention_mask", "position_ids",
+            "old_log_probs", "advantages", "response_mask", "final_mask",
+        }
+        if self.config.use_kl_loss:
+            required.add("ref_log_prob")
+        if not required.issubset(set(data.batch.keys())):
+            raise ValueError("CORAL_E1_NO_GO: gradient batch fields missing")
+        self.actor_module.train()
+        self.actor_optimizer.zero_grad()
+        full_mask = data.batch["response_mask"]
+        active_mask, _ = role_masks(full_mask, data.batch["final_mask"], phase)
+        full_token_total = int(full_mask.sum().item())
+        active_rows = active_mask.sum(dim=-1) > 0
+        if full_token_total < 1 or int(active_rows.sum().item()) < 1:
+            raise ValueError("CORAL_E1_NO_GO: role has no actual loss tokens")
+        micro = data.batch[active_rows]
+        response_mask = active_mask[active_rows]
+        entropy_coeff = self.config.entropy_coeff
+        entropy, log_prob = self._forward_micro_batch(
+            micro_batch=micro,
+            temperature=data.meta_info["temperature"],
+            calculate_entropy=bool(entropy_coeff),
+        )
+        pg_loss, _, _, _ = compute_policy_loss(
+            old_log_prob=micro["old_log_probs"], log_prob=log_prob,
+            advantages=micro["advantages"], response_mask=response_mask,
+            cliprange=self.config.clip_ratio,
+            cliprange_low=(self.config.clip_ratio_low
+                           if self.config.clip_ratio_low is not None
+                           else self.config.clip_ratio),
+            cliprange_high=(self.config.clip_ratio_high
+                            if self.config.clip_ratio_high is not None
+                            else self.config.clip_ratio),
+            clip_ratio_c=self.config.get("clip_ratio_c", 3.0),
+            loss_agg_mode="token-mean",
+        )
+        loss = pg_loss
+        if entropy_coeff:
+            loss = loss - entropy_coeff * agg_loss(
+                loss_mat=entropy, loss_mask=response_mask, loss_agg_mode="token-mean",
+            )
+        if self.config.use_kl_loss:
+            kld = kl_penalty(
+                logprob=log_prob, ref_logprob=micro["ref_log_prob"],
+                kl_penalty=self.config.kl_loss_type,
+            )
+            loss = loss + self.config.kl_loss_coef * agg_loss(
+                loss_mat=kld, loss_mask=response_mask, loss_agg_mode="token-mean",
+            )
+        loss = loss * response_mask.sum() / full_token_total
+        loss.backward()
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        sketch, squared_norm = fixed_count_sketch(
+            self.actor_module.named_parameters(), rank=rank, world_size=world_size,
+        )
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(sketch, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(squared_norm, op=torch.distributed.ReduceOp.SUM)
+        self.actor_optimizer.zero_grad()
+        return {
+            "sketch": sketch.detach(),
+            "squared_norm": squared_norm.detach(),
+            "loss": loss.detach().reshape(1),
+            "active_tokens": response_mask.sum().detach().reshape(1),
+            "full_tokens": torch.tensor([full_token_total], device=sketch.device),
+        }

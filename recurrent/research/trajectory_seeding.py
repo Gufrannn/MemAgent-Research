@@ -61,3 +61,19 @@ def derive_turn_request_seeds(
             int(recurrent_turn),
         ))
     return result
+
+
+def derive_coral_terminal_contrast_seeds(
+    trajectory_base_seeds: Sequence[int],
+) -> list[int]:
+    """Derive turn-independent CRN seeds for CORAL's two terminal branches."""
+    return [
+        _stable_seed("memagent-coral-terminal-contrast-v1", int(seed))
+        for seed in trajectory_base_seeds
+    ]
+
+
+def stable_training_group_id(*, base_seed: int, global_step: int, dataset_index: int) -> str:
+    """Deterministic GRPO group identity; never use a random UUID as identity."""
+    payload = f"memagent-train-group-v1:{int(base_seed)}:{int(global_step)}:{int(dataset_index)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

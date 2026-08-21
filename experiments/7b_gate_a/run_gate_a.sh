@@ -180,7 +180,7 @@ TRAINER_OVERRIDES=(
 
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \
-    "${TRAINER_OVERRIDES[@]}"
+    "${TRAINER_OVERRIDES[@]}" "$@"
   exit 0
 fi
 
@@ -201,6 +201,6 @@ export WANDB_MODE=offline
 export VLLM_USE_V1=0
 export NCCL_DEBUG=WARN
 
-"$PYTHON" -m verl.trainer.main_ppo "${TRAINER_OVERRIDES[@]}"
+"$PYTHON" -m verl.trainer.main_ppo "${TRAINER_OVERRIDES[@]}" "$@"
 
 echo "Gate A phase=$PHASE finished; Ray temp was $RAY_TMP"

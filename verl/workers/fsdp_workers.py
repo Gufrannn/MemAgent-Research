@@ -569,6 +569,38 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def measure_coral_role_gradient(self, data: DataProto, phase: str):
+        """Produce a read-only, actual-loss E1 gradient receipt per FSDP rank."""
+        assert self._is_actor
+        if phase not in ("memory_writer", "terminal_answer"):
+            raise ValueError("CORAL_E1_NO_GO: invalid measurement role")
+        data = data.to(torch.cuda.current_device())
+        before = _optimizer_step_evidence(self.actor_optimizer)
+        if self._is_offload_param:
+            load_fsdp_model_to_gpu(self.actor_module_fsdp)
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data=data)
+            values = self.actor.measure_coral_role_gradient(data=data, phase=phase)
+            output = DataProto.from_dict(tensors={
+                "gradient_sketch": values["sketch"].reshape(1, -1),
+                "gradient_squared_norm": values["squared_norm"].reshape(1),
+                "actual_loss": values["loss"].reshape(1),
+                "active_tokens": values["active_tokens"].reshape(1),
+                "full_tokens": values["full_tokens"].reshape(1),
+                "worker_rank": torch.tensor(
+                    [torch.distributed.get_rank()], device=torch.cuda.current_device(),
+                    dtype=torch.int64,
+                ),
+            })
+            output = self.ulysses_sharding_manager.postprocess_data(data=output).to("cpu")
+        after = _optimizer_step_evidence(self.actor_optimizer)
+        if before != after:
+            raise RuntimeError("CORAL_E1_NO_GO: measurement mutated optimizer state")
+        if self._is_offload_param:
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+        return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
         # Support all hardwares
         if torch.distributed.get_rank() == 0:

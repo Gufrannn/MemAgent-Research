@@ -1,0 +1,21 @@
+{
+  "schema": "memagent.cosi.run-manifest.v1",
+  "branch": "h20/qwen25-7b-cosi-t25-frozen-20260822",
+  "base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
+  "required_environment": ["MEMAGENT_COSI_WORK_ROOT", "MEMAGENT_COSI_REPO_DIR", "MEMAGENT_COSI_EXPECTED_COMMIT", "MEMAGENT_COSI_GPU_PAIR", "MEMAGENT_COSI_BASELINE_INDEX", "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST", "MEMAGENT_COSI_S128_RESOLVED_MANIFEST", "MEMAGENT_COSI_PAPER_REVIEW_SHA256", "MEMAGENT_COSI_E0_REPORT_SHA256", "MEMAGENT_COSI_E1_REPORT_SHA256", "MEMAGENT_COSI_BASELINE_REPORT_SHA256"],
+  "fresh_base_only": true,
+  "forbidden_warm_starts": ["Original3", "Original5", "Original10", "Original15", "Original20", "Original25"],
+  "method_active_from_update": 1,
+  "training_authorized": false,
+  "authorization_mode": "external_authenticated_gates_only",
+  "scientific_decision": "REFRAME_CORAL_PAPER_FRAMING_GO_E0_GO_PENDING_H20_E1",
+  "model": {"id": "Qwen/Qwen2.5-7B-Instruct", "revision": "a09a35458c702b33eeacc393d103063234e8bc28", "config_sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"},
+  "data": {"train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8", "validation_sha256": "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6", "shuffle": false, "dataloader_num_workers": 0},
+  "training": {"seed": 2026, "trajectory_seed_mode": "independent", "train_batch_size": 4, "rollout_n": 2, "ppo_mini_batch_size": 4, "chunk_size": 5000, "max_chunks": 8, "actor_learning_rate": 0.000001, "kl_loss_coefficient": 0.001, "anchors": [5,10,15,20,25]},
+  "backend": {"rollout": "vllm", "allow_hf_fallback": false, "world_size": 2, "fsdp_size": 2},
+  "coral": {"enabled": true, "active_from_update": 1, "schedule": "odd_writer_even_terminal_answer_v2", "role_partition": "nonfinal_memory_writer_vs_final_answer", "require_recurrent": true, "require_grpo": true, "require_gate_a_sync": true},
+  "role_exposure": {"primary_updates": 25, "memory_writer_updates": 13, "terminal_answer_updates": 12, "required_controls": ["original_t25_rollout_matched", "masked_half_exposure", "coral_role_exposure_matched"]},
+  "occupancy_response_diagnostic": {"schema": "memagent.coral.e1.v3", "training_or_acceptance_oracle": false, "proposal_steps": [1,3,5,7,9,11,13,15], "roots_per_proposal": 4, "proposal_clusters": 8, "total_root_clusters": 32, "inference_unit": "writer_proposal_mean_over_four_never_reused_roots", "root_identity": "step_independent_dataset_index", "root_reuse": false, "writer_proposal_sampling": "one_authenticated_writer_update_no_retry", "writer_memory_branches": "cached_source_memory_once_vs_single_regenerated_proposal_memory", "writer_trajectory_seed_coupling": "common_cached_vs_refreshed", "terminal_action_policy": "both_branches_freshly_sampled_at_fixed_proposal_weights", "terminal_request_seed_coupling": "common_cached_vs_refreshed", "branch_reward_and_advantage": "independently_recomputed", "writer_replicas": 2, "tensor_source": "actual_terminal_answer_loss_backward", "checkpoint_binding": "full_actor_inventory_sha256", "gradient_estimand": "four_frozen_nonlinearly_basis_separated_256_bucket_countsketches", "gradient_sketch_basis_sha256": "5c43c09af1a3d86ca431c1573bcbe3ee138d873404f24cc8d2442894c5895ef6"},
+  "gates": {"paper_framing": "certificates/paper_framing_review.json", "e0": "certificates/coral_e0.json", "e1": "certificates/coral_e1_final_report.json", "baseline_import": "certificates/baseline_import.json", "t5_health": "certificates/t5_health.json"},
+  "outputs": {"root_template": "${MEMAGENT_COSI_WORK_ROOT}/logs/cosi/${RUN_ID}", "ledger": "cosi_execution_ledger.jsonl", "accepted_checkpoint_namespace": "accepted", "provisional_checkpoint_namespace": "provisional"}
+}
