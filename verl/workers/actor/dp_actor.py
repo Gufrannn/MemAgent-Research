@@ -470,6 +470,7 @@ class DataParallelPPOActor(BasePPOActor):
                     grad_norm = self._optimizer_step()
                     post_log_prob = current_log_prob.detach()
                     post_prefix_stats = global_prefix_stats
+                    post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]
                     accepted = True
                     if rwwpo_enabled:
                         with torch.no_grad():
@@ -484,6 +485,7 @@ class DataParallelPPOActor(BasePPOActor):
                                 self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
                                 writer_log_ratio_cap=ratio_cap)
                         post_prefix_stats = build_global_stats(post_metrics["prefix_log_ratios"])
+                        post_prefix_rows = post_metrics["prefix_log_ratios"]
                         accepted = all(row["ess_fraction"] >= q_min and
                                        row["max_abs_log_ratio"] <= ratio_cap
                                        for row in post_prefix_stats)
@@ -500,7 +502,7 @@ class DataParallelPPOActor(BasePPOActor):
                         trajectory_turn=joined("trajectory_turn"), sample_index=joined("sample_index"),
                         advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
                         prefix_rows=rwwpo_metrics["prefix_log_ratios"], prefix_stats=global_prefix_stats,
-                        post_prefix_stats=post_prefix_stats, q_min=q_min,
+                        post_prefix_rows=post_prefix_rows, post_prefix_stats=post_prefix_stats, q_min=q_min,
                         constraint_pass=constraint_pass, accepted=accepted)
                     append_to_dict(metrics, {
                         "actor/pg_loss": policy_loss.detach().item(),

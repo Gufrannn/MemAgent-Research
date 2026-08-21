@@ -59,6 +59,17 @@ def audit(paths, require_method=True):
                 actual=sorted(recomputed,key=lambda x:(x["sample_index"],x["turn"]))
                 if len(declared)!=len(actual) or any(d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or d["prefix_token_count"]!=v["prefix_token_count"] or not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10) for d,v in zip(declared,actual)):
                     raise ValueError("prefix rows do not reconstruct from actual-loss tensors")
+                post_actual=[]
+                for sid in sorted(set(row["sample_index"])):
+                    indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
+                    indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
+                    for index in indices:
+                        active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                        running += sum(float(row["proposed_post_log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active); tokens += len(active)
+                        post_actual.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
+                post_declared=sorted(row["post_prefix_rows"],key=lambda x:(x["sample_index"],x["turn"])); post_actual.sort(key=lambda x:(x["sample_index"],x["turn"]))
+                if len(post_declared)!=len(post_actual) or any(d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or d["prefix_token_count"]!=v["prefix_token_count"] or not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10) for d,v in zip(post_declared,post_actual)):
+                    raise ValueError("post-step prefix rows do not reconstruct")
                 for stat in row["prefix_stats"]:
                     expected = 1.0 / (1.0 + stat["chi2"])
                     if not math.isclose(stat["ess_fraction"], expected, rel_tol=1e-9, abs_tol=1e-12):
