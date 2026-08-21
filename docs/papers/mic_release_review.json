@@ -1,0 +1,22 @@
+{
+  "schema": "memagent.mic.v1",
+  "status": "PASS",
+  "decision": "MIC_PAPER_REVIEW_GO",
+  "review_scope": "paper_framing_and_code_release_readiness",
+  "scientific_execution_status": "BLOCKED_EXTERNAL_AUTHORITY",
+  "t5_authorized": false,
+  "external_requirements": [
+    "certified Original inventory",
+    "certified Original evidence bundle",
+    "out-of-band SHA-256 of the complete inventory",
+    "P0 PASS",
+    "E1 PASS"
+  ],
+  "review_findings": {
+    "fixable_blockers_remaining": 0,
+    "fabricated_results": false,
+    "h20_execution_claimed": false,
+    "entry_adversarial_tests": "40 passed; 2 torch-dependent tests skipped locally"
+  },
+  "reviewed_on": "2026-08-22"
+}

@@ -243,6 +243,11 @@ class DataParallelPPOActor(BasePPOActor):
         # ADD: loss mask
         ######
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "response_mask"]
+        mic_role_ledger = "mic_writer_mask" in data.batch or "mic_answer_mask" in data.batch
+        if mic_role_ledger:
+            if not {"mic_writer_mask", "mic_answer_mask"} <= set(data.batch.keys()):
+                raise ValueError("MIC_NO_GO: role gradient masks are incomplete")
+            select_keys.extend(["mic_writer_mask", "mic_answer_mask"])
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -381,6 +386,36 @@ class DataParallelPPOActor(BasePPOActor):
                         clip_ratio_c=clip_ratio_c,
                         loss_agg_mode=loss_agg_mode,
                     )
+                    if mic_role_ledger:
+                        writer_mask = data["mic_writer_mask"]
+                        answer_mask = data["mic_answer_mask"]
+                        if torch.any(writer_mask.bool() & answer_mask.bool()) \
+                                or not torch.equal((writer_mask + answer_mask).bool(), response_mask.bool()):
+                            raise ValueError("MIC_NO_GO: role gradient masks do not partition response")
+                        for role_name, role_mask in (("writer", writer_mask), ("answer", answer_mask)):
+                            if role_mask.sum().item() > 0:
+                                role_loss, _, _, _ = compute_policy_loss(
+                                    old_log_prob=old_log_prob, log_prob=log_prob,
+                                    advantages=advantages, response_mask=role_mask,
+                                    cliprange=clip_ratio, cliprange_low=clip_ratio_low,
+                                    cliprange_high=clip_ratio_high, clip_ratio_c=clip_ratio_c,
+                                    loss_agg_mode=loss_agg_mode,
+                                )
+                                role_logprob_gradient = torch.autograd.grad(
+                                    role_loss, log_prob, retain_graph=True, create_graph=False
+                                )[0].masked_select(role_mask.bool())
+                                append_to_dict(metrics, {
+                                    f"mic_gradient/{role_name}_pg_loss": role_loss.detach().item(),
+                                    f"mic_gradient/{role_name}_active_tokens": int(
+                                        role_mask.sum().item()
+                                    ),
+                                    f"mic_gradient/{role_name}_logprob_grad_l2": float(
+                                        torch.linalg.vector_norm(role_logprob_gradient).detach().item()
+                                    ),
+                                    f"mic_gradient/{role_name}_logprob_grad_abs_max": float(
+                                        role_logprob_gradient.detach().abs().max().item()
+                                    ),
+                                })
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)

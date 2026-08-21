@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "branch": "h20/qwen25-7b-mic-t25-frozen-20260822",
+  "base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
+  "decision": "REFRAME_PENDING_E0_E1_AND_PAPER_REVIEW",
+  "experiment_name": "qwen25_7b_h20_mic_fresh_t25_seed2026_20260822",
+  "runtime": {
+    "required_environment": [
+      "MEMAGENT_MIC_WORK_ROOT",
+      "MEMAGENT_MIC_REPO_DIR",
+      "MEMAGENT_MIC_EXPECTED_COMMIT",
+      "MEMAGENT_MIC_GPU_PAIR",
+      "MEMAGENT_MIC_RUN_ID",
+      "MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST",
+      "MEMAGENT_MIC_BASELINE_INVENTORY",
+      "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256",
+      "MEMAGENT_MIC_E1_BUNDLE"
+    ],
+    "python": "${MEMAGENT_MIC_WORK_ROOT}/.venv/bin/python",
+    "gpu_count": 2,
+    "allow_noncontiguous_pair": true,
+    "locks": "${MEMAGENT_MIC_WORK_ROOT}/locks/memagent_h20_gpu_N.lock"
+  },
+  "method": {
+    "name": "materialized_memory_innovation_credit",
+    "enabled_from_update": 1,
+    "fold_rule": "sha256_stable_root_id_modulo_v1",
+    "fold_count": 4,
+    "ridge_alpha": 1.0,
+    "feature_dimension": 64,
+    "critic_inputs": ["question", "visible_chunks_through_turn", "materialized_memory", "turn_index"],
+    "forbidden_inputs": ["gold_answer", "future_chunk", "current_row_outcome", "generated_answer"],
+    "writer_credit": "stopgrad(V_post_write_t-V_post_write_t_minus_1)",
+    "answer_credit": "terminal_advantage-V_post_write_T",
+    "closure_tolerance_float64": 1e-12,
+    "critic_checkpoint_separate": true
+  },
+  "training": {
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+    "seed": 2026,
+    "trajectory_seed_mode": "independent",
+    "train_batch_size": 4,
+    "rollout_n": 2,
+    "ppo_mini_batch_size": 4,
+    "chunk_size": 5000,
+    "max_chunks": 8,
+    "max_prompt_length": 8192,
+    "max_response_length": 1024,
+    "actor_learning_rate": 1e-6,
+    "actor_lr_warmup_steps": 2,
+    "clip_ratio_high": 0.2,
+    "entropy_coefficient": 0.0,
+    "kl_loss_coefficient": 0.001,
+    "reward_manager": "naive",
+    "gpu_memory_utilization": 0.55,
+    "world_size": 2,
+    "fsdp_size": 2,
+    "tensor_parallel_size": 1,
+    "anchors": [5, 10, 15, 20, 25],
+    "fresh_base_only": true,
+    "forbidden_warm_start": "Original_global_step_3"
+  },
+  "original_manifest_equal_paths": [
+    "model.id", "model.revision", "training.seed", "training.trajectory_seed_mode",
+    "training.train_batch_size", "training.rollout_n", "training.ppo_mini_batch_size",
+    "training.chunk_size", "training.max_chunks", "training.max_prompt_length",
+    "training.max_response_length", "training.actor_learning_rate",
+    "training.actor_lr_warmup_steps", "training.clip_ratio_high",
+    "training.entropy_coefficient", "training.kl_loss_coefficient",
+    "backend.reward_manager", "gpu.world_size", "gpu.fsdp_size",
+    "gpu.tensor_parallel_size"
+  ],
+  "only_allowed_scientific_differences": [
+    "algorithm.mic", "trainer.project_name", "trainer.experiment_name",
+    "trainer.default_local_dir", "trainer.total_training_steps", "trainer.resume_mode",
+    "trainer.resume_from_path"
+  ],
+  "gates": {
+    "required_before_gpu": ["MIC_P0_PASS", "MIC_E0_PASS", "MIC_E1_PASS", "MIC_PAPER_REVIEW_GO"],
+    "t5_noninferiority_token_f1_pp": -2.0,
+    "t5_revision_limit": 1,
+    "allowed_revision_classes": ["numerical_instability", "critic_regularization"],
+    "continuation_requires": "MIC_T5_HEALTH_PASS"
+  },
+  "evaluation": {
+    "fixed_examples": 128,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "metrics": ["normalized_exact_match", "token_f1", "format_success"],
+    "baseline_policy": "read_only_hash_inventory_and_independent_recompute",
+    "never_rerun_original": true
+  }
+}

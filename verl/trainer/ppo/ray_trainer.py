@@ -921,6 +921,23 @@ class RayPPOTrainer:
         )
         resolved_eval_manifest = None
         turn_ledger_path = None
+        mic_eval_identity_path = self.config.trainer.get("mic_eval_identity_path", None)
+        mic_eval_identities = None
+        if mic_eval_identity_path:
+            from recurrent.research.mic import sha256_file
+            expected_identity_sha = str(
+                self.config.trainer.get("mic_eval_identity_sha256", "")
+            )
+            if sha256_file(str(mic_eval_identity_path)) != expected_identity_sha:
+                raise ValueError("MIC_NO_GO: evaluation identity authority digest mismatch")
+            identity_rows = [json.loads(line) for line in open(
+                mic_eval_identity_path, encoding="utf-8"
+            ) if line.strip()]
+            if len(identity_rows) != 128:
+                raise ValueError("MIC_NO_GO: evaluation identity authority is not S128")
+            mic_eval_identities = {int(row["source_order_index"]): row for row in identity_rows}
+            if set(mic_eval_identities) != set(range(128)):
+                raise ValueError("MIC_NO_GO: evaluation identity source order differs from 0..127")
         if strict_eval_identity:
             from recurrent.research.stable_eval_identity import load_resolved_manifest
 
@@ -965,6 +982,21 @@ class RayPPOTrainer:
                     attempt_id=str(eval_identity_config.attempt_id),
                 )
                 validation_seeds = [int(value) for value in identity_batch["trajectory_seed"]]
+            elif mic_eval_identities is not None:
+                if "source_order_index" in test_batch.batch:
+                    source_orders = test_batch.batch["source_order_index"].detach().cpu().tolist()
+                else:
+                    source_orders = np.asarray(
+                        test_batch.non_tensor_batch["source_order_index"]
+                    ).tolist()
+                selected = [mic_eval_identities[int(order)] for order in source_orders]
+                fields = ("stable_key", "stable_example_id", "stable_root_id",
+                          "source_order_index", "source_question_sha256",
+                          "source_context_sha256", "trajectory_seed")
+                identity_batch = {field: [row[field] for row in selected] for field in fields}
+                validation_seeds = [int(row["trajectory_seed"]) for row in selected]
+                validation_seed_records = [{"trajectory_seed": seed}
+                                           for seed in validation_seeds]
             else:
                 trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
                 if trajectory_seed_mode not in (None, "", "legacy_shared"):
@@ -1461,6 +1493,21 @@ class RayPPOTrainer:
         )
 
     def _load_checkpoint(self):
+        if self.config.trainer.resume_mode == "mic_actor_only_eval":
+            if not bool(self.config.trainer.get("val_only", False)):
+                raise ValueError("MIC_NO_GO: mic_actor_only_eval is validation-only")
+            checkpoint = os.path.realpath(str(self.config.trainer.resume_from_path))
+            match = re.search(r"global_step_(\d+)$", checkpoint)
+            if match is None or int(match.group(1)) not in (5, 10, 15, 20, 25):
+                raise ValueError("MIC_NO_GO: MIC evaluation checkpoint anchor is invalid")
+            actor_path = os.path.join(checkpoint, "actor")
+            if not os.path.isdir(actor_path):
+                raise FileNotFoundError(f"MIC_NO_GO: actor checkpoint missing: {actor_path}")
+            self.global_steps = int(match.group(1))
+            self.actor_rollout_wg.load_model_checkpoint_only(
+                actor_path, del_local_after_load=False
+            )
+            return self.global_steps
         if self.config.trainer.resume_mode == "actor_only_eval":
             eval_identity_config = self.config.trainer.get("eval_identity", None)
             if not (
@@ -1815,6 +1862,12 @@ class RayPPOTrainer:
                             # Also, just as what happened in validate, we will always set n=1 in generation_kwargs.
                             batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                             gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                            mic_config = self.config.algorithm.get("mic", {})
+                            mic_enabled = bool(mic_config.get("enabled", False))
+                            if mic_enabled:
+                                if self.config.algorithm.get("filter_groups", None):
+                                    raise RuntimeError("MIC_NO_GO: filter_groups is incompatible with stable OOF routing")
+                                gen_batch.meta_info["mic_capture_post_write"] = True
                             trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
                             if trajectory_seed_mode not in (None, "", "legacy_shared"):
                                 from recurrent.research.trajectory_seeding import build_trajectory_seed_records
@@ -1837,6 +1890,17 @@ class RayPPOTrainer:
                                     raise RuntimeError(
                                         "Gate A requires the frozen dataset index on every trajectory"
                                     )
+                                if mic_enabled:
+                                    # UUIDs are forbidden as MIC scientific identity.  Bind every
+                                    # trajectory to reconstructable training coordinates instead.
+                                    batch.non_tensor_batch["uid"] = np.asarray([
+                                        hashlib.sha256(json.dumps({
+                                            "namespace": "memagent-mic-prompt-group-v1",
+                                            "global_step": int(self.global_steps),
+                                            "dataset_index": int(dataset_indices[row]),
+                                        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                                        for row in range(len(batch))
+                                    ], dtype=object)
                                 gen_batch.meta_info["trajectory_base_seeds"] = trajectory_base_seeds
                                 batch.non_tensor_batch["rollout_trajectory_seed"] = np.asarray(
                                     trajectory_base_seeds, dtype=np.uint64
@@ -2065,12 +2129,183 @@ class RayPPOTrainer:
                             advantage_scalar = compute_1D_grpo_advantage(token_level_rewards=reward_tensor, 
                                                                          index=reward_batch.non_tensor_batch['uid'],
                                                                          use_adv=self.config.algorithm.grpo_use_adv)
+                            trajectory_advantage = advantage_scalar
                             advantage_scalar = advantage_scalar[sample_index]
 
                             # apply adv to non-mask tokens
                             response_length = batch.batch['responses'].size(-1)
                             eos_mask = batch.batch['response_mask']
                             advantages = advantage_scalar.unsqueeze(-1).tile([1, response_length]) * eos_mask
+                            mic_config = self.config.algorithm.get("mic", {})
+                            if bool(mic_config.get("enabled", False)):
+                                from recurrent.research.mic import (
+                                    CriticCheckpoint, append_jsonl_new, calibration_report,
+                                    cross_fitted_values, innovation_ledger,
+                                    route_role_advantages, sha256_json,
+                                )
+
+                                if "mic_materialized_memory" not in batch.non_tensor_batch \
+                                        or "mic_turn_index" not in batch.batch:
+                                    raise RuntimeError("MIC_NO_GO: materialized post-write capture is absent")
+                                base_trajectory_ids = [str(value) for value in source_trajectory_ids]
+                                stable_roots = [sha256_json({
+                                    "dataset_index": int(dataset_indices[index]),
+                                    "prompt_ids": [int(token) for token in
+                                                   original_batch.non_tensor_batch["prompt_ids"][index]],
+                                }) for index in range(len(base_trajectory_ids))]
+                                stable_examples = [sha256_json({
+                                    "stable_root_id": stable_roots[index],
+                                    "replica": index % int(self.config.actor_rollout_ref.rollout.n),
+                                }) for index in range(len(base_trajectory_ids))]
+                                states = []
+                                for index, trajectory_id in enumerate(base_trajectory_ids):
+                                    question = self.tokenizer.decode(
+                                        original_batch.non_tensor_batch["prompt_ids"][index],
+                                        skip_special_tokens=True,
+                                    )
+                                    states.append({
+                                        "stable_example_id": stable_examples[index],
+                                        "stable_root_id": stable_roots[index],
+                                        "trajectory_id": trajectory_id,
+                                        "turn_index": 0, "question": question,
+                                        "visible_chunks": [], "materialized_memory": "",
+                                        "materialized_memory_history": [],
+                                        "is_prewrite": True,
+                                    })
+                                memories = batch.non_tensor_batch["mic_materialized_memory"]
+                                mic_turns = batch.batch["mic_turn_index"].detach().cpu().tolist()
+                                final_flags = batch.batch["final_mask"].detach().cpu().tolist()
+                                chunk_size = int(self.recurrent_config.chunk_size)
+                                visible_chunks_by_source = []
+                                for source_row in range(len(base_trajectory_ids)):
+                                    context_length = int(original_batch.batch["context_length"][source_row].item())
+                                    context_ids = original_batch.batch["context_ids"][source_row][:context_length]
+                                    visible_chunks_by_source.append([
+                                        self.tokenizer.decode(
+                                            context_ids[start:start + chunk_size], skip_special_tokens=True
+                                        )
+                                        for start in range(0, context_length, chunk_size)
+                                    ])
+                                memory_history_by_source = [[] for _ in base_trajectory_ids]
+                                for row_index, source_row in enumerate(sample_index.detach().cpu().tolist()):
+                                    if final_flags[row_index]:
+                                        continue
+                                    turn = int(mic_turns[row_index])
+                                    memory = memories[row_index]
+                                    if not isinstance(memory, str):
+                                        raise RuntimeError("MIC_NO_GO: writer materialized memory is missing")
+                                    if turn != len(memory_history_by_source[source_row]) + 1:
+                                        raise RuntimeError("MIC_NO_GO: materialized writer history is non-contiguous")
+                                    memory_history_by_source[source_row].append(memory)
+                                    visible_chunks = visible_chunks_by_source[source_row][:turn]
+                                    if len(visible_chunks) != turn:
+                                        raise RuntimeError("MIC_NO_GO: visible chunk filtration is incomplete")
+                                    states.append({
+                                        "stable_example_id": stable_examples[source_row],
+                                        "stable_root_id": stable_roots[source_row],
+                                        "trajectory_id": base_trajectory_ids[source_row],
+                                        "turn_index": turn,
+                                        "question": self.tokenizer.decode(
+                                            original_batch.non_tensor_batch["prompt_ids"][source_row],
+                                            skip_special_tokens=True,
+                                        ),
+                                        "visible_chunks": visible_chunks,
+                                        "materialized_memory": memory,
+                                        "materialized_memory_history": list(
+                                            memory_history_by_source[source_row]
+                                        ),
+                                        "is_prewrite": False,
+                                    })
+                                outcomes = {
+                                    trajectory_id: float(trajectory_advantage[index].item())
+                                    for index, trajectory_id in enumerate(base_trajectory_ids)
+                                }
+                                checkpoint_root = mic_config.get("critic_checkpoint_root")
+                                ledger_path = mic_config.get("ledger_path")
+                                if not checkpoint_root or not ledger_path:
+                                    raise RuntimeError("MIC_NO_GO: critic checkpoint and ledger paths are required")
+                                history_states = []
+                                history_outcomes = {}
+                                parent_checkpoint_sha = None
+                                if self.global_steps > 1:
+                                    previous_path = os.path.join(
+                                        str(checkpoint_root), f"global_step_{self.global_steps - 1}",
+                                        "critic.json",
+                                    )
+                                    if not os.path.isfile(previous_path):
+                                        raise RuntimeError(
+                                            "MIC_NO_GO: independent critic resume checkpoint is missing"
+                                        )
+                                    previous = CriticCheckpoint.read(
+                                        previous_path,
+                                        expected_actor_commit=os.environ.get(
+                                            "MEMAGENT_MIC_EXPECTED_COMMIT", ""
+                                        ),
+                                    )
+                                    parent_checkpoint_sha = previous["checkpoint_sha256"]
+                                    history_states = previous["critic_payload"]["history_states"]
+                                    history_outcomes = previous["critic_payload"]["history_outcomes"]
+                                combined_states = [*history_states, *states]
+                                combined_outcomes = {**history_outcomes, **outcomes}
+                                if len(combined_outcomes) != len(history_outcomes) + len(outcomes):
+                                    raise RuntimeError("MIC_NO_GO: critic history trajectory collision")
+                                oof = cross_fitted_values(
+                                    combined_states, combined_outcomes,
+                                    fold_count=int(mic_config.get("fold_count", 4)),
+                                    alpha=float(mic_config.get("ridge_alpha", 1.0)),
+                                    dimension=int(mic_config.get("feature_dimension", 64)),
+                                )
+                                mic_ledger = innovation_ledger(
+                                    oof, combined_outcomes,
+                                    tolerance=float(mic_config.get("closure_tolerance", 1e-12)),
+                                )
+                                advantages, delivery = route_role_advantages(
+                                    sample_index=sample_index,
+                                    final_mask=batch.batch["final_mask"],
+                                    turn_index=batch.batch["mic_turn_index"],
+                                    response_mask=eos_mask,
+                                    ledger_rows=mic_ledger["trajectories"],
+                                    trajectory_ids=base_trajectory_ids,
+                                )
+                                batch.batch["mic_writer_mask"] = (
+                                    eos_mask * (~batch.batch["final_mask"]).unsqueeze(-1)
+                                )
+                                batch.batch["mic_answer_mask"] = (
+                                    eos_mask * batch.batch["final_mask"].unsqueeze(-1)
+                                )
+                                checkpoint_path = os.path.join(
+                                    str(checkpoint_root), f"global_step_{self.global_steps}", "critic.json"
+                                )
+                                checkpoint = CriticCheckpoint(
+                                    actor_commit=os.environ.get("MEMAGENT_MIC_EXPECTED_COMMIT", ""),
+                                    fold_bundle_sha256=oof["bundle_sha256"],
+                                    state_feature_schema_sha256=sha256_json(sorted(
+                                        ["question", "visible_chunks", "materialized_memory_history",
+                                         "turn_index"]
+                                    )),
+                                    critic_payload={
+                                        "oof": oof, "history_states": combined_states,
+                                        "history_outcomes": combined_outcomes,
+                                        "parent_checkpoint_sha256": parent_checkpoint_sha,
+                                    },
+                                )
+                                checkpoint_sha = checkpoint.write_new(checkpoint_path)
+                                report = calibration_report(mic_ledger)
+                                append_jsonl_new(str(ledger_path), {
+                                    "schema": "memagent.mic.training-ledger.v1",
+                                    "record_type": "mic_advantage_delivery",
+                                    "global_step": int(self.global_steps),
+                                    "critic_checkpoint": os.path.realpath(checkpoint_path),
+                                    "critic_checkpoint_sha256": checkpoint_sha,
+                                    "parent_critic_checkpoint_sha256": parent_checkpoint_sha,
+                                    "oof_bundle_sha256": oof["bundle_sha256"],
+                                    "innovation_ledger_sha256": mic_ledger["ledger_sha256"],
+                                    "maximum_closure_error": mic_ledger["maximum_closure_error"],
+                                    "calibration": report, "delivery": delivery,
+                                })
+                                metrics.update({f"mic/{key}": value for key, value in report.items()})
+                                metrics["mic/writer_active_tokens"] = delivery["writer_active_tokens"]
+                                metrics["mic/answer_active_tokens"] = delivery["answer_active_tokens"]
                             batch.batch['advantages'] = advantages
                             batch.batch['returns'] = advantages                             
                             # turns of a sample will have the same final reward, now we mapping turns to samples
@@ -2120,6 +2355,9 @@ class RayPPOTrainer:
                                 batch = indexing_proto(batch, padding_index)
                                 batch.batch['attention_mask'][~no_padding_mask, :] = 0
                                 batch.batch['response_mask'][~no_padding_mask, :] = 0
+                                if "mic_writer_mask" in batch.batch:
+                                    batch.batch["mic_writer_mask"][~no_padding_mask, :] = 0
+                                    batch.batch["mic_answer_mask"][~no_padding_mask, :] = 0
                                 batch.batch['no_padding_mask'] = no_padding_mask
                                 batch.meta_info['padded'] = True
                             else:
@@ -2164,6 +2402,32 @@ class RayPPOTrainer:
                             actor_version=self.global_steps,
                             sync_kind="post_actor_update",
                         )
+                        if bool(self.config.algorithm.get("mic", {}).get("enabled", False)):
+                            required_role_metrics = (
+                                "mic_gradient/writer_pg_loss",
+                                "mic_gradient/answer_pg_loss",
+                                "mic_gradient/writer_active_tokens",
+                                "mic_gradient/answer_active_tokens",
+                                "mic_gradient/writer_logprob_grad_l2",
+                                "mic_gradient/answer_logprob_grad_l2",
+                                "mic_gradient/writer_logprob_grad_abs_max",
+                                "mic_gradient/answer_logprob_grad_abs_max",
+                            )
+                            missing_role_metrics = [key for key in required_role_metrics
+                                                    if key not in actor_output_metrics]
+                            if missing_role_metrics:
+                                raise RuntimeError(
+                                    f"MIC_NO_GO: actual role gradient ledger missing {missing_role_metrics}"
+                                )
+                            append_jsonl_new(str(ledger_path), {
+                                "schema": "memagent.mic.training-ledger.v1",
+                                "record_type": "mic_actual_gradient_delivery",
+                                "global_step": int(self.global_steps),
+                                "role_metrics": {
+                                    key: actor_output_metrics[key] for key in required_role_metrics
+                                },
+                                "advantage_delivery": delivery,
+                            })
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)

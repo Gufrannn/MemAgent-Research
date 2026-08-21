@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memagent.local/schemas/mic_execution_ledger.schema.json",
+  "type": "object",
+  "required": ["schema", "record_type", "sequence", "previous_entry_sha256", "entry_sha256"],
+  "properties": {
+    "schema": {"const": "memagent.mic.training-ledger.v1"},
+    "record_type": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 0},
+    "previous_entry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "entry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import hashlib
 from contextlib import contextmanager
 from typing import Dict, List, Tuple, Type
 
@@ -184,6 +185,32 @@ class LLMGenerationManager:
                 logger.info('generation done')
             with _timer('mt_update', timing_raw):
                 gen_output = self.agent.update(gen_output)
+                if bool(meta_info.get("mic_capture_post_write", False)):
+                    current_final = self.agent.final_mask_list[-1]
+                    if len(current_final) != len(gen_output):
+                        raise ValueError("MIC_NO_GO: final mask is not row-aligned for state capture")
+                    responses = gen_output.batch["responses"].detach().cpu()
+                    memories = []
+                    memory_hashes = []
+                    for response, is_final in zip(responses, current_final.tolist()):
+                        if is_final:
+                            memories.append(None)
+                            memory_hashes.append(None)
+                            continue
+                        token_ids = response[response != pad_token_id].tolist()
+                        text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+                        memories.append(text)
+                        memory_hashes.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+                    gen_output.non_tensor_batch["mic_materialized_memory"] = np.asarray(
+                        memories, dtype=object
+                    )
+                    gen_output.non_tensor_batch["mic_materialized_memory_sha256"] = np.asarray(
+                        memory_hashes, dtype=object
+                    )
+                    gen_output.batch["mic_turn_index"] = torch.full(
+                        (len(gen_output),), recurrent_turn + 1, dtype=torch.long,
+                        device=gen_output.batch["responses"].device,
+                    )
                 if trajectory_base_seeds is not None:
                     if len(gen_output) != len(active_sample_indices):
                         raise ValueError(

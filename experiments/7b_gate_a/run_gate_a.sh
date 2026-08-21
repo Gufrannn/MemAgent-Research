@@ -26,6 +26,15 @@ SAVE_FREQ=${SAVE_FREQ:-1}
 MAX_ACTOR_CKPT_TO_KEEP=${MAX_ACTOR_CKPT_TO_KEEP:-3}
 OUT=$WORK_ROOT/logs/memory_agent/$EXP
 
+if [[ ${MEMAGENT_MIC_REQUIRED:-0} == 1 ]]; then
+  [[ ${MEMAGENT_MIC_ENABLE:-0} == 1 ]] || {
+    echo "MIC_NO_GO: MIC-required launcher cannot run an inactive method" >&2; exit 60;
+  }
+  [[ $RUN_SEED == 2026 ]] || {
+    echo "MIC_NO_GO: frozen MIC trajectory seed must be 2026" >&2; exit 61;
+  }
+fi
+
 case "$PHASE" in
   fresh)
     TOTAL_STEPS=$FRESH_TOTAL_STEPS
@@ -177,6 +186,48 @@ TRAINER_OVERRIDES=(
   ray_init.num_cpus=64
   "${RESUME_ARGS[@]}"
 )
+
+if [[ ${MEMAGENT_MIC_ENABLE:-0} == 1 ]]; then
+  [[ -n ${MEMAGENT_MIC_LEDGER_PATH:-} && -n ${MEMAGENT_MIC_CRITIC_ROOT:-} ]] || {
+    echo "MIC_NO_GO: MIC ledger and critic root are required" >&2
+    exit 56
+  }
+  TRAINER_OVERRIDES+=(
+    algorithm.mic.enabled=true
+    "algorithm.mic.fold_count=${MEMAGENT_MIC_FOLD_COUNT:-4}"
+    "algorithm.mic.ridge_alpha=${MEMAGENT_MIC_RIDGE_ALPHA:-1.0}"
+    "algorithm.mic.feature_dimension=${MEMAGENT_MIC_FEATURE_DIMENSION:-64}"
+    "algorithm.mic.ledger_path=$MEMAGENT_MIC_LEDGER_PATH"
+    "algorithm.mic.critic_checkpoint_root=$MEMAGENT_MIC_CRITIC_ROOT"
+    trainer.project_name=memagent_7b_mic
+  )
+fi
+
+if [[ -n ${MEMAGENT_MIC_EVAL_STEP:-} ]]; then
+  [[ ${MEMAGENT_MIC_EVAL_STEP} =~ ^(5|10|15|20|25)$ && -n ${MEMAGENT_MIC_EVAL_DIR:-} \
+      && -n ${MEMAGENT_MIC_EVAL_IDENTITY_PATH:-} && -n ${MEMAGENT_MIC_EVAL_IDENTITY_SHA256:-} ]] || {
+    echo "MIC_NO_GO: invalid MIC evaluation step/directory" >&2
+    exit 57
+  }
+  TRAINER_OVERRIDES+=(
+    algorithm.mic.enabled=false
+    trainer.val_before_train=true
+    +trainer.val_only=true
+    trainer.save_freq=-1
+    trainer.resume_mode=mic_actor_only_eval
+    "trainer.resume_from_path=$OUT/global_step_${MEMAGENT_MIC_EVAL_STEP}"
+    "trainer.validation_data_dir=$MEMAGENT_MIC_EVAL_DIR"
+    +data.include_source_order_index=true
+    "trainer.mic_eval_identity_path=$MEMAGENT_MIC_EVAL_IDENTITY_PATH"
+    "trainer.mic_eval_identity_sha256=$MEMAGENT_MIC_EVAL_IDENTITY_SHA256"
+    actor_rollout_ref.rollout.val_kwargs.n=1
+    actor_rollout_ref.rollout.val_kwargs.do_sample=false
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.0
+    actor_rollout_ref.rollout.val_kwargs.top_p=1.0
+    actor_rollout_ref.rollout.val_kwargs.top_k=-1
+    trainer.experiment_name=mic_s128_eval_t${MEMAGENT_MIC_EVAL_STEP}_${RUN_SEED}
+  )
+fi
 
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \
