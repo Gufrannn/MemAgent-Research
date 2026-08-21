@@ -10,6 +10,17 @@ set -euo pipefail
 [[ ${MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT:-} =~ ^[0-9a-f]{40}$ ]] || {
   echo 'ORIGINAL_S128_CURVE_NO_GO:P0 expected commit must be a full Git SHA' >&2; exit 65;
 }
+[[ -n ${MEMAGENT_ORIGINAL_CURVE_GPU_PAIR:-} ]] || {
+  echo 'ORIGINAL_S128_CURVE_NO_GO:P0 set MEMAGENT_ORIGINAL_CURVE_GPU_PAIR explicitly' >&2; exit 83;
+}
+[[ $MEMAGENT_ORIGINAL_CURVE_GPU_PAIR =~ ^(0|[1-9]|[12][0-9]|3[01]),(0|[1-9]|[12][0-9]|3[01])$ ]] || {
+  echo 'ORIGINAL_S128_CURVE_NO_GO:P0 GPU pair must be canonical decimal A,B' >&2; exit 84;
+}
+ORIGINAL_CURVE_GPU_A=${BASH_REMATCH[1]}
+ORIGINAL_CURVE_GPU_B=${BASH_REMATCH[2]}
+(( ORIGINAL_CURVE_GPU_A < ORIGINAL_CURVE_GPU_B )) || {
+  echo 'ORIGINAL_S128_CURVE_NO_GO:P0 GPU pair must be distinct and ascending' >&2; exit 86;
+}
 [[ $MEMAGENT_ORIGINAL_CURVE_WORK_ROOT == /* && $MEMAGENT_ORIGINAL_CURVE_REPO_DIR == /* ]] || {
   echo 'ORIGINAL_S128_CURVE_NO_GO:P0 task-scoped paths must be absolute' >&2; exit 69;
 }
@@ -23,8 +34,10 @@ readonly ORIGINAL_CURVE_LOG_ROOT=$ORIGINAL_CURVE_WORK_ROOT/logs/s128_original_al
 readonly ORIGINAL_CURVE_P0=$ORIGINAL_CURVE_LOG_ROOT/certificates/p0_preflight.json
 readonly ORIGINAL_CURVE_RESOLVED=$ORIGINAL_CURVE_LOG_ROOT/certificates/p0_resolved_manifest.json
 readonly ORIGINAL_CURVE_LEDGER=$ORIGINAL_CURVE_LOG_ROOT/original_s128_curve_execution_ledger.jsonl
-readonly ORIGINAL_CURVE_GPUS=6,7
-readonly ORIGINAL_CURVE_LOCK=$ORIGINAL_CURVE_WORK_ROOT/locks/memagent_gate_a_gpu_6_7.lock
+readonly ORIGINAL_CURVE_GPUS=$MEMAGENT_ORIGINAL_CURVE_GPU_PAIR
+readonly ORIGINAL_CURVE_GPU_A ORIGINAL_CURVE_GPU_B
+readonly ORIGINAL_CURVE_GPU_LOCK_A=$ORIGINAL_CURVE_WORK_ROOT/locks/memagent_h20_gpu_${ORIGINAL_CURVE_GPU_A}.lock
+readonly ORIGINAL_CURVE_GPU_LOCK_B=$ORIGINAL_CURVE_WORK_ROOT/locks/memagent_h20_gpu_${ORIGINAL_CURVE_GPU_B}.lock
 
 original_curve_require_checkout() {
   local invoked_repo
@@ -47,10 +60,18 @@ original_curve_acquire_lock() {
   command -v flock >/dev/null || {
     echo 'ORIGINAL_S128_CURVE_NO_GO:P0 flock is required' >&2; exit 63;
   }
-  mkdir -p "$(dirname "$ORIGINAL_CURVE_LOCK")"
-  exec 8>"$ORIGINAL_CURVE_LOCK"
+  # The pair is canonical ascending, so every runner migrated to this dynamic
+  # pair contract acquires overlapping physical-GPU locks in one global order
+  # and cannot deadlock. Legacy fixed-GPU launchers do not implement this
+  # contract and must not be launched concurrently.
+  mkdir -p "$(dirname "$ORIGINAL_CURVE_GPU_LOCK_A")"
+  exec 8>"$ORIGINAL_CURVE_GPU_LOCK_A"
   flock -n 8 || {
-    echo 'ORIGINAL_S128_CURVE_NO_GO:P0 GPU6-7 project lock is held' >&2; exit 62;
+    echo "ORIGINAL_S128_CURVE_NO_GO:P0 physical GPU $ORIGINAL_CURVE_GPU_A lock is held" >&2; exit 62;
+  }
+  exec 9>"$ORIGINAL_CURVE_GPU_LOCK_B"
+  flock -n 9 || {
+    echo "ORIGINAL_S128_CURVE_NO_GO:P0 physical GPU $ORIGINAL_CURVE_GPU_B lock is held" >&2; exit 62;
   }
 }
 
@@ -61,7 +82,7 @@ original_curve_require_idle() {
   local processes
   processes=$(nvidia-smi -i "$ORIGINAL_CURVE_GPUS" --query-compute-apps=pid --format=csv,noheader,nounits)
   [[ -z ${processes//[[:space:]]/} ]] || {
-    echo "ORIGINAL_S128_CURVE_NO_GO:P0 GPU6-7 are busy; no process was changed: $processes" >&2; exit 79;
+    echo "ORIGINAL_S128_CURVE_NO_GO:P0 GPUs $ORIGINAL_CURVE_GPUS are busy; no process was changed: $processes" >&2; exit 79;
   }
 }
 
@@ -72,7 +93,7 @@ original_curve_wait_cleanup() {
     [[ -z ${processes//[[:space:]]/} ]] && return 0
     sleep 2
   done
-  echo "ORIGINAL_S128_CURVE_NO_GO:CLEANUP GPU6-7 did not become idle: $processes" >&2
+  echo "ORIGINAL_S128_CURVE_NO_GO:CLEANUP GPUs $ORIGINAL_CURVE_GPUS did not become idle: $processes" >&2
   exit 81
 }
 

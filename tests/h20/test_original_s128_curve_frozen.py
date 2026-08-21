@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +30,10 @@ from tools.h20.preflight_qwen25_7b_original_s128_curve import (
     build_interface_plan,
     freeze_expected_prior_generation_protocol,
     generation_protocol_projection,
+    parse_physical_gpu_pair,
     repository_neutral_generation_protocol_projection,
+    resolve_manifest_environment,
+    validate_current_gpu_binding,
     validate_prior_import,
     validate_training_source,
 )
@@ -390,6 +395,122 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
         self.assertIs(self.manifest["evaluation"]["do_sample"], False)
         self.assertEqual(self.manifest["evaluation"]["primary_metrics"], ["normalized_exact_match", "token_f1"])
         self.assertIs(self.manifest["evaluation"]["training_dense_reward_excluded_from_evaluation_claims"], True)
+        self.assertEqual(
+            self.manifest["gpu"]["pair_environment"],
+            "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR",
+        )
+        self.assertEqual(self.manifest["gpu"]["physical_gpus"], [])
+
+    def test_gpu_pair_is_explicit_canonical_distinct_and_in_range(self) -> None:
+        self.assertEqual(parse_physical_gpu_pair("4,7"), (4, 7))
+        for invalid in (
+            None, "", "4", "4,", "a,7", "4, 7", "04,7", "7,4", "4,4",
+            "4,32", f"{'9' * 500},7",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    parse_physical_gpu_pair(invalid)
+        environment = {
+            "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT": "/work",
+            "MEMAGENT_ORIGINAL_CURVE_REPO_DIR": "/repo",
+            "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT": "a" * 40,
+        }
+        with self.assertRaisesRegex(ValueError, "missing explicit"):
+            resolve_manifest_environment({"gpu": {}}, environment)
+
+    def test_gpu_uuid_drift_after_p0_fails_closed(self) -> None:
+        manifest = {"gpu": {"physical_gpus": [4, 7], "visible_devices": "4,7"}}
+        frozen = ["4, GPU-frozen-4, NVIDIA H20", "7, GPU-frozen-7, NVIDIA H20"]
+        p0 = {"evidence": {"runtime_binding": {
+            "physical_gpu_pair": [4, 7],
+            "cuda_visible_devices": "4,7",
+            "physical_gpu_identity": frozen,
+        }}}
+        resolved = {"execution_binding": {
+            "physical_gpu_pair": [4, 7], "cuda_visible_devices": "4,7",
+        }}
+        with mock.patch(
+            "tools.h20.preflight_qwen25_7b_original_s128_curve."
+            "query_physical_gpu_identity",
+            return_value=["4, GPU-replaced, NVIDIA H20", frozen[1]],
+        ):
+            with self.assertRaisesRegex(ValueError, "UUID/name identity changed"):
+                validate_current_gpu_binding(manifest, p0, resolved)
+
+    def test_curve_instances_per_gpu_locks_block_overlap_but_allow_disjoint_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_flock = fake_bin / "flock"
+            fake_flock.write_text(
+                f"#!{sys.executable}\n"
+                "import fcntl, sys\n"
+                "try:\n"
+                "    fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                "except BlockingIOError:\n"
+                "    raise SystemExit(1)\n"
+            )
+            fake_flock.chmod(0o755)
+            def environment(pair: str) -> dict[str, str]:
+                return {
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                    "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT": str(root / "work"),
+                    "MEMAGENT_ORIGINAL_CURVE_REPO_DIR": str(REPO),
+                    "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT": "a" * 40,
+                    "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR": pair,
+                }
+            command = (
+                f'SCRIPT_DIR="{REPO / "scripts/h20"}"; '
+                f'source "{COMMON}"; original_curve_acquire_lock; echo LOCKED; '
+                'exec sleep "${LOCK_TEST_HOLD:-0}"'
+            )
+            held_environment = environment("2,4")
+            held_environment["LOCK_TEST_HOLD"] = "30"
+            first = subprocess.Popen(
+                ["bash", "-c", command], text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=held_environment,
+            )
+            try:
+                self.assertEqual(first.stdout.readline().strip(), "LOCKED")
+                overlap = subprocess.run(
+                    ["bash", "-c", command], text=True, capture_output=True,
+                    env=environment("4,7"), check=False,
+                )
+                self.assertEqual(overlap.returncode, 62, overlap.stderr)
+                self.assertIn("physical GPU 4 lock is held", overlap.stderr)
+                disjoint = subprocess.run(
+                    ["bash", "-c", command], text=True, capture_output=True,
+                    env=environment("5,7"), check=False,
+                )
+                self.assertEqual(disjoint.returncode, 0, disjoint.stderr)
+                self.assertEqual(disjoint.stdout.strip(), "LOCKED")
+            finally:
+                first.terminate()
+                first.communicate(timeout=5)
+
+    def test_shell_entry_rejects_missing_or_invalid_gpu_pair(self) -> None:
+        base_environment = {
+            **os.environ,
+            "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT": "/tmp/work",
+            "MEMAGENT_ORIGINAL_CURVE_REPO_DIR": str(REPO),
+            "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT": "a" * 40,
+        }
+        command = f'SCRIPT_DIR="{REPO / "scripts/h20"}"; source "{COMMON}"'
+        for pair in (
+            None, "4,4", "4,32", "a,7", "4, 7", "7,4", f"{'9' * 500},7",
+        ):
+            environment = dict(base_environment)
+            if pair is not None:
+                environment["MEMAGENT_ORIGINAL_CURVE_GPU_PAIR"] = pair
+            result = subprocess.run(
+                ["bash", "-c", command], text=True, capture_output=True,
+                env=environment, check=False,
+            )
+            with self.subTest(pair=pair):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ORIGINAL_S128_CURVE_NO_GO:P0", result.stderr)
 
     def test_generation_protocol_ignores_only_checkout_prefix_and_binds_reward_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -725,7 +846,10 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
     def test_runner_imports_without_copy_and_clears_shared_writer_environment(self) -> None:
         runner = RUNNER.read_text()
         common = COMMON.read_text()
-        self.assertIn("locks/memagent_gate_a_gpu_6_7.lock", common)
+        self.assertIn("MEMAGENT_ORIGINAL_CURVE_GPU_PAIR", common)
+        self.assertIn("memagent_h20_gpu_${ORIGINAL_CURVE_GPU_A}.lock", common)
+        self.assertIn("memagent_h20_gpu_${ORIGINAL_CURVE_GPU_B}.lock", common)
+        self.assertLess(common.index('flock -n 8'), common.index('flock -n 9'))
         self.assertIn("compgen -v GATE_A_", runner)
         self.assertIn("compgen -v ORIGINAL_T25_", runner)
         self.assertIn("if [[ $mode == import ]]", runner)
@@ -779,7 +903,10 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
                 "execution_ledger_sha256": "4" * 64,
                 "execution_ledger_tail_sha256": "5" * 64,
             }
-            execution = {"interface_plan": plans, "prior_s128_it_import": prior}
+            execution = {
+                "interface_plan": plans, "prior_s128_it_import": prior,
+                "physical_gpu_pair": [4, 7], "cuda_visible_devices": "4,7",
+            }
             resolved = {"execution_binding": execution}
             p0 = {"evidence": {
                 "git_commit": SOURCE_COMMIT,
@@ -793,6 +920,8 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
                 "eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a",
                 "execution_binding_sha256": canonical_sha256(execution),
                 "runtime_binding_sha256": "7" * 64,
+                "physical_gpu_pair": [4, 7],
+                "cuda_visible_devices": "4,7",
                 "status": "PASS",
             }
             ledger = root / "ledger.jsonl"
@@ -835,6 +964,7 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
             manifest = {
                 "repository": str(REPO),
                 "ledger_schema": "original_s128_curve_execution_ledger.schema.json",
+                "gpu": {"physical_gpus": [4, 7], "visible_devices": "4,7"},
                 "paths": {"p0_certificate": str(p0_path), "final_report": str(root / "final.json")},
             }
             self.assertEqual(_audit_ledger(records, manifest=manifest, resolved=resolved, p0=p0), [])

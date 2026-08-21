@@ -52,11 +52,14 @@ ENVIRONMENT_NAMES = (
     "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT",
     "MEMAGENT_ORIGINAL_CURVE_REPO_DIR",
     "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT",
+    "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR",
 )
 EXPECTED_BRANCH = "h20/qwen25-7b-original-all-anchor-s128-frozen-20260821"
 SOURCE_COMMIT = "b7bf64937b5825513df86ab963816b73604f102c"
 EXPECTED_EVAL_HASH = "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a"
 EXPECTED_METRIC_CODE_SHA = "addc282e3d48dc5e7b6ccf30205fde58a0c0515cb6a2341fd293a5b5b83da286"
+GPU_PAIR_ENVIRONMENT = ENVIRONMENT_NAMES[3]
+MAX_GPU_INDEX = 31
 INTERFACES = ("I", "Original5", "Original10", "Original15", "Original20", "Original25")
 ANCHOR_STEPS = (5, 10, 15, 20, 25)
 COMMAND_MANIFEST = "manifests/h20/qwen25_7b_original_s128_curve_commands.json"
@@ -91,6 +94,73 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
+def parse_physical_gpu_pair(value: object) -> tuple[int, int]:
+    """Parse one canonical, ascending pair of CUDA physical device indices."""
+    text = str(value)
+    match = re.fullmatch(r"(0|[1-9][0-9]*),(0|[1-9][0-9]*)", text)
+    if match is None:
+        raise ValueError(
+            f"{GPU_PAIR_ENVIRONMENT} must be canonical decimal A,B without spaces"
+        )
+    pair = (int(match.group(1)), int(match.group(2)))
+    if any(index > MAX_GPU_INDEX for index in pair):
+        raise ValueError(
+            f"{GPU_PAIR_ENVIRONMENT} indices must be in 0..{MAX_GPU_INDEX}: {text}"
+        )
+    if pair[0] == pair[1]:
+        raise ValueError(f"{GPU_PAIR_ENVIRONMENT} must contain two distinct GPUs")
+    if pair[0] > pair[1]:
+        raise ValueError(f"{GPU_PAIR_ENVIRONMENT} must be in ascending physical order")
+    return pair
+
+
+def query_physical_gpu_identity(pair: tuple[int, int]) -> list[str]:
+    visible = ",".join(str(index) for index in pair)
+    gpu = subprocess.run(
+        ["nvidia-smi", "-i", visible, "--query-gpu=index,uuid,name",
+         "--format=csv,noheader,nounits"],
+        text=True, capture_output=True, check=False,
+    )
+    if gpu.returncode:
+        raise ValueError(
+            f"cannot identify physical GPU pair {visible}: {gpu.stderr.strip()}"
+        )
+    rows = [line.strip() for line in gpu.stdout.splitlines() if line.strip()]
+    try:
+        indices = [int(row.split(",", 1)[0]) for row in rows]
+        uuids = [row.split(",", 2)[1].strip() for row in rows]
+    except (IndexError, ValueError) as error:
+        raise ValueError(f"malformed nvidia-smi identity rows: {rows}") from error
+    if indices != list(pair) or len(set(uuids)) != 2 or any(not uuid for uuid in uuids):
+        raise ValueError(
+            f"physical GPU identity does not match exact pair {list(pair)}: {rows}"
+        )
+    return rows
+
+
+def validate_current_gpu_binding(
+    manifest: Mapping[str, Any], p0: Mapping[str, Any], resolved: Mapping[str, Any]
+) -> list[str]:
+    """Revalidate requested indices and immutable UUID/name identity after P0."""
+    pair = tuple(int(index) for index in manifest["gpu"]["physical_gpus"])
+    runtime = p0.get("evidence", {}).get("runtime_binding", {})
+    execution = resolved.get("execution_binding", {})
+    if (
+        runtime.get("physical_gpu_pair") != list(pair)
+        or runtime.get("cuda_visible_devices") != manifest["gpu"]["visible_devices"]
+        or execution.get("physical_gpu_pair") != list(pair)
+        or execution.get("cuda_visible_devices") != manifest["gpu"]["visible_devices"]
+    ):
+        raise ValueError("requested physical GPU pair differs from curve P0")
+    current = query_physical_gpu_identity(pair)
+    frozen = runtime.get("physical_gpu_identity")
+    if current != frozen:
+        raise ValueError(
+            f"physical GPU UUID/name identity changed after curve P0: {current} != {frozen}"
+        )
+    return current
+
+
 def resolve_manifest_environment(
     value: Any, environment: Mapping[str, str] | None = None
 ) -> Any:
@@ -100,6 +170,7 @@ def resolve_manifest_environment(
         raise ValueError(f"missing explicit Original curve runtime bindings: {missing}")
     if re.fullmatch(r"[0-9a-f]{40}", str(source[ENVIRONMENT_NAMES[2]])) is None:
         raise ValueError("MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT must be a full Git SHA")
+    pair = parse_physical_gpu_pair(source[GPU_PAIR_ENVIRONMENT])
     for name in ENVIRONMENT_NAMES[:2]:
         if not Path(str(source[name])).is_absolute():
             raise ValueError(f"{name} must be an absolute path")
@@ -118,7 +189,12 @@ def resolve_manifest_environment(
             return result
         return item
 
-    return resolve(value)
+    resolved = resolve(value)
+    if not isinstance(resolved, dict) or not isinstance(resolved.get("gpu"), dict):
+        raise ValueError("Original curve manifest lacks GPU runtime binding")
+    resolved["gpu"]["physical_gpus"] = list(pair)
+    resolved["gpu"]["visible_devices"] = ",".join(str(index) for index in pair)
+    return resolved
 
 
 def load_manifest(
@@ -1053,6 +1129,8 @@ def build_execution_binding(
     return {
         "git_commit": git(repo, "rev-parse", "HEAD"),
         "base_commit": SOURCE_COMMIT,
+        "physical_gpu_pair": list(manifest["gpu"]["physical_gpus"]),
+        "cuda_visible_devices": str(manifest["gpu"]["visible_devices"]),
         "interfaces": list(INTERFACES),
         "base_seed": int(manifest["evaluation"]["base_seed"]),
         "replicas": 1,
@@ -1091,13 +1169,10 @@ def capture_runtime_binding(
     versions, error = _runtime_versions(str(manifest["python"]), repo)
     if error or versions is None:
         raise ValueError(f"runtime import failed: {error}")
-    gpu = subprocess.run(
-        ["nvidia-smi", "-i", "6,7", "--query-gpu=index,uuid,name",
-         "--format=csv,noheader,nounits"],
-        text=True, capture_output=True, check=False,
-    )
-    if gpu.returncode:
-        raise ValueError(f"cannot identify GPU6-7: {gpu.stderr.strip()}")
+    pair = tuple(int(index) for index in manifest["gpu"]["physical_gpus"])
+    if len(pair) != 2:
+        raise ValueError(f"resolved physical GPU pair is not length two: {pair}")
+    gpu_rows = query_physical_gpu_identity(pair)
     return {
         "git_commit": git(repo, "rev-parse", "HEAD"),
         "branch": git(repo, "branch", "--show-current"),
@@ -1106,9 +1181,9 @@ def capture_runtime_binding(
         "model_file_inventory": model_files,
         "model_loading_relevant_paths": model_loading_relevant_paths(model_root),
         "runtime_versions": versions,
-        "physical_gpu_identity": [
-            line.strip() for line in gpu.stdout.splitlines() if line.strip()
-        ],
+        "physical_gpu_pair": list(pair),
+        "cuda_visible_devices": str(manifest["gpu"]["visible_devices"]),
+        "physical_gpu_identity": gpu_rows,
         "stable_i_canary_report_sha256": stable_canary["sha256"],
         "stable_i_canary_ledger_sha256": stable_canary["execution_ledger_sha256"],
         "training_report_sha256": training["report_sha256"],
@@ -1132,6 +1207,16 @@ def _validate_science_contract(manifest: Mapping[str, Any]) -> list[str]:
         failures.append("evaluation interfaces are not the complete preregistered curve")
     if manifest.get("training_source", {}).get("anchor_steps") != list(ANCHOR_STEPS):
         failures.append("checkpoint anchors are not exact 5/10/15/20/25")
+    gpu = manifest.get("gpu", {})
+    if (
+        gpu.get("pair_environment") != GPU_PAIR_ENVIRONMENT
+        or gpu.get("physical_gpus") != list(
+            parse_physical_gpu_pair(gpu.get("visible_devices", ""))
+        )
+    ):
+        failures.append("runtime GPU pair binding is not canonical")
+    if any(gpu.get(name) != 2 for name in ("world_size", "fsdp_size", "trainer_gpus")):
+        failures.append("runtime GPU pair does not preserve exact world-size two")
     scope = manifest.get("scope", {})
     for field in (
         "existing_s128_only", "no_resampling", "no_training", "raw_context_r_not_rerun",
@@ -1339,10 +1424,15 @@ def run_preflight(
             evidence["runtime_binding"] = runtime
             evidence["runtime_binding_sha256"] = canonical_sha256(runtime)
             gpu_rows = runtime["physical_gpu_identity"]
-            if len(gpu_rows) != 2 or [int(row.split(",", 1)[0]) for row in gpu_rows] != [6, 7]:
-                failures.append(f"physical GPUs are not exact 6,7: {gpu_rows}")
+            expected_pair = list(manifest["gpu"]["physical_gpus"])
+            if [int(row.split(",", 1)[0]) for row in gpu_rows] != expected_pair:
+                failures.append(
+                    f"physical GPUs are not exact requested pair {expected_pair}: {gpu_rows}"
+                )
             if any("H20" not in row for row in gpu_rows):
-                failures.append(f"physical GPUs 6,7 are not both H20: {gpu_rows}")
+                failures.append(
+                    f"physical GPUs {expected_pair} are not both H20: {gpu_rows}"
+                )
         except Exception as error:
             failures.append(f"runtime binding failed: {error}")
 
@@ -1384,6 +1474,7 @@ def _current_certificate(
         raise ValueError("curve P0 is not PASS for the expected commit")
     if evidence.get("resolved_manifest_sha256") != sha256_file(resolved_path):
         raise ValueError("curve resolved manifest changed after P0")
+    validate_current_gpu_binding(manifest, p0, resolved)
     return p0, resolved
 
 
@@ -1564,6 +1655,8 @@ def record_interface_event(
         "eval_manifest_hash": resolved["eval_manifest_hash"],
         "execution_binding_sha256": canonical_sha256(resolved["execution_binding"]),
         "runtime_binding_sha256": p0["evidence"]["runtime_binding_sha256"],
+        "physical_gpu_pair": list(manifest["gpu"]["physical_gpus"]),
+        "cuda_visible_devices": str(manifest["gpu"]["visible_devices"]),
         "interface_id": interface_id,
         "mode": plan["mode"],
         "status": "PASS",
@@ -1673,6 +1766,8 @@ def main() -> int:
             "eval_manifest_hash": resolved["eval_manifest_hash"],
             "execution_binding_sha256": canonical_sha256(resolved["execution_binding"]),
             "runtime_binding_sha256": result["evidence"]["runtime_binding_sha256"],
+            "physical_gpu_pair": list(manifest["gpu"]["physical_gpus"]),
+            "cuda_visible_devices": str(manifest["gpu"]["visible_devices"]),
             "interface_id": None, "mode": None, "status": "PASS",
             "artifact": str(p0_path), "artifact_sha256": sha256_file(p0_path),
             "row_count": 128,

@@ -60,6 +60,7 @@ from tools.h20.preflight_qwen25_7b_original_s128_curve import (
     freeze_trainer_configuration,
     git,
     load_manifest,
+    validate_current_gpu_binding,
     sha256_file,
     validate_prior_import,
     validate_training_source,
@@ -491,6 +492,10 @@ def _audit_ledger(
             failures.append(f"ledger record {index} execution binding differs")
         if row.get("runtime_binding_sha256") != runtime_sha:
             failures.append(f"ledger record {index} runtime binding differs")
+        if row.get("physical_gpu_pair") != manifest["gpu"]["physical_gpus"]:
+            failures.append(f"ledger record {index} physical GPU pair differs")
+        if row.get("cuda_visible_devices") != manifest["gpu"]["visible_devices"]:
+            failures.append(f"ledger record {index} CUDA visibility differs")
         if row.get("status") != "PASS":
             failures.append(f"ledger record {index} status is not PASS")
     if records:
@@ -616,6 +621,10 @@ def run_audit(manifest_path: Path) -> dict[str, Any]:
         "replicas": 1, "interfaces": list(INTERFACES),
     }:
         failures.append("curve cohort is not exact six-interface fixed S128")
+    try:
+        validate_current_gpu_binding(manifest, p0, resolved)
+    except Exception as error:
+        failures.append(f"cannot revalidate physical GPU identity: {error}")
     inherited = None
     stable = None
     training = None
@@ -794,6 +803,8 @@ def main() -> int:
             "eval_manifest_hash": EXPECTED_EVAL_HASH,
             "execution_binding_sha256": canonical_sha256(resolved["execution_binding"]),
             "runtime_binding_sha256": p0["evidence"]["runtime_binding_sha256"],
+            "physical_gpu_pair": list(manifest["gpu"]["physical_gpus"]),
+            "cuda_visible_devices": str(manifest["gpu"]["visible_devices"]),
             "interface_id": None, "mode": None, "status": "PASS",
             "decision": result["decision"], "artifact": str(report),
             "artifact_sha256": sha256_file(report), "row_count": 768,

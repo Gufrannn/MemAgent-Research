@@ -3,7 +3,7 @@
   "$id": "original_s128_curve_execution_ledger.schema.json",
   "title": "MemAgent fixed-S128 corrected Original all-anchor curve ledger",
   "type": "object",
-  "required": ["record_type", "experiment_name", "git_commit", "run_id", "recorded_at", "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256", "record_index", "previous_record_sha256", "record_sha256"],
+  "required": ["record_type", "experiment_name", "git_commit", "run_id", "recorded_at", "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256", "physical_gpu_pair", "cuda_visible_devices", "record_index", "previous_record_sha256", "record_sha256"],
   "properties": {
     "record_type": {"enum": ["p0_preflight", "source_import", "interface_start", "interface_finish", "audit_result"]},
     "experiment_name": {"type": "string", "minLength": 1},
@@ -13,6 +13,8 @@
     "eval_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "execution_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "runtime_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "physical_gpu_pair": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 0, "maximum": 31}, {"type": "integer", "minimum": 0, "maximum": 31}], "items": false, "minItems": 2, "maxItems": 2},
+    "cuda_visible_devices": {"type": "string", "pattern": "^(0|[1-9][0-9]*),(0|[1-9][0-9]*)$"},
     "record_index": {"type": "integer", "minimum": 0},
     "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

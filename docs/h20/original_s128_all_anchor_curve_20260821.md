@@ -15,12 +15,13 @@ The primary measurements are normalized exact match and token F1, independently 
 
 ## H20 execution
 
-Use the exact published commit for this branch in `MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT`. GPU execution is not authorized by the manifest itself; start only after GPUs 6 and 7 are allocated to this run.
+Use the exact published commit for this branch in `MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT`. GPU execution is not authorized by the manifest itself. Set `MEMAGENT_ORIGINAL_CURVE_GPU_PAIR` to the exact allocated ascending pair (for example `4,7`). P0 records their indices, UUIDs, names, and visibility order, and revalidates the same physical identities throughout the run. The runner acquires the dynamic-pair protocol's per-GPU locks in ascending order, so overlapping instances of this runner, the migrated commit-retain runner, and future runners using the same contract cannot race through the idle check. Legacy fixed-pair launchers are not migrated and must not run concurrently. Non-contiguous physical indices become logical CUDA devices `0,1`; world size and tensor-parallel semantics remain unchanged.
 
 ```bash
 export MEMAGENT_ORIGINAL_CURVE_WORK_ROOT=/data/cw/memagent_work
 export MEMAGENT_ORIGINAL_CURVE_REPO_DIR=/data/cw/memagent_work/code/MemAgent-Research
 export MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT=<PUBLISHED_COMMIT_SHA>
+export MEMAGENT_ORIGINAL_CURVE_GPU_PAIR=4,7
 
 cd "$MEMAGENT_ORIGINAL_CURVE_REPO_DIR"
 git fetch origin \
@@ -42,7 +43,7 @@ cd "$MEMAGENT_ORIGINAL_CURVE_REPO_DIR"
 bash scripts/h20/run_qwen25_7b_original_s128_curve.sh
 ```
 
-Detach with `Ctrl-A`, then `D`. The runner holds the shared GPU6-7 project lock, processes the six interfaces in preregistered order, and writes the final report only after all 768 terminal outcomes pass independent audit.
+Detach with `Ctrl-A`, then `D`. The runner holds both physical-GPU locks through the idle check and the complete run, processes the six interfaces in preregistered order, and writes the final report only after all 768 terminal outcomes pass independent audit.
 
 Read-only re-audit:
 

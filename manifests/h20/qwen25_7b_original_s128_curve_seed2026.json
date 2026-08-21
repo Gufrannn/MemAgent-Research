@@ -6,7 +6,8 @@
   "ledger_schema": "original_s128_curve_execution_ledger.schema.json",
   "contract": {
     "kind": "existing_s128_corrected_original_all_anchor_curve",
-    "physical_gpus": [6, 7],
+    "physical_gpu_pair_source": "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR",
+    "physical_gpu_count": 2,
     "world_size": 2,
     "execution_revision": "20260821-original-s128-curve-v1"
   },
@@ -14,7 +15,8 @@
     "required_environment": [
       "MEMAGENT_ORIGINAL_CURVE_WORK_ROOT",
       "MEMAGENT_ORIGINAL_CURVE_REPO_DIR",
-      "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT"
+      "MEMAGENT_ORIGINAL_CURVE_EXPECTED_COMMIT",
+      "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR"
     ],
     "automatic_repository_selection": false
   },
@@ -109,8 +111,12 @@
     "metrics_recomputed_from_terminal_output_and_parquet_ground_truth": true
   },
   "gpu": {
-    "declared_whitelist": [6, 7],
-    "visible_devices": "6,7",
+    "pair_environment": "MEMAGENT_ORIGINAL_CURVE_GPU_PAIR",
+    "physical_gpus": [],
+    "visible_devices": "",
+    "require_ascending_distinct_pair": true,
+    "allow_noncontiguous_physical_pair": true,
+    "logical_worker_devices_after_visibility": [0, 1],
     "world_size": 2,
     "fsdp_size": 2,
     "trainer_gpus": 2,
