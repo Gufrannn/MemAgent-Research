@@ -606,8 +606,14 @@ def build_capture_record(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("capture did not certify strict vLLM")
     if require_int(execution.get("tensor_parallel_size"), "execution.tensor_parallel_size") != 2:
         raise ValueError("capture tensor_parallel_size must be 2")
-    if execution.get("physical_gpu_whitelist") != [2, 3]:
-        raise ValueError("capture GPU whitelist must be [2, 3]")
+    physical_gpu_whitelist = execution.get("physical_gpu_whitelist")
+    if (
+        not isinstance(physical_gpu_whitelist, list)
+        or len(physical_gpu_whitelist) != 2
+        or any(type(value) is not int or value < 0 for value in physical_gpu_whitelist)
+        or physical_gpu_whitelist[0] >= physical_gpu_whitelist[1]
+    ):
+        raise ValueError("capture GPU whitelist must be an ascending distinct pair")
     physical_gpu_identity = execution.get("physical_gpu_identity")
     if (
         not isinstance(physical_gpu_identity, list)
@@ -885,7 +891,9 @@ def validate_replay(
     if (
         not isinstance(physical_gpus, list)
         or any(type(value) is not int for value in physical_gpus)
-        or physical_gpus != [2, 3]
+        or len(physical_gpus) != 2
+        or physical_gpus[0] >= physical_gpus[1]
+        or physical_gpus != capture.get("execution", {}).get("physical_gpu_whitelist")
     ):
         errors.append("execution_gpu_contract_mismatch")
     if (
@@ -1713,7 +1721,8 @@ def adjudicate_tetrad_pilot(
                 and result.get("tensor_parallel_size") == 2,
                 isinstance(physical_gpus, list)
                 and all(type(value) is int for value in physical_gpus)
-                and physical_gpus == [2, 3],
+                and len(physical_gpus) == 2
+                and physical_gpus[0] < physical_gpus[1],
                 type(result.get("max_num_seqs")) is int
                 and result.get("max_num_seqs") == 1,
                 result.get("prefix_cache_enabled") is False,

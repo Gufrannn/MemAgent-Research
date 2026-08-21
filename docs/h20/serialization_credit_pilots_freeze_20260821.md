@@ -2,10 +2,17 @@
 
 This closure tests the new serialization-credit idea without training or changing the
 Gate A checkpoint. It uses the existing fixed HotpotQA S128, the project-native
-recurrent memory templates, Qwen2.5-7B-Instruct, strict vLLM 0.8.2, and physical H20
-GPUs 2 and 3. This GPU2-3 variant is isolated from the concurrent S128 job on GPU6-7
-and the COMMIT/RETAIN capture on GPU4-5. It never changes `sources/` and never calls
-an actor update.
+recurrent memory templates, Qwen2.5-7B-Instruct, strict vLLM 0.8.2, and an explicitly
+selected pair of physical H20 GPUs. Startup requires
+`MEMAGENT_SERIAL_CREDIT_GPU_PAIR=A,B` in canonical ascending order. Both cards use the
+shared `locks/memagent_h20_gpu_N.lock` namespace also used by curve/capture jobs. The
+resolved pair, per-card lock paths, UUID/name identities, outputs, child receipts, and
+audit chain are bound together. It never changes `sources/` and never calls an actor
+update.
+
+This admission-only branch descends from `bf4e0be` and includes the stable-evaluation
+identity projection hotfix equivalent to `d273b1f`; neither prerequisite is a training
+result.
 
 ## Scientific boundary
 
@@ -50,9 +57,10 @@ export MEMAGENT_SERIAL_CREDIT_WORK_ROOT=/data/cw/memagent_work
 export MEMAGENT_SERIAL_CREDIT_REPO_DIR=/data/cw/memagent_work/code/MemAgent-Research
 export MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT=<FULL_40_CHAR_COMMIT>
 export MEMAGENT_SERIAL_CREDIT_RUN_ID=scpilot4_20260821r1
+export MEMAGENT_SERIAL_CREDIT_GPU_PAIR=2,3
 
 cd "$MEMAGENT_SERIAL_CREDIT_REPO_DIR"
-git switch h20/qwen25-7b-serialization-credit-gpu23-20260821
+git switch h20/qwen25-7b-serialization-credit-dynamic-gpu-20260822
 test "$(git rev-parse HEAD)" = "$MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT"
 test -z "$(git status --porcelain)"
 

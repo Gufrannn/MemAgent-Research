@@ -13,6 +13,15 @@ set -euo pipefail
 [[ ${MEMAGENT_SERIAL_CREDIT_RUN_ID:-} =~ ^[a-z0-9][a-z0-9_-]{1,31}$ ]] || {
   echo 'SERIAL_CREDIT_NO_GO:P0 set a task-scoped MEMAGENT_SERIAL_CREDIT_RUN_ID' >&2; exit 64;
 }
+[[ ${MEMAGENT_SERIAL_CREDIT_GPU_PAIR:-} =~ ^([0-9]+),([0-9]+)$ ]] || {
+  echo 'SERIAL_CREDIT_NO_GO:P0 set MEMAGENT_SERIAL_CREDIT_GPU_PAIR=A,B explicitly' >&2; exit 59;
+}
+readonly SERIAL_CREDIT_GPU_FIRST=$((10#${BASH_REMATCH[1]}))
+readonly SERIAL_CREDIT_GPU_SECOND=$((10#${BASH_REMATCH[2]}))
+[[ $MEMAGENT_SERIAL_CREDIT_GPU_PAIR == "$SERIAL_CREDIT_GPU_FIRST,$SERIAL_CREDIT_GPU_SECOND" \
+   && $SERIAL_CREDIT_GPU_FIRST -lt $SERIAL_CREDIT_GPU_SECOND ]] || {
+  echo 'SERIAL_CREDIT_NO_GO:P0 GPU pair must be canonical ascending distinct A,B' >&2; exit 58;
+}
 [[ $MEMAGENT_SERIAL_CREDIT_WORK_ROOT == /* && $MEMAGENT_SERIAL_CREDIT_REPO_DIR == /* ]] || {
   echo 'SERIAL_CREDIT_NO_GO:P0 task-scoped paths must be absolute' >&2; exit 69;
 }
@@ -23,7 +32,8 @@ readonly SERIAL_CREDIT_EXPECTED_COMMIT=$MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT
 readonly SERIAL_CREDIT_RUN_ID=$MEMAGENT_SERIAL_CREDIT_RUN_ID
 readonly SERIAL_CREDIT_PYTHON=$SERIAL_CREDIT_WORK_ROOT/.venv/bin/python
 readonly SERIAL_CREDIT_MANIFEST=$SERIAL_CREDIT_REPO_DIR/manifests/h20/qwen25_7b_serialization_credit_pilots_seed2026.json
-readonly SERIAL_CREDIT_LOG_ROOT=$SERIAL_CREDIT_WORK_ROOT/logs/serialization_credit_pilots_gpu23_frozen_20260821/$SERIAL_CREDIT_RUN_ID
+readonly SERIAL_CREDIT_GPU_PAIR_SLUG=gpu${SERIAL_CREDIT_GPU_FIRST}_${SERIAL_CREDIT_GPU_SECOND}
+readonly SERIAL_CREDIT_LOG_ROOT=$SERIAL_CREDIT_WORK_ROOT/logs/serialization_credit_pilots_frozen_20260821/${SERIAL_CREDIT_RUN_ID}_${SERIAL_CREDIT_GPU_PAIR_SLUG}
 readonly SERIAL_CREDIT_CERT_ROOT=$SERIAL_CREDIT_LOG_ROOT/certificates
 readonly SERIAL_CREDIT_P0=$SERIAL_CREDIT_CERT_ROOT/p0_preflight.json
 readonly SERIAL_CREDIT_RESOLVED=$SERIAL_CREDIT_CERT_ROOT/p0_resolved_manifest.json
@@ -46,8 +56,9 @@ readonly SERIAL_CREDIT_TETRAD_RECEIPTS=$SERIAL_CREDIT_TETRAD_ROOT/receipts
 readonly SERIAL_CREDIT_TETRAD_CHILD_LOGS=$SERIAL_CREDIT_TETRAD_ROOT/child_logs
 readonly SERIAL_CREDIT_TETRAD_REPORT=$SERIAL_CREDIT_TETRAD_ROOT/adjudication.json
 readonly SERIAL_CREDIT_FINAL_REPORT=$SERIAL_CREDIT_CERT_ROOT/serialization_credit_pilot_final_report.json
-readonly SERIAL_CREDIT_GPUS=2,3
-readonly SERIAL_CREDIT_LOCK=$SERIAL_CREDIT_WORK_ROOT/locks/memagent_serial_credit_gpu_2_3.lock
+readonly SERIAL_CREDIT_GPUS=$MEMAGENT_SERIAL_CREDIT_GPU_PAIR
+readonly SERIAL_CREDIT_LOCK_FIRST=$SERIAL_CREDIT_WORK_ROOT/locks/memagent_h20_gpu_${SERIAL_CREDIT_GPU_FIRST}.lock
+readonly SERIAL_CREDIT_LOCK_SECOND=$SERIAL_CREDIT_WORK_ROOT/locks/memagent_h20_gpu_${SERIAL_CREDIT_GPU_SECOND}.lock
 
 serial_credit_sanitize_inherited_environment() {
   local inherited prefix
@@ -74,7 +85,7 @@ serial_credit_require_checkout() {
   [[ $(cd -- "$SERIAL_CREDIT_REPO_DIR" && pwd -P) == "$script_repo" ]] || {
     echo 'SERIAL_CREDIT_NO_GO:P0 invoked checkout differs from explicit repository' >&2; exit 68;
   }
-  [[ $(cd "$SERIAL_CREDIT_REPO_DIR" && git branch --show-current) == h20/qwen25-7b-serialization-credit-gpu23-20260821 ]] || {
+  [[ $(cd "$SERIAL_CREDIT_REPO_DIR" && git branch --show-current) == h20/qwen25-7b-serialization-credit-dynamic-gpu-20260822 ]] || {
     echo 'SERIAL_CREDIT_NO_GO:P0 wrong branch' >&2; exit 70;
   }
   [[ -z $(cd "$SERIAL_CREDIT_REPO_DIR" && git status --porcelain) ]] || {
@@ -100,10 +111,14 @@ serial_credit_acquire_lock() {
   command -v flock >/dev/null || {
     echo 'SERIAL_CREDIT_NO_GO:P0 flock is required' >&2; exit 63;
   }
-  mkdir -p "$(dirname "$SERIAL_CREDIT_LOCK")"
-  exec 8>"$SERIAL_CREDIT_LOCK"
+  mkdir -p "$(dirname "$SERIAL_CREDIT_LOCK_FIRST")"
+  exec 8>"$SERIAL_CREDIT_LOCK_FIRST"
   flock -n 8 || {
-    echo 'SERIAL_CREDIT_NO_GO:P0 GPU2-3 project lock is held' >&2; exit 62;
+    echo "SERIAL_CREDIT_NO_GO:P0 GPU$SERIAL_CREDIT_GPU_FIRST project lock is held" >&2; exit 62;
+  }
+  exec 9>"$SERIAL_CREDIT_LOCK_SECOND"
+  flock -n 9 || {
+    echo "SERIAL_CREDIT_NO_GO:P0 GPU$SERIAL_CREDIT_GPU_SECOND project lock is held" >&2; exit 62;
   }
 }
 
@@ -114,7 +129,7 @@ serial_credit_require_idle() {
   local processes
   processes=$(nvidia-smi -i "$SERIAL_CREDIT_GPUS" --query-compute-apps=pid --format=csv,noheader,nounits)
   [[ -z ${processes//[[:space:]]/} ]] || {
-    echo "SERIAL_CREDIT_NO_GO:P0 GPU2-3 are busy; no process was changed: $processes" >&2; exit 79;
+    echo "SERIAL_CREDIT_NO_GO:P0 GPU$SERIAL_CREDIT_GPUS are busy; no process was changed: $processes" >&2; exit 79;
   }
 }
 
@@ -125,7 +140,7 @@ serial_credit_wait_idle() {
     [[ -z ${processes//[[:space:]]/} ]] && return 0
     sleep 2
   done
-  echo "SERIAL_CREDIT_NO_GO:CLEANUP GPU2-3 did not become idle: $processes" >&2
+  echo "SERIAL_CREDIT_NO_GO:CLEANUP GPU$SERIAL_CREDIT_GPUS did not become idle: $processes" >&2
   return 81
 }
 

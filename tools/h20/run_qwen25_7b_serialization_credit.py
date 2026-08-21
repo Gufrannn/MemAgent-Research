@@ -61,7 +61,7 @@ def _runtime(
     manifest = load_manifest(manifest_path)
     _, resolved = validate_p0(manifest_path)
     if os.environ.get("CUDA_VISIBLE_DEVICES") != manifest["gpu"]["visible_devices"]:
-        raise ValueError("CUDA_VISIBLE_DEVICES must be exactly the frozen physical GPU list 2,3")
+        raise ValueError("CUDA_VISIBLE_DEVICES must equal the explicit frozen physical GPU pair")
     if os.environ.get("CUDA_DEVICE_ORDER") != manifest["gpu"]["cuda_device_order"]:
         raise ValueError("CUDA_DEVICE_ORDER must be exactly the frozen PCI_BUS_ID setting")
     if os.environ.get("VLLM_USE_V1") != manifest["backend"]["VLLM_USE_V1"]:
@@ -81,7 +81,7 @@ def _runtime(
         check=False,
     )
     if completed.returncode:
-        raise ValueError(f"cannot authenticate physical GPU2-3 identity: {completed.stderr.strip()}")
+        raise ValueError(f"cannot authenticate selected physical GPU identity: {completed.stderr.strip()}")
     physical_gpu_identity = [
         line.strip() for line in completed.stdout.splitlines() if line.strip()
     ]
@@ -188,10 +188,10 @@ def _engine_evidence(
     return {
         "strict_vllm": True,
         "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [2, 3],
+        "physical_gpu_whitelist": manifest["gpu"]["physical_whitelist"],
         "physical_gpu_identity": physical_gpu_identity,
         "cuda_device_order": "PCI_BUS_ID",
-        "visible_devices": "2,3",
+        "visible_devices": manifest["gpu"]["visible_devices"],
         "prefix_cache_enabled": False,
         "single_request_only": True,
         "max_num_seqs": 1,
@@ -537,7 +537,7 @@ def replay_smsb(
         "finish_reason": completion.finish_reason,
         "stop_reason": completion.stop_reason,
         "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [2, 3],
+        "physical_gpu_whitelist": manifest["gpu"]["physical_whitelist"],
         "physical_gpu_identity": physical_gpu_identity,
         "cuda_device_order": os.environ["CUDA_DEVICE_ORDER"],
         "process_instance_uuid": PROCESS_INSTANCE_UUID,
@@ -936,7 +936,7 @@ def run_tetrad_request(
         "fresh_engine_verified": True,
         "single_request_execution_verified": True,
         "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [2, 3],
+        "physical_gpu_whitelist": manifest["gpu"]["physical_whitelist"],
         "physical_gpu_identity": physical_gpu_identity,
         "cuda_device_order": os.environ["CUDA_DEVICE_ORDER"],
         "max_num_seqs": 1,

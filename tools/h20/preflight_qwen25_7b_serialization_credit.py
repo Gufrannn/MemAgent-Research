@@ -52,6 +52,7 @@ REQUIRED_ENV = (
     "MEMAGENT_SERIAL_CREDIT_REPO_DIR",
     "MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT",
     "MEMAGENT_SERIAL_CREDIT_RUN_ID",
+    "MEMAGENT_SERIAL_CREDIT_GPU_PAIR",
 )
 CODE_OBJECTS = (
     "recurrent/impls/memory.py",
@@ -86,6 +87,16 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
+def parse_gpu_pair(value: str) -> tuple[list[int], str]:
+    match = re.fullmatch(r"([0-9]+),([0-9]+)", value)
+    if match is None:
+        raise ValueError("MEMAGENT_SERIAL_CREDIT_GPU_PAIR must be A,B")
+    first, second = int(match.group(1)), int(match.group(2))
+    if value != f"{first},{second}" or first >= second:
+        raise ValueError("GPU pair must be canonical ascending distinct A,B")
+    return [first, second], f"gpu{first}_{second}"
+
+
 def resolve_manifest_environment(
     value: Any, environment: Mapping[str, str] | None = None
 ) -> Any:
@@ -97,6 +108,7 @@ def resolve_manifest_environment(
     repo = Path(str(source[REQUIRED_ENV[1]]))
     expected_commit = str(source[REQUIRED_ENV[2]])
     run_id = str(source[REQUIRED_ENV[3]])
+    gpu_pair, gpu_pair_slug = parse_gpu_pair(str(source[REQUIRED_ENV[4]]))
     if not work_root.is_absolute() or not repo.is_absolute():
         raise ValueError("task-scoped runtime paths must be absolute")
     if re.fullmatch(r"[0-9a-f]{40}", expected_commit) is None:
@@ -107,6 +119,10 @@ def resolve_manifest_environment(
         "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}": str(work_root),
         "${MEMAGENT_SERIAL_CREDIT_REPO_DIR}": str(repo),
         "${MEMAGENT_SERIAL_CREDIT_RUN_ID}": run_id,
+        "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR}": f"{gpu_pair[0]},{gpu_pair[1]}",
+        "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}": gpu_pair_slug,
+        "${MEMAGENT_SERIAL_CREDIT_GPU_FIRST}": str(gpu_pair[0]),
+        "${MEMAGENT_SERIAL_CREDIT_GPU_SECOND}": str(gpu_pair[1]),
     }
 
     def resolve(item: Any) -> Any:
@@ -115,6 +131,8 @@ def resolve_manifest_environment(
         if isinstance(item, list):
             return [resolve(child) for child in item]
         if isinstance(item, str):
+            if item == "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_AS_LIST}":
+                return list(gpu_pair)
             result = item
             for placeholder, replacement in replacements.items():
                 result = result.replace(placeholder, replacement)
@@ -445,10 +463,20 @@ def _validate_numeric_contract(manifest: Mapping[str, Any]) -> None:
     if not isinstance(whitelist, list) or [
         require_int(value, f"gpu.physical_whitelist[{index}]", minimum=0)
         for index, value in enumerate(whitelist)
-    ] != [2, 3]:
-        raise ValueError("GPU physical whitelist must be the strict integer array [2, 3]")
-    if gpu.get("visible_devices") != "2,3":
-        raise ValueError("GPU visible_devices must be exactly 2,3")
+    ] != whitelist or len(whitelist) != 2 or whitelist[0] >= whitelist[1]:
+        raise ValueError("GPU physical whitelist must be two ascending distinct integers")
+    if gpu.get("visible_devices") != ",".join(str(index) for index in whitelist):
+        raise ValueError("GPU visible_devices differs from the explicit physical pair")
+    if gpu.get("pair_environment") != "MEMAGENT_SERIAL_CREDIT_GPU_PAIR":
+        raise ValueError("GPU pair environment binding drifted")
+    if gpu.get("pair_slug") != f"gpu{whitelist[0]}_{whitelist[1]}":
+        raise ValueError("GPU pair slug binding drifted")
+    expected_locks = [
+        f"{manifest['work_root']}/locks/memagent_h20_gpu_{index}.lock"
+        for index in whitelist
+    ]
+    if gpu.get("project_locks") != expected_locks:
+        raise ValueError("per-GPU lock evidence binding drifted")
     if require_int(gpu.get("tensor_parallel_size"), "gpu.tensor_parallel_size", minimum=1) != 2:
         raise ValueError("tensor parallel size must be 2")
     if require_int(gpu.get("max_num_seqs"), "gpu.max_num_seqs", minimum=1) != 1:
@@ -707,7 +735,9 @@ def run_preflight(
     commands_path = repo / manifest["command_manifest"]
     schema_path = repo / manifest["ledger_schema"]
     try:
-        commands = json.loads(commands_path.read_text(encoding="utf-8"))
+        commands = resolve_manifest_environment(
+            json.loads(commands_path.read_text(encoding="utf-8"))
+        )
         json.loads(schema_path.read_text(encoding="utf-8"))
         if commands["required_sequence"] != [
             "p0", "smsb_capture", "smsb_12_fresh_replays", "smsb_adjudication",
@@ -810,11 +840,22 @@ def run_preflight(
             check=False,
         )
         if completed.returncode:
-            failures.append(f"cannot identify GPU2-3: {completed.stderr.strip()}")
+            failures.append(f"cannot identify GPU{manifest['gpu']['visible_devices']}: {completed.stderr.strip()}")
         else:
             gpu_identity = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
             if len(gpu_identity) != 2 or any("NVIDIA H20" not in line for line in gpu_identity):
-                failures.append(f"GPU2-3 are not both NVIDIA H20: {gpu_identity}")
+                failures.append(f"selected GPUs are not both NVIDIA H20: {gpu_identity}")
+            else:
+                try:
+                    observed_indices = [
+                        int(line.split(",", 1)[0].strip()) for line in gpu_identity
+                    ]
+                except ValueError:
+                    observed_indices = []
+                if observed_indices != manifest["gpu"]["physical_whitelist"]:
+                    failures.append(
+                        "observed physical GPU indices differ from the explicit pair"
+                    )
     evidence["runtime_versions"] = runtime_versions
     evidence["physical_gpu_identity"] = gpu_identity
 
@@ -910,6 +951,12 @@ def run_preflight(
                 ).hexdigest(),
                 "engine_config": engine_config,
                 "engine_config_sha256": canonical_sha256(engine_config),
+                "execution_resources": {
+                    "gpu_pair_environment": "MEMAGENT_SERIAL_CREDIT_GPU_PAIR",
+                    "gpu_pair_slug": manifest["gpu"]["pair_slug"],
+                    "project_locks": manifest["gpu"]["project_locks"],
+                    "output_root": manifest["paths"]["log_root"],
+                },
                 "generation_capacity_audit": generation_capacity_audit,
                 "generation_capacity_audit_sha256": canonical_sha256(
                     generation_capacity_audit

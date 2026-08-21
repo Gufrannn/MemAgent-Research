@@ -540,7 +540,16 @@ def _verify_parent_credential_record(
     ]
     expected_gpu_identity = resolved["runtime_binding"]["physical_gpu_identity"]
     if (
-        validated_receipt.get("pre_child_full_model_sha_verified") is not True
+        result.get("physical_gpu_whitelist", result.get("execution", {}).get("physical_gpu_whitelist"))
+        != manifest["gpu"]["physical_whitelist"]
+        or ",".join(
+            str(index) for index in manifest["gpu"]["physical_whitelist"]
+        ) != manifest["gpu"]["visible_devices"]
+        or resolved["execution_binding"].get("execution_resources", {}).get("project_locks")
+        != manifest["gpu"]["project_locks"]
+        or resolved["execution_binding"].get("execution_resources", {}).get("output_root")
+        != manifest["paths"]["log_root"]
+        or validated_receipt.get("pre_child_full_model_sha_verified") is not True
         or validated_receipt.get("post_child_full_model_sha_verified") is not True
         or validated_receipt.get("pre_child_model_manifest_sha256")
         != expected_model_manifest

@@ -39,6 +39,8 @@ from tools.h20.preflight_qwen25_7b_serialization_credit import (
     select_pilot_rows,
     validate_child_credential,
     verify_current_binding,
+    load_manifest,
+    parse_gpu_pair,
 )
 from tools.h20.audit_qwen25_7b_serialization_credit import (
     _authenticate_authoring_from_s128,
@@ -1659,12 +1661,25 @@ def test_ledger_schema_rejects_numeric_strings_and_bool_indices(tmp_path: Path) 
 
 
 def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() -> None:
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    commands = json.loads(COMMANDS.read_text(encoding="utf-8"))
-    assert manifest["gpu"]["physical_whitelist"] == [2, 3]
-    assert manifest["gpu"]["visible_devices"] == "2,3"
-    assert commands["execution"]["physical_gpus"] == [2, 3]
-    assert commands["execution"]["visible_devices"] == "2,3"
+    environment = {
+        "MEMAGENT_SERIAL_CREDIT_WORK_ROOT": "/tmp/memagent-test",
+        "MEMAGENT_SERIAL_CREDIT_REPO_DIR": str(REPO),
+        "MEMAGENT_SERIAL_CREDIT_EXPECTED_COMMIT": "a" * 40,
+        "MEMAGENT_SERIAL_CREDIT_RUN_ID": "dynamic_pair_test",
+        "MEMAGENT_SERIAL_CREDIT_GPU_PAIR": "4,7",
+    }
+    manifest = load_manifest(MANIFEST, environment)
+    raw_commands = json.loads(COMMANDS.read_text(encoding="utf-8"))
+    from tools.h20.preflight_qwen25_7b_serialization_credit import resolve_manifest_environment
+    commands = resolve_manifest_environment(raw_commands, environment)
+    assert manifest["gpu"]["physical_whitelist"] == [4, 7]
+    assert manifest["gpu"]["visible_devices"] == "4,7"
+    assert commands["execution"]["physical_gpus"] == [4, 7]
+    assert commands["execution"]["visible_devices"] == "4,7"
+    assert manifest["gpu"]["project_locks"] == [
+        "/tmp/memagent-test/locks/memagent_h20_gpu_4.lock",
+        "/tmp/memagent-test/locks/memagent_h20_gpu_7.lock",
+    ]
     assert commands["branch"] == manifest["branch"]
     assert all(type(value) is int for value in manifest["gpu"]["physical_whitelist"])
     assert manifest["gpu"]["tensor_parallel_size"] == 2
@@ -1687,6 +1702,13 @@ def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() ->
     assert commands["execution"]["automatic_post_write_readonly_reaudit"] is True
     assert commands["execution"]["unique_parent_supervisor_pid_required"] is True
     assert commands["execution"]["unique_child_pid_required"] is True
+    assert commands["execution"]["per_gpu_locking"] is True
+
+
+@pytest.mark.parametrize("value", ["", "2", "2,2", "3,2", "02,3", "a,b"])
+def test_dynamic_gpu_pair_rejects_noncanonical_or_nondistinct_values(value: str) -> None:
+    with pytest.raises(ValueError):
+        parse_gpu_pair(value)
 
 
 def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> None:

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "frozen_at": "2026-08-21T00:00:00+08:00",
-  "branch": "h20/qwen25-7b-serialization-credit-gpu23-20260821",
-  "base_commit": "b7bf64937b5825513df86ab963816b73604f102c",
+  "branch": "h20/qwen25-7b-serialization-credit-dynamic-gpu-20260822",
+  "base_commit": "bf4e0bea79a34d02febf8328be74bc244635ecea",
   "ledger_schema": "serialization_credit_pilot_execution_ledger.schema.json",
   "command_manifest": "manifests/h20/qwen25_7b_serialization_credit_pilots_commands.json",
   "runtime_binding": {
@@ -80,8 +80,14 @@
     "execution_ledger_total_record_count": 6
   },
   "gpu": {
-    "physical_whitelist": [2, 3],
-    "visible_devices": "2,3",
+    "pair_environment": "MEMAGENT_SERIAL_CREDIT_GPU_PAIR",
+    "pair_slug": "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}",
+    "physical_whitelist": "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_AS_LIST}",
+    "visible_devices": "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR}",
+    "project_locks": [
+      "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/locks/memagent_h20_gpu_${MEMAGENT_SERIAL_CREDIT_GPU_FIRST}.lock",
+      "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/locks/memagent_h20_gpu_${MEMAGENT_SERIAL_CREDIT_GPU_SECOND}.lock"
+    ],
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "max_num_seqs": 1,
@@ -142,26 +148,26 @@
     "audit32_not_started": true
   },
   "paths": {
-    "log_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}",
-    "certificate_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates",
-    "p0_certificate": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/p0_preflight.json",
-    "resolved_manifest": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/p0_resolved_manifest.json",
-    "parent_authority_secret": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/parent_receipt_authority.secret",
-    "readonly_reaudit": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/serialization_credit_pilot_readonly_reaudit.json",
-    "execution_ledger": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/serialization_credit_pilot_execution_ledger.jsonl",
-    "smsb_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb",
-    "smsb_captures": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/captures.jsonl",
-    "smsb_replays": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/replays",
-    "smsb_receipts": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/receipts",
-    "smsb_child_logs": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/child_logs",
-    "smsb_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/adjudication.json",
-    "tetrad_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad",
-    "tetrad_authoring": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/authoring.jsonl",
-    "tetrad_manifest": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/manifest.jsonl",
-    "tetrad_results": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/results",
-    "tetrad_receipts": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/receipts",
-    "tetrad_child_logs": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/child_logs",
-    "tetrad_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/tetrad/adjudication.json",
-    "final_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_gpu23_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/serialization_credit_pilot_final_report.json"
+    "log_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}",
+    "certificate_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates",
+    "p0_certificate": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates/p0_resolved_manifest.json",
+    "parent_authority_secret": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates/parent_receipt_authority.secret",
+    "readonly_reaudit": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates/serialization_credit_pilot_readonly_reaudit.json",
+    "execution_ledger": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/serialization_credit_pilot_execution_ledger.jsonl",
+    "smsb_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb",
+    "smsb_captures": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb/captures.jsonl",
+    "smsb_replays": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb/replays",
+    "smsb_receipts": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb/receipts",
+    "smsb_child_logs": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb/child_logs",
+    "smsb_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/smsb/adjudication.json",
+    "tetrad_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad",
+    "tetrad_authoring": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/authoring.jsonl",
+    "tetrad_manifest": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/manifest.jsonl",
+    "tetrad_results": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/results",
+    "tetrad_receipts": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/receipts",
+    "tetrad_child_logs": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/child_logs",
+    "tetrad_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/tetrad/adjudication.json",
+    "final_report": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}_${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_SLUG}/certificates/serialization_credit_pilot_final_report.json"
   }
 }

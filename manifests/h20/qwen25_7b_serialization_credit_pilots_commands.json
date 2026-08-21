@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "branch": "h20/qwen25-7b-serialization-credit-gpu23-20260821",
+  "branch": "h20/qwen25-7b-serialization-credit-dynamic-gpu-20260822",
   "required_sequence": [
     "p0",
     "smsb_capture",
@@ -20,8 +20,11 @@
     "tetrad": "scripts/h20/run_qwen25_7b_tetrad4.sh"
   },
   "execution": {
-    "physical_gpus": [2, 3],
-    "visible_devices": "2,3",
+    "gpu_pair_environment": "MEMAGENT_SERIAL_CREDIT_GPU_PAIR",
+    "physical_gpus": "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR_AS_LIST}",
+    "visible_devices": "${MEMAGENT_SERIAL_CREDIT_GPU_PAIR}",
+    "per_gpu_locking": true,
+    "per_gpu_lock_namespace": "locks/memagent_h20_gpu_N.lock",
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "rollout_and_reader_backend": "strict_vllm",
