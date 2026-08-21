@@ -22,6 +22,8 @@ export MEMAGENT_HDR_WORK_ROOT=/data/cw/memagent_work
 export MEMAGENT_HDR_EXPECTED_COMMIT=<RELEASE_EXACT_SHA>
 export GPU_PAIR=2,5
 export HDR_RUN_ID=hdr-seed2026-v1
+export MEMAGENT_HDR_BASELINE_BUNDLE_SHA256=<CONTROLLER_AUTHORIZED_BASELINE_BUNDLE_SHA256>
+export MEMAGENT_HDR_REVIEW_SHA256=<INDEPENDENT_REVIEW_ATTESTATION_SHA256>
 export HDR_REPO=$PWD
 export HDR_CERT=$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/certificates
 export HDR_LEDGER=$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/hdr_execution_ledger.jsonl
@@ -41,10 +43,18 @@ $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/prepare_hdr_horizon_suite.py 
   --receipts "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/receipts.json" \
   --roots "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/eval_roots.json"
 
-# train_roots.json is produced from the frozen train split by the identical
-# preparer invocation (a separate output path); only its roots file is used here.
+$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/prepare_hdr_root_ids.py \
+  --input "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet" \
+  --input-sha256 798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8 \
+  --output "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/train_roots.json"
+
 $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py e0 \
   --manifest manifests/h20/qwen25_7b_hdr_memrl_seed2026.json \
+  --accepted-manifest manifests/h20/qwen25_7b_original_t25_seed2026.json \
+  --source-parquet "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --train-source-parquet "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet" \
+  --suite-parquet "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/horizon_suite.parquet" \
+  --tokenizer-root "$MEMAGENT_HDR_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
   --receipts "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/receipts.json" \
   --train-roots "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/train_roots.json" \
   --eval-roots "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/e0/eval_roots.json" \
@@ -75,36 +85,34 @@ $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py baseline
 # {"status":"PASS","decision":"PAPER_FRAMING_GO"}. No local bypass exists.
 
 HDR_TARGET_STEP=5 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
-# Merge the actor read-only, then run run_hdr_strict_vllm_eval.py on the fixed
-# S128 nominal suite and full registered+unseen horizon suite. The same evaluator
-# is used for every anchor. It emits raw prediction/gold rows; no aggregate is trusted.
-$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python scripts/model_merger.py --backend fsdp \
-  --hf_model_path "$MEMAGENT_HDR_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
-  --local_dir "$MEMAGENT_HDR_WORK_ROOT/logs/memory_agent/qwen25_7b_hdr_memrl_seed2026_$HDR_RUN_ID/global_step_5/actor" \
-  --target_dir "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_merged"
-CUDA_VISIBLE_DEVICES=$GPU_PAIR $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/run_hdr_strict_vllm_eval.py \
-  --suite "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_horizon_suite.parquet" \
-  --model "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_merged" \
-  --output "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_horizons.json"
-CUDA_VISIBLE_DEVICES=$GPU_PAIR $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/run_hdr_strict_vllm_eval.py \
-  --suite "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_nominal_h8.parquet" \
-  --model "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_merged" \
-  --output "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_s128_nominal.json"
-$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py health-gate \
-  --anchor 5 --baseline-import "$HDR_CERT/baseline_import.json" \
-  --method-s128 "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_s128_nominal.json" \
-  --method-horizons "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/t5_horizons.json" \
-  --original-horizons "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/original_t5_horizons_authority.json" \
-  --nominal 8 --unseen 10 24 --output "$HDR_CERT/t5_health.json" --ledger "$HDR_LEDGER"
-
-# The launcher requires t5_health PASS before T10. Repeat merge, strict raw
-# S128+horizon evaluation, and health-gate at T10/T15/T20 before each continuation.
+HDR_ANCHOR=5 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=10 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=10 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=15 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=15 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=20 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=20 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=25 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 # T25 health-gate additionally requires --uniform-horizons from the independently
 # committed, budget-matched uniform-ERM variant; it enforces the registered +2pp gate.
+
+# Budget-matched uniform ERM is a separate experiment identity/output/ledger.
+# Run it from fresh base with its own immutable run ID before the DRO T25 audit:
+export HDR_VARIANT=uniform HDR_RUN_ID=hdr-uniform-seed2026-v1
+HDR_TARGET_STEP=5 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=5 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
+HDR_TARGET_STEP=10 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=10 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
+HDR_TARGET_STEP=15 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=15 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
+HDR_TARGET_STEP=20 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=20 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
+HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=25 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
+# Copy nothing blindly: register the uniform T25 raw evaluation SHA in the DRO
+# authority bundle, then expose its audited JSON at the exact path required by
+# the DRO anchor auditor. Restore HDR_VARIANT=dro and its original HDR_RUN_ID.
 
 $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py final-audit \
   --run-root "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID" \

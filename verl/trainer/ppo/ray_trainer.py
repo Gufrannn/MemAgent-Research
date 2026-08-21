@@ -1299,6 +1299,13 @@ class RayPPOTrainer:
                 "inventory": checkpoint_inventory(local_global_step_folder),
             }
             write_json(os.path.join(local_global_step_folder, "hdr_checkpoint_binding.json"), binding)
+            from recurrent.research.gate_a_execution import append_jsonl, sha256_file
+            append_jsonl(os.path.join(str(self.config.trainer.default_local_dir), "hdr_execution_ledger.jsonl"), {
+                "record_type": "checkpoint", "global_step": int(self.global_steps),
+                "git_commit": binding["git_commit"], "run_id": binding["run_id"],
+                "gpu_pair": binding["gpu_pair"], "manifest_sha256": binding["manifest_sha256"],
+                "checkpoint_binding_sha256": sha256_file(os.path.join(local_global_step_folder, "hdr_checkpoint_binding.json")),
+            })
 
         # latest checkpointed iteration tracker (for atomic usage)
         local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
@@ -2118,7 +2125,10 @@ class RayPPOTrainer:
                                             raise RuntimeError("HDR resume missing checkpointed dual state")
                                         with open(state_path, encoding="utf-8") as stream:
                                             self._hdr_dro = OnlineGroupDRO.from_state_dict(json.load(stream))
-                                state = self._hdr_dro.update(losses, counts)
+                                if bool(hdr_cfg.get("dro_enabled", True)):
+                                    state = self._hdr_dro.update(losses, counts)
+                                else:
+                                    state = self._hdr_dro.state_dict()
                                 multipliers = torch.tensor(
                                     self._hdr_dro.sample_multipliers(horizon_ids),
                                     dtype=advantage_scalar.dtype, device=advantage_scalar.device,
@@ -2131,7 +2141,11 @@ class RayPPOTrainer:
                                     str(self.config.trainer.default_local_dir), "hdr_execution_ledger.jsonl"
                                 )
                                 record = {"record_type": "dro_update", "global_step": int(self.global_steps),
-                                          "losses": losses, "counts": counts, "state": state}
+                                          "losses": losses, "counts": counts, "state": state,
+                                          "git_commit": os.environ.get("MEMAGENT_HDR_EXPECTED_COMMIT"),
+                                          "run_id": os.environ.get("HDR_RUN_ID"), "gpu_pair": os.environ.get("GPU_PAIR"),
+                                          "manifest_sha256": os.environ.get("HDR_MANIFEST_SHA256"), "seed": 2026,
+                                          "trajectory_budget": int(sum(counts.values()))}
                                 from recurrent.research.gate_a_execution import append_jsonl
                                 append_jsonl(ledger_path, record)
                             advantage_scalar = advantage_scalar[sample_index]

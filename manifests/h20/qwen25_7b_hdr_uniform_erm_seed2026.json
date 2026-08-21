@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "variant": "uniform_multi_horizon_erm",
+  "parent_method_manifest": "manifests/h20/qwen25_7b_hdr_memrl_seed2026.json",
+  "scientific_difference": {"algorithm.hdr_memrl.dro_enabled": false},
+  "shared_frozen_horizons": [8, 12, 16, 32],
+  "budget": {"train_batch_size": 4, "rollout_n": 2, "trajectories_per_update": 8},
+  "training": {"source": "fresh_base", "first_method_update": 1, "anchors": [5, 10, 15, 20, 25]},
+  "experiment_identity": "qwen25_7b_hdr_memrl_uniform_seed2026_${HDR_RUN_ID}",
+  "output_policy": "separate_run_id_output_ledger_checkpoints_and_evaluation",
+  "gpu_authorized_by_manifest_alone": false
+}

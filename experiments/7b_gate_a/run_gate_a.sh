@@ -187,11 +187,13 @@ if [[ ${HDR_ENABLE:-0} == 1 ]]; then
   : "${HDR_ETA:?HDR_ETA required}"
   : "${HDR_RHO:?HDR_RHO required}"
   : "${HDR_MIN_HORIZON:?HDR_MIN_HORIZON required}"
+  : "${HDR_DRO_ENABLED:?HDR_DRO_ENABLED required}"
   TRAINER_OVERRIDES+=(
     +recurrent.memory.config.hdr_enable=true
     "+recurrent.memory.config.hdr_dataset_sha256=$HDR_DATASET_SHA256"
     "+recurrent.memory.config.hdr_min_horizon=$HDR_MIN_HORIZON"
     +algorithm.hdr_memrl.enabled=true
+    "+algorithm.hdr_memrl.dro_enabled=$HDR_DRO_ENABLED"
     "+algorithm.hdr_memrl.horizons=$HDR_HORIZONS"
     "+algorithm.hdr_memrl.scheduler_seed=$HDR_SCHEDULER_SEED"
     "+algorithm.hdr_memrl.eta=$HDR_ETA"

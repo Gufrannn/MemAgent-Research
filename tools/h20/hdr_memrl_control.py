@@ -7,7 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from recurrent.research.hdr_memrl import (HDRContractError, HorizonReceipt,
-    aggregate_predictions, evaluate_horizons, prediction_metrics, validate_evidence_equated, write_json)
+    aggregate_predictions, build_horizon_receipt, evaluate_horizons, prediction_metrics,
+    stable_root_id, validate_evidence_equated, write_json)
 
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -58,11 +59,46 @@ def preflight(a):
     write_json(a.output,cert); append(a.ledger,{"record_type":"p0",**cert}); print(json.dumps(cert,sort_keys=True))
 
 def e0(a):
-    rows=load(a.receipts); hs=load(a.manifest)["horizons"]["train"]
+    m=load(a.manifest); rows=load(a.receipts); hs=m["horizons"]["train"]
     rs=[HorizonReceipt(str(x["root_id"]),int(x["horizon"]),str(x["terminal_query_sha256"]),
         str(x["evidence_sha256"]),int(x["evidence_token_count"]),tuple(map(tuple,x["chunk_bounds"])),tuple(x["chunk_sha256"]),tuple(tuple(map(int,c)) for c in x["chunks"])) for x in rows]
     report=validate_evidence_equated(rs,hs)
+    # Recompute every receipt from the frozen source parquet and tokenizer;
+    # internal hash consistency alone is not evidence authority.
+    authority=load(a.accepted_manifest)
+    if digest(a.source_parquet)!=authority["data"]["validation_sha256"]: raise HDRContractError("E0 source parquet authority mismatch")
+    model_root=Path(a.tokenizer_root)
+    for item in authority["model"]["files"]:
+        if item["path"] in {"tokenizer.json","tokenizer_config.json","vocab.json","merges.txt"}:
+            p=model_root/item["path"]
+            if not p.is_file() or digest(p)!=item["sha256"]: raise HDRContractError(f"E0 tokenizer inventory drift: {p}")
+    import pandas as pd
+    from transformers import AutoTokenizer
+    source=pd.read_parquet(a.source_parquet); suite=pd.read_parquet(a.suite_parquet)
+    tok=AutoTokenizer.from_pretrained(a.tokenizer_root,local_files_only=True)
+    source_by_index={int(row.get("extra_info",{}).get("index",pos)):row for pos,row in source.iterrows()}
+    recomputed=[]
+    for pos,row in suite.iterrows():
+        prompt=row["prompt"]; query=prompt[0]["content"] if isinstance(prompt,(list,tuple)) else prompt.tolist()[0]["content"]
+        idx=int(row.get("extra_info",{}).get("index",pos)); original=source_by_index.get(idx)
+        if original is None or str(original["context"])!=str(row["context"]): raise HDRContractError("suite row not bound to source context/index")
+        op=original["prompt"]; oq=op[0]["content"] if isinstance(op,(list,tuple)) else op.tolist()[0]["content"]
+        if oq!=query: raise HDRContractError("suite terminal query differs from source")
+        tokens=tok.encode(str(row["context"]),add_special_tokens=False)
+        if len(tokens)>40000: raise HDRContractError("E0 refuses source truncation")
+        rid=stable_root_id(dataset_sha256=authority["data"]["validation_sha256"],source_index=idx,query=query)
+        if str(row.get("stable_root_id_receipt"))!=rid: raise HDRContractError("suite stable root mismatch")
+        recomputed.append(build_horizon_receipt(rid,query,tokens,int(row["horizon_id"])))
+    authoritative=validate_evidence_equated(recomputed,hs)
+    if authoritative["suite_sha256"]!=report["suite_sha256"]: raise HDRContractError("E0 receipt/source recomputation mismatch")
     train=set(load(a.train_roots)); ev=set(load(a.eval_roots))
+    if digest(a.train_source_parquet)!=authority["data"]["train_sha256"]: raise HDRContractError("E0 train source authority mismatch")
+    train_df=pd.read_parquet(a.train_source_parquet); authoritative_train=set()
+    for pos,row in train_df.iterrows():
+        prompt=row["prompt"]; query=prompt[0]["content"] if isinstance(prompt,(list,tuple)) else prompt.tolist()[0]["content"]
+        idx=int(row.get("extra_info",{}).get("index",pos)); authoritative_train.add(stable_root_id(dataset_sha256=authority["data"]["train_sha256"],source_index=idx,query=query))
+    if train!=authoritative_train: raise HDRContractError("train root authority set mismatch")
+    if ev!={r.root_id for r in recomputed}: raise HDRContractError("eval root authority set mismatch")
     overlap=train&ev
     if overlap: raise HDRContractError(f"root leakage: {len(overlap)}")
     report.update(decision="HDR_E0_PASS",root_split_overlap=0)
@@ -130,7 +166,7 @@ def baseline(a):
     for item in bundle["files"]:
         p=Path(item["path"])
         if not p.is_file() or digest(p)!=item["sha256"]: raise HDRContractError(f"baseline evidence SHA mismatch: {p}")
-        imported.append({"path":str(p.resolve()),"sha256":digest(p),"size":p.stat().st_size})
+        imported.append({"path":str(p.resolve()),"sha256":digest(p),"size":p.stat().st_size,"kind":item.get("kind"),"anchor":item.get("anchor")})
         if item.get("kind") == "predictions":
             recomputed[str(item["anchor"])]=aggregate_predictions(load(p))
     expected=bundle["expected_aggregates"]
@@ -161,6 +197,9 @@ def final_audit(a):
     dro=[r for r in records if r.get("record_type")=="dro_update"]
     steps=[int(r["global_step"]) for r in dro]
     if steps!=list(range(1,26)): failures.append(f"DRO steps not exact 1..25: {steps}")
+    for r in dro:
+        if r.get("git_commit")!=git("rev-parse","HEAD") or r.get("seed")!=2026 or r.get("trajectory_budget")!=8: failures.append(f"invalid DRO identity/budget at {r.get('global_step')}")
+        if set(map(int,r.get("counts",{})))!={8,12,16,32} or sum(map(int,r.get("counts",{}).values()))!=8: failures.append(f"invalid horizon counts at {r.get('global_step')}")
     for step in (5,10,15,20,25):
         p=output/f"global_step_{step}"/"hdr_dro_state.json"
         if not p.is_file(): failures.append(f"missing dual checkpoint {step}"); continue
@@ -174,6 +213,8 @@ def final_audit(a):
             for item in b.get("inventory",[]):
                 fp=output/f"global_step_{step}"/item["path"]
                 if not fp.is_file() or digest(fp)!=item["sha256"] or fp.stat().st_size!=item["size"]: failures.append(f"checkpoint inventory tamper {step}/{item['path']}")
+            checkpoint_records=[r for r in records if r.get("record_type")=="checkpoint" and r.get("global_step")==step]
+            if len(checkpoint_records)!=1 or checkpoint_records[0].get("checkpoint_binding_sha256")!=digest(bp): failures.append(f"checkpoint ledger binding mismatch {step}")
     root_ledger=root/"hdr_execution_ledger.jsonl"
     if not root_ledger.is_file(): failures.append("missing root launch/gate ledger")
     else:
@@ -202,10 +243,32 @@ def health_gate(a):
     baseline=load(a.baseline_import)
     if baseline.get("decision")!="ORIGINAL_BASELINE_IMPORT_PASS": raise HDRContractError("uncertified baseline import")
     anchor=str(a.anchor)
+    binding=load(a.checkpoint_binding)
+    if binding.get("global_step")!=a.anchor or binding.get("git_commit")!=git("rev-parse","HEAD"): raise HDRContractError("health checkpoint binding mismatch")
+    checkpoint_root=Path(a.checkpoint_binding).parent
+    for item in binding.get("inventory",[]):
+        p=checkpoint_root/item["path"]
+        if not p.is_file() or digest(p)!=item["sha256"] or p.stat().st_size!=item["size"]: raise HDRContractError("health checkpoint inventory tamper")
     if anchor not in baseline.get("recomputed_aggregates",{}): raise HDRContractError("baseline anchor absent")
     method_rows=load(a.method_s128); method=aggregate_predictions(method_rows)
+    if method["count"]!=128: raise HDRContractError("fixed-S128 method evaluation must contain exactly 128 unique rows")
+    anchor_files=[x for x in baseline.get("files",[]) if x.get("kind")=="predictions" and str(x.get("anchor"))==anchor]
+    if len(anchor_files)!=1: raise HDRContractError("baseline stable-ID authority file missing")
+    authority_rows=load(anchor_files[0]["path"])
+    if {str(x["stable_id"]) for x in method_rows}!={str(x["stable_id"]) for x in authority_rows}: raise HDRContractError("method S128 stable-ID join mismatch")
+    if any(str(Path(x.get("model_path","")).resolve())!=str(Path(a.model_path).resolve()) or int(x.get("seed",-1))!=a.seed for x in method_rows): raise HDRContractError("method S128 model/seed binding mismatch")
+    sreceipts=[]
+    for x in method_rows:
+        r=x.get("receipt",{}); sreceipts.append(HorizonReceipt(str(r["root_id"]),int(r["horizon"]),str(r["terminal_query_sha256"]),str(r["evidence_sha256"]),int(r["evidence_token_count"]),tuple(map(tuple,r["chunk_bounds"])),tuple(r["chunk_sha256"]),tuple(tuple(map(int,c)) for c in r["chunks"])))
+    validate_evidence_equated(sreceipts,[a.nominal])
     original=baseline["recomputed_aggregates"][anchor]
     hrows=load(a.method_horizons)
+    if any(str(Path(x.get("model_path","")).resolve())!=str(Path(a.model_path).resolve()) or int(x.get("seed",-1))!=a.seed for x in hrows): raise HDRContractError("method horizon model/seed binding mismatch")
+    hrs=[]
+    for x in hrows:
+        r=x.get("receipt",{})
+        hrs.append(HorizonReceipt(str(r["root_id"]),int(r["horizon"]),str(r["terminal_query_sha256"]),str(r["evidence_sha256"]),int(r["evidence_token_count"]),tuple(map(tuple,r["chunk_bounds"])),tuple(r["chunk_sha256"]),tuple(tuple(map(int,c)) for c in r["chunks"])))
+    validate_evidence_equated(hrs,sorted({a.nominal,*a.unseen,8,12,16,32}))
     for row in hrows:
         if "prediction" in row: row.update(prediction_metrics(str(row["prediction"]),str(row["gold"])))
     heval=evaluate_horizons(hrows,a.nominal,a.unseen)
@@ -216,26 +279,27 @@ def health_gate(a):
     if oeval.get("status")!="PASS": raise HDRContractError("Original horizon authority absent")
     failures=[]
     if float(method["token_f1"]) < float(original["token_f1"])-.02: failures.append("nominal_s128_noninferiority")
-    if a.anchor==5 and float(heval["worst"]["token_f1"]) < float(oeval["worst"]["token_f1"])+.02: failures.append("worst_horizon_gain")
+    if a.variant=="dro" and a.anchor==5 and float(heval["worst"]["token_f1"]) < float(oeval["worst"]["token_f1"])+.02: failures.append("worst_horizon_gain")
     uniform=None
-    if a.anchor==25:
+    if a.variant=="dro" and a.anchor==25:
         if not a.uniform_horizons: raise HDRContractError("T25 requires uniform-ERM horizon baseline")
         uniform=load(a.uniform_horizons)
         if uniform.get("status")!="PASS" or float(heval["worst"]["token_f1"]) < float(uniform["worst"]["token_f1"])+.02: failures.append("uniform_erm_worst_gain")
         if float(method["token_f1"]) < float(original["token_f1"])-.01: failures.append("t25_nominal_one_point_floor")
-    report={"status":"FAIL" if failures else "PASS","decision":f"HDR_T{a.anchor}_HEALTH_FAIL" if failures else f"HDR_T{a.anchor}_HEALTH_PASS","anchor":a.anchor,"method_s128":method,"original_s128":original,"method_horizons":heval,"original_horizons":oeval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD")}
+    prefix="HDR" if a.variant=="dro" else "UNIFORM"
+    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"method_horizons":heval,"original_horizons":oeval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"original_horizons_sha256":digest(a.original_horizons),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
     write_json(a.output,report); append(a.ledger,{"record_type":"audit",**report})
     if failures: raise SystemExit(4)
 
 def main():
     p=argparse.ArgumentParser(); s=p.add_subparsers(dest="cmd",required=True)
     q=s.add_parser("preflight"); q.add_argument("--manifest",required=True); q.add_argument("--accepted-manifest",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=preflight)
-    q=s.add_parser("e0"); q.add_argument("--manifest",required=True); q.add_argument("--receipts",required=True); q.add_argument("--train-roots",required=True); q.add_argument("--eval-roots",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=e0)
+    q=s.add_parser("e0"); q.add_argument("--manifest",required=True); q.add_argument("--accepted-manifest",required=True); q.add_argument("--source-parquet",required=True); q.add_argument("--train-source-parquet",required=True); q.add_argument("--suite-parquet",required=True); q.add_argument("--tokenizer-root",required=True); q.add_argument("--receipts",required=True); q.add_argument("--train-roots",required=True); q.add_argument("--eval-roots",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=e0)
     q=s.add_parser("e1"); q.add_argument("--manifest",required=True); q.add_argument("--rows",required=True); q.add_argument("--receipts",required=True); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--git-commit",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=e1)
     q=s.add_parser("baseline-import"); q.add_argument("--bundle",required=True); q.add_argument("--expected-bundle-sha256",required=True); q.add_argument("--authority-manifest",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=baseline)
     q=s.add_parser("evaluate"); q.add_argument("--rows",required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.set_defaults(fn=ev)
     q=s.add_parser("final-audit"); q.add_argument("--run-root",required=True); q.add_argument("--output-root",required=True); q.add_argument("--report",required=True); q.set_defaults(fn=final_audit)
-    q=s.add_parser("health-gate"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--original-horizons",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
+    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--original-horizons",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
     a=p.parse_args()
     try: a.fn(a)
     except HDRContractError as e: print(f"HDR_NO_GO:{e}",file=sys.stderr); raise SystemExit(2)
