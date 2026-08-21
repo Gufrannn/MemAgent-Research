@@ -430,6 +430,24 @@ def compute_policy_loss(
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
+def compute_conditional_rate_loss(
+    actor_log_prob, prior_log_prob, writer_mask, dual_value, capacity_nats
+):
+    """Compute the PRD sampled rate penalty and detached dual statistics."""
+    from recurrent.research.prd_memrl import conditional_rate_nats
+
+    per_trajectory, mean_rate = conditional_rate_nats(
+        actor_log_prob, prior_log_prob.detach(), writer_mask
+    )
+    violation = mean_rate.detach() - float(capacity_nats)
+    return (
+        mean_rate * float(dual_value),
+        mean_rate.detach(),
+        violation,
+        per_trajectory.detach(),
+    )
+
+
 def compute_entropy_loss(logits, response_mask):
     """Compute Categorical entropy loss
 

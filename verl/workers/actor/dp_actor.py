@@ -243,6 +243,10 @@ class DataParallelPPOActor(BasePPOActor):
         # ADD: loss mask
         ######
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "response_mask"]
+        prd_config = self.config.get("prd_memrl", {})
+        prd_enabled = bool(prd_config.get("enable", False))
+        if prd_enabled:
+            select_keys.extend(["prior_log_probs", "writer_mask"])
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -389,6 +393,28 @@ class DataParallelPPOActor(BasePPOActor):
                         policy_loss = pg_loss - entropy_loss * entropy_coeff
                     else:
                         policy_loss = pg_loss
+
+                    if prd_enabled:
+                        from verl.trainer.ppo.core_algos import compute_conditional_rate_loss
+                        required = {"prior_log_probs", "writer_mask"}
+                        missing = sorted(required - set(data))
+                        if missing:
+                            raise RuntimeError(f"PRD_METHOD_INACTIVE missing tensors: {missing}")
+                        dual_value = float(prd_config.get("dual_value", -1.0))
+                        capacity_nats = float(prd_config.get("capacity_nats", -1.0))
+                        if dual_value < 0 or capacity_nats < 0:
+                            raise RuntimeError("PRD_METHOD_INACTIVE invalid dual/capacity configuration")
+                        rate_loss, rate, violation, _ = compute_conditional_rate_loss(
+                            log_prob,
+                            data["prior_log_probs"],
+                            data["writer_mask"],
+                            dual_value,
+                            capacity_nats,
+                        )
+                        policy_loss = policy_loss + rate_loss
+                        metrics["prd/rate_nats"] = rate.item()
+                        metrics["prd/capacity_violation_nats"] = violation.item()
+                        metrics["prd/dual_value"] = dual_value
 
                     if self.config.use_kl_loss:
                         ref_log_prob = data["ref_log_prob"]

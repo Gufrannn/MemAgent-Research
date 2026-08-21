@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "scientific_status": "RELEASE_NO_GO_PRE_E1",
+  "training_authorized": false,
+  "branch": "h20/qwen25-7b-prd-memrl-t25-frozen-20260822",
+  "fresh_base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
+  "runtime": {
+    "gpu_pair_source": "required environment GPU_PAIR",
+    "gpu_pair_rules": "two distinct canonical ascending physical H20 indices; non-contiguous allowed",
+    "per_gpu_lock_template": "${WORK_ROOT}/locks/memagent_h20_gpu_N.lock",
+    "strict_vllm": true,
+    "allow_hf_fallback": false
+  },
+  "baseline_import": {
+    "mode": "read_only_sha256_inventory",
+    "original_training_forbidden": true,
+    "required_anchors": [0, 5, 10, 15, 20, 25],
+    "metrics_recomputed": ["normalized_em", "token_f1", "format_validity"],
+    "protocol_mismatch_decision": "ORIGINAL_BASELINE_PROTOCOL_MISMATCH"
+  },
+  "fairness": {
+    "base_model": "Qwen/Qwen2.5-7B-Instruct",
+    "base_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+    "seed": 2026,
+    "trajectory_seed_mode": "independent",
+    "train_batch_size": 4,
+    "rollout_n": 2,
+    "ppo_mini_batch_size": 4,
+    "reward_manager": "naive",
+    "update1_method_enabled": true,
+    "fresh_base_only": true,
+    "original_step3_warm_start_forbidden": true,
+    "anchors": [5, 10, 15, 20, 25]
+  },
+  "method_whitelist": [
+    "actor_rollout_ref.actor.prd_memrl",
+    "prd_prior",
+    "prd_dual",
+    "prd_ledger",
+    "experiment_name",
+    "output_path"
+  ],
+  "method": {
+    "prior_conditioning_exact_fields": ["previous_memory", "turn_index"],
+    "forbidden_prior_sources": ["new_evidence", "history_chunk", "gold", "future", "outcome", "reward", "generated_answer"],
+    "rate_unit": "episode_sum_actor_minus_prior_logprob_nats",
+    "capacity_points_nats": [128.0, 256.0, 512.0],
+    "dual_learning_rate": 0.01,
+    "prior_learning_rate": 0.000001,
+    "actor_prior_gradient_isolation": "stop_gradient_actor_samples_for_prior",
+    "checkpoint_contents": ["actor", "actor_optimizer", "actor_scheduler", "prior", "prior_optimizer", "prior_scheduler", "dual", "rng", "global_step", "frontier_id"]
+  },
+  "gates": {
+    "e0_required": true,
+    "e1_required": true,
+    "paper_framing_review_required": true,
+    "t5_before_continuation": true,
+    "t5_max_f1_degradation": 0.02,
+    "minimum_frontier_points": 3,
+    "one_revision_only": true
+  }
+}
