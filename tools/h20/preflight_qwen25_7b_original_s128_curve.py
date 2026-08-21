@@ -34,6 +34,7 @@ from recurrent.research.stable_eval_identity import (
 from tools.h20.preflight_qwen25_7b_s128_it import (
     _stable_canary_contract,
     generation_protocol_projection,
+    render_trainer_overrides as render_prior_s128_trainer_overrides,
 )
 from tools.h20.preflight_qwen25_7b_stable_i4x2 import (
     _load_parquet_rows,
@@ -260,7 +261,9 @@ def freeze_trainer_configuration(
         final_config = compose_resolved_trainer_config(repo, final)
         if stable_eval_runtime_config_sha256(final_config) != resolved_sha:
             raise ValueError(f"self-hashed Hydra config is unstable for {interface_id}")
-        protocol_sha = canonical_sha256(generation_protocol_projection(final_config))
+        protocol_sha = canonical_sha256(
+            repository_neutral_generation_protocol_projection(final_config, repo=repo)
+        )
         protocol_hashes[interface_id] = protocol_sha
         interfaces[interface_id] = {
             "resolved_config_sha256": resolved_sha,
@@ -273,8 +276,114 @@ def freeze_trainer_configuration(
     return {
         "hydra_config_name": "ppo_trainer",
         "hydra_config_dir": "verl/trainer/config",
+        "generation_protocol_projection": (
+            "repository-relative-reward-code-sha256-v1"
+        ),
         "interfaces": interfaces,
         "shared_generation_protocol_sha256": next(iter(protocol_hashes.values())),
+    }
+
+
+def repository_neutral_generation_protocol_projection(
+    config: Mapping[str, Any], *, repo: Path
+) -> dict[str, Any]:
+    """Bind generation semantics without binding an absolute checkout location.
+
+    The inherited S128 I/T25 run and this curve may execute the same committed
+    reward implementation from different Git worktree paths.  An absolute
+    checkout prefix is provenance, not a generation/scoring choice.  We remove
+    only that prefix, while retaining both the repository-relative module path
+    and its content digest.  A reward module outside ``repo`` fails closed.
+    """
+    projection = generation_protocol_projection(config)
+    reward = dict(projection["custom_reward_function"])
+    reward_path = Path(str(reward.get("path", ""))).resolve()
+    repo_root = repo.resolve()
+    try:
+        relative = reward_path.relative_to(repo_root)
+    except ValueError as error:
+        raise ValueError(
+            f"custom reward path is outside the bound repository: {reward_path}"
+        ) from error
+    if not reward_path.is_file():
+        raise ValueError(f"custom reward implementation is missing: {reward_path}")
+    reward["path"] = relative.as_posix()
+    reward["path_sha256"] = sha256_file(reward_path)
+    projection["custom_reward_function"] = reward
+    return projection
+
+
+def _validate_prior_protocol_attestation(
+    trainer_configuration: Mapping[str, Any], *, expected_interfaces: tuple[str, ...]
+) -> str:
+    """Validate the legacy path-bound protocol hashes as an internal attestation."""
+    shared = str(trainer_configuration.get("shared_generation_protocol_sha256", ""))
+    if re.fullmatch(r"[0-9a-f]{64}", shared) is None:
+        raise ValueError("prior shared generation protocol digest is malformed")
+    interfaces = trainer_configuration.get("interfaces")
+    if not isinstance(interfaces, Mapping) or set(interfaces) != set(expected_interfaces):
+        raise ValueError("prior generation protocol interface set changed")
+    for interface_id in expected_interfaces:
+        item = interfaces[interface_id]
+        if (
+            not isinstance(item, Mapping)
+            or item.get("generation_protocol_sha256") != shared
+        ):
+            raise ValueError(
+                f"prior {interface_id} generation protocol does not match shared digest"
+            )
+    return shared
+
+
+def _frozen_git_blob_sha256(repo: Path, *, commit: str, relative_path: str) -> str:
+    """Hash one exact committed blob without consulting worktree bytes."""
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != relative_path:
+        raise ValueError(f"frozen Git blob path is not canonical relative POSIX: {relative_path}")
+    try:
+        blob = subprocess.check_output(
+            ["git", "-C", str(repo), "show", f"{commit}:{relative_path}"]
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f"cannot read frozen Git blob {commit}:{relative_path}"
+        ) from error
+    return hashlib.sha256(blob).hexdigest()
+
+
+def freeze_expected_prior_generation_protocol(
+    inherited: Mapping[str, Any], *, repo: Path, eval_manifest_hash: str
+) -> dict[str, Any]:
+    """Recompose the immutable b7bf I/T25 protocol in this checkout.
+
+    The inherited manifest and command manifest are content-hash checked before
+    this function is called.  Recomposing them in the curve checkout makes the
+    semantic comparison independent of the old checkout's absolute path.
+    """
+    hashes: dict[str, str] = {}
+    for interface_id in ("I", "T25"):
+        overrides = render_prior_s128_trainer_overrides(
+            inherited,
+            repo=repo,
+            interface_id=interface_id,
+            eval_manifest_hash=eval_manifest_hash,
+            expected_runtime_config_sha256="0" * 64,
+        )
+        config = compose_resolved_trainer_config(repo, overrides)
+        projection = repository_neutral_generation_protocol_projection(
+            config, repo=repo
+        )
+        reward = projection["custom_reward_function"]
+        reward["path_sha256"] = _frozen_git_blob_sha256(
+            repo, commit=SOURCE_COMMIT, relative_path=reward["path"]
+        )
+        hashes[interface_id] = canonical_sha256(projection)
+    if len(set(hashes.values())) != 1:
+        raise ValueError(f"reconstructed prior I/T25 protocols differ: {hashes}")
+    return {
+        "projection": "repository-relative-reward-code-sha256-v1",
+        "interfaces": hashes,
+        "shared_generation_protocol_sha256": next(iter(hashes.values())),
     }
 
 
@@ -1178,10 +1287,19 @@ def run_preflight(
                     manifest, inherited, repo=repo, eval_manifest_hash=eval_hash
                 )
                 if prior.get("available"):
-                    source_protocol = prior["resolved"]["execution_binding"][
+                    prior_trainer = prior["resolved"]["execution_binding"][
                         "trainer_configuration"
-                    ]["shared_generation_protocol_sha256"]
-                    if source_protocol != trainer["shared_generation_protocol_sha256"]:
+                    ]
+                    _validate_prior_protocol_attestation(
+                        prior_trainer, expected_interfaces=("I", "T25")
+                    )
+                    expected_prior_protocol = freeze_expected_prior_generation_protocol(
+                        inherited, repo=repo, eval_manifest_hash=eval_hash
+                    )
+                    if (
+                        expected_prior_protocol["shared_generation_protocol_sha256"]
+                        != trainer["shared_generation_protocol_sha256"]
+                    ):
                         raise ValueError("imported I/T25 generation protocol differs from curve")
                 execution = build_execution_binding(
                     manifest, inherited, repo=repo, rows=rows,

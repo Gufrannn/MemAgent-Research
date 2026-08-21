@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from recurrent.research.gate_a_execution import append_jsonl, checkpoint_inventory
 from recurrent.research.stable_eval_identity import canonical_sha256
@@ -19,9 +21,14 @@ from tools.h20.preflight_qwen25_7b_original_s128_curve import (
     SOURCE_COMMIT,
     _complete_checkpoint_inventory,
     _artifact_inventory,
+    _frozen_git_blob_sha256,
     _training_prefix_order_contract,
     _training_sync_contract,
+    _validate_prior_protocol_attestation,
     build_interface_plan,
+    freeze_expected_prior_generation_protocol,
+    generation_protocol_projection,
+    repository_neutral_generation_protocol_projection,
     validate_prior_import,
     validate_training_source,
 )
@@ -246,6 +253,36 @@ def _write_artifacts(root: Path, step: int) -> None:
     (root / "run.log").write_text("done\n")
 
 
+def _generation_config(reward_path: Path) -> dict:
+    return {
+        "recurrent": {"enable": "memory", "memory": {"config": {"chunk_size": 5000}}},
+        "data": {
+            "val_files": ["s128"], "shuffle": False,
+            "filter_overlong_prompts": True, "filter_overlong_prompts_workers": 1,
+            "dataloader_num_workers": 0, "include_source_order_index": True,
+            "truncation": "center", "context_key": "context", "val_max_samples": 128,
+            "max_prompt_length": 8192, "max_response_length": 1024,
+        },
+        "actor_rollout_ref": {
+            "model": {"path": "base", "use_remove_padding": True},
+            "rollout": {
+                "name": "vllm", "mode": "sync", "n": 1,
+                "tensor_model_parallel_size": 1,
+                "max_num_batched_tokens": 16384, "max_num_seqs": 16,
+                "val_kwargs": {
+                    "n": 1, "do_sample": False, "temperature": 0.0,
+                    "top_p": 1.0, "top_k": -1,
+                },
+            },
+        },
+        "reward_model": {"reward_manager": "naive"},
+        "custom_reward_function": {
+            "path": str(reward_path), "name": "compute_score",
+            "reward_kwargs": {"f1_weight": 0.95, "grounded_box_bonus": 0.05},
+        },
+    }
+
+
 def _write_prior_import(root: Path) -> tuple[dict, str]:
     source_commit = SOURCE_COMMIT
     resolved, eval_hash = _resolved_payload(source_commit)
@@ -353,6 +390,138 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
         self.assertIs(self.manifest["evaluation"]["do_sample"], False)
         self.assertEqual(self.manifest["evaluation"]["primary_metrics"], ["normalized_exact_match", "token_f1"])
         self.assertIs(self.manifest["evaluation"]["training_dense_reward_excluded_from_evaluation_claims"], True)
+
+    def test_generation_protocol_ignores_only_checkout_prefix_and_binds_reward_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repos = [root / "source", root / "curve"]
+            projections = []
+            legacy_projections = []
+            for repo in repos:
+                reward = repo / "recurrent/research/hotpotqa_dense_reward.py"
+                reward.parent.mkdir(parents=True)
+                reward.write_text("def compute_score(): return 1\n")
+                config = _generation_config(reward)
+                legacy_projections.append(generation_protocol_projection(config))
+                projections.append(
+                    repository_neutral_generation_protocol_projection(
+                        config, repo=repo
+                    )
+                )
+            self.assertNotEqual(legacy_projections[0], legacy_projections[1])
+            legacy_a = json.loads(json.dumps(legacy_projections[0]))
+            legacy_b = json.loads(json.dumps(legacy_projections[1]))
+            del legacy_a["custom_reward_function"]["path"]
+            del legacy_b["custom_reward_function"]["path"]
+            self.assertEqual(legacy_a, legacy_b)
+            self.assertEqual(projections[0], projections[1])
+            self.assertEqual(
+                projections[0]["custom_reward_function"]["path"],
+                "recurrent/research/hotpotqa_dense_reward.py",
+            )
+
+            changed = repos[1] / "recurrent/research/hotpotqa_dense_reward.py"
+            changed.write_text("def compute_score(): return 2\n")
+            changed_projection = repository_neutral_generation_protocol_projection(
+                _generation_config(changed), repo=repos[1]
+            )
+            self.assertNotEqual(projections[0], changed_projection)
+
+            outside = root / "outside.py"
+            outside.write_text("def compute_score(): return 1\n")
+            with self.assertRaisesRegex(ValueError, "outside the bound repository"):
+                repository_neutral_generation_protocol_projection(
+                    _generation_config(outside), repo=repos[0]
+                )
+
+    def test_prior_protocol_attestation_requires_exact_shared_i_t25_digest(self) -> None:
+        shared = "4" * 64
+        trainer = {
+            "shared_generation_protocol_sha256": shared,
+            "interfaces": {
+                "I": {"generation_protocol_sha256": shared},
+                "T25": {"generation_protocol_sha256": shared},
+            },
+        }
+        self.assertEqual(
+            _validate_prior_protocol_attestation(
+                trainer, expected_interfaces=("I", "T25")
+            ),
+            shared,
+        )
+        trainer["interfaces"]["T25"]["generation_protocol_sha256"] = "5" * 64
+        with self.assertRaisesRegex(ValueError, "does not match shared digest"):
+            _validate_prior_protocol_attestation(
+                trainer, expected_interfaces=("I", "T25")
+            )
+
+    def test_prior_protocol_reconstruction_uses_frozen_blob_not_current_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            reward = repo / "recurrent/research/hotpotqa_dense_reward.py"
+            reward.parent.mkdir(parents=True)
+            reward.write_text("def compute_score(): return 'frozen'\n")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "commit", "-qm", "freeze reward"], check=True
+            )
+            commit = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            frozen_sha = hashlib.sha256(reward.read_bytes()).hexdigest()
+            self.assertEqual(
+                _frozen_git_blob_sha256(
+                    repo,
+                    commit=commit,
+                    relative_path="recurrent/research/hotpotqa_dense_reward.py",
+                ),
+                frozen_sha,
+            )
+
+            reward.write_text("def compute_score(): return 'current-drift'\n")
+            current_projection = repository_neutral_generation_protocol_projection(
+                _generation_config(reward), repo=repo
+            )
+            self.assertNotEqual(
+                current_projection["custom_reward_function"]["path_sha256"], frozen_sha
+            )
+            with (
+                mock.patch(
+                    "tools.h20.preflight_qwen25_7b_original_s128_curve.SOURCE_COMMIT",
+                    commit,
+                ),
+                mock.patch(
+                    "tools.h20.preflight_qwen25_7b_original_s128_curve."
+                    "render_prior_s128_trainer_overrides",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "tools.h20.preflight_qwen25_7b_original_s128_curve."
+                    "compose_resolved_trainer_config",
+                    return_value=_generation_config(reward),
+                ),
+            ):
+                prior = freeze_expected_prior_generation_protocol(
+                    {}, repo=repo, eval_manifest_hash="a" * 64
+                )
+            prior_projection = json.loads(json.dumps(current_projection))
+            prior_projection["custom_reward_function"]["path_sha256"] = frozen_sha
+            self.assertEqual(
+                prior["shared_generation_protocol_sha256"],
+                canonical_sha256(prior_projection),
+            )
+            self.assertNotEqual(
+                prior["shared_generation_protocol_sha256"],
+                canonical_sha256(current_projection),
+            )
 
     def test_complete_checkpoint_and_each_training_sync_are_authenticated(self) -> None:
         stable = {
