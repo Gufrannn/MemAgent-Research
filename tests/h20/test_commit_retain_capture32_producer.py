@@ -28,6 +28,9 @@ from tools.h20.preflight_qwen25_7b_commit_retain_capture32 import (
     capture_lock_holder_receipt,
     load_manifest,
 )
+from tools.h20.run_qwen25_7b_commit_retain_capture32 import (
+    _pair_identity_from_frozen,
+)
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -90,6 +93,32 @@ def test_dynamic_gpu_pair_is_explicit_distinct_and_ascending() -> None:
     for invalid in ("", "4", "4,4", "6,5", "4,5,6", "x,5", "04,5"):
         with pytest.raises(ValueError):
             _parse_gpu_pair(invalid)
+
+
+def test_runtime_projects_authenticated_top_level_eval_hash_into_real_row_shape() -> None:
+    pair = build_pair_record(pair_payload())
+    frozen = _frozen(pair)
+    manifest_hash = frozen.pop("eval_manifest_hash")
+    projected = _pair_identity_from_frozen(
+        frozen, eval_manifest_hash=manifest_hash
+    )
+    assert projected["eval_manifest_hash"] == manifest_hash
+    assert all(
+        projected[field] == frozen[field]
+        for field in projected if field != "eval_manifest_hash"
+    )
+
+
+def test_runtime_rejects_conflicting_or_invalid_eval_hash_projection() -> None:
+    pair = build_pair_record(pair_payload())
+    frozen = _frozen(pair)
+    manifest_hash = frozen["eval_manifest_hash"]
+    frozen["eval_manifest_hash"] = "f" * 64
+    with pytest.raises(ValueError, match="conflicts with P0"):
+        _pair_identity_from_frozen(frozen, eval_manifest_hash=manifest_hash)
+    frozen.pop("eval_manifest_hash")
+    with pytest.raises(ValueError, match="canonical SHA-256"):
+        _pair_identity_from_frozen(frozen, eval_manifest_hash="not-a-sha")
 
 
 def test_manifest_resolves_dynamic_pair_and_per_gpu_locks() -> None:

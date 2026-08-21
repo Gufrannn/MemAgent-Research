@@ -49,6 +49,29 @@ PROCESS_INSTANCE_UUID = str(uuid.uuid4())
 PROCESS_PID = os.getpid()
 
 
+_PAIR_IDENTITY_FIELDS = (
+    "example_id", "semantic_dataset_index", "source_order_index",
+    "raw_row_position", "production_effective_position", "eval_manifest_hash",
+    "source_question_hash", "source_context_hash", "ground_truth_hash",
+)
+
+
+def _pair_identity_from_frozen(
+    frozen_row: Mapping[str, Any], *, eval_manifest_hash: str
+) -> dict[str, Any]:
+    """Project the authenticated manifest-level hash into one execution row."""
+    if not isinstance(eval_manifest_hash, str) or len(eval_manifest_hash) != 64 \
+            or any(character not in "0123456789abcdef" for character in eval_manifest_hash):
+        raise ValueError("capture32 eval_manifest_hash is not a canonical SHA-256")
+    row_copy = frozen_row.get("eval_manifest_hash")
+    if row_copy is not None and row_copy != eval_manifest_hash:
+        raise ValueError("capture32 row-level eval_manifest_hash conflicts with P0")
+    return {
+        field: eval_manifest_hash if field == "eval_manifest_hash" else frozen_row[field]
+        for field in _PAIR_IDENTITY_FIELDS
+    }
+
+
 def _runtime(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any], str, list[dict[str, Any]]]:
     manifest = load_manifest(manifest_path)
     _, resolved = validate_p0(manifest_path)
@@ -242,10 +265,9 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
                               "realized_token_counts_are_measured_not_forced_equal": True},
         }
         pair = build_pair_record({
-            **{field: frozen_row[field] for field in (
-                "example_id", "semantic_dataset_index", "source_order_index",
-                "raw_row_position", "production_effective_position", "eval_manifest_hash",
-                "source_question_hash", "source_context_hash", "ground_truth_hash")},
+            **_pair_identity_from_frozen(
+                frozen_row, eval_manifest_hash=resolved["eval_manifest_hash"]
+            ),
             "trajectory_seed": trajectory_seed, "intervention_writer_turn": intervention,
             "total_writer_turns": total, "question_token_ids": question_ids,
             "ground_truth": [str(item) for item in source["reward_model"]["ground_truth"]],
