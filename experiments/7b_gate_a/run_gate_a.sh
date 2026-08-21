@@ -24,7 +24,7 @@ RESUME_TOTAL_STEPS=${RESUME_TOTAL_STEPS:-3}
 RESUME_SOURCE_STEP=${RESUME_SOURCE_STEP:-2}
 SAVE_FREQ=${SAVE_FREQ:-1}
 MAX_ACTOR_CKPT_TO_KEEP=${MAX_ACTOR_CKPT_TO_KEEP:-3}
-OUT=$WORK_ROOT/logs/memory_agent/$EXP
+OUT=${OUTPUT_ROOT:-$WORK_ROOT/logs/memory_agent/$EXP}
 
 case "$PHASE" in
   fresh)
@@ -177,6 +177,22 @@ TRAINER_OVERRIDES=(
   ray_init.num_cpus=64
   "${RESUME_ARGS[@]}"
 )
+
+if [[ ${PRD_MEMRL_ENABLE:-0} == 1 ]]; then
+  [[ ${PRD_MEMRL_CAPACITY:-} =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+    echo "PRD_MEMRL_CAPACITY must be explicit" >&2; exit 56;
+  }
+  [[ ${PRD_PRIOR_MODEL:-} == /* && -f ${PRD_PRIOR_MODEL:-}/config.json ]] || {
+    echo "PRD_PRIOR_MODEL must be an explicit local model directory" >&2; exit 57;
+  }
+  TRAINER_OVERRIDES+=(
+    prd_memrl.enable=true
+    "prd_memrl.capacity_nats=$PRD_MEMRL_CAPACITY"
+    "prd_memrl.prior.model_path=$PRD_PRIOR_MODEL"
+    actor_rollout_ref.actor.prd_memrl.enable=true
+    "actor_rollout_ref.actor.prd_memrl.capacity_nats=$PRD_MEMRL_CAPACITY"
+  )
+fi
 
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \

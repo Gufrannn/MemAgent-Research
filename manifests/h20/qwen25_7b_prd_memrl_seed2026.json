@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "scientific_status": "RELEASE_NO_GO_PRE_E1",
-  "training_authorized": false,
+  "scientific_status": "REFRAME_GO_FOR_E0_E1_T5_GATED",
+  "training_authorization": "requires bound P0, E0, E1, paper review, and per-capacity launch receipt",
   "branch": "h20/qwen25-7b-prd-memrl-t25-frozen-20260822",
   "fresh_base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
   "runtime": {
@@ -41,6 +41,8 @@
     "output_path"
   ],
   "method": {
+    "prior_model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "prior_model_reason": "independent trainable history-blind code model sized for dual-H20 coexistence; tokenizer identity must match actor",
     "prior_conditioning_exact_fields": ["previous_memory", "turn_index"],
     "forbidden_prior_sources": ["new_evidence", "history_chunk", "gold", "future", "outcome", "reward", "generated_answer"],
     "rate_unit": "episode_sum_actor_minus_prior_logprob_nats",

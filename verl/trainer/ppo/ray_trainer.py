@@ -75,6 +75,7 @@ class Role(Enum):
     RefPolicy = 4
     RewardModel = 5
     ActorRolloutRef = 6
+    PRDPrior = 7
 
 
 class AdvantageEstimator(str, Enum):
@@ -496,6 +497,8 @@ class RayPPOTrainer:
         self.resource_pool_manager = resource_pool_manager
         self.use_reference_policy = Role.RefPolicy in role_worker_mapping
         self.use_rm = Role.RewardModel in role_worker_mapping
+        self.use_prd_prior = Role.PRDPrior in role_worker_mapping
+        self.prd_dual_value = float(config.get("prd_memrl", {}).get("dual", {}).get("initial_value", 0.0))
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
         self._actor_update_calls = 0
@@ -1185,6 +1188,11 @@ class RayPPOTrainer:
             ref_policy_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RefPolicy], config=self.config.actor_rollout_ref, role="ref")
             self.resource_pool_to_cls[resource_pool]["ref"] = ref_policy_cls
 
+        if self.use_prd_prior:
+            resource_pool = self.resource_pool_manager.get_resource_pool(Role.PRDPrior)
+            prior_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.PRDPrior], config=self.config)
+            self.resource_pool_to_cls[resource_pool]["prd_prior"] = prior_cls
+
         # create a reward model if reward_fn is None
         if self.use_rm:
             # we create a RM here
@@ -1218,6 +1226,10 @@ class RayPPOTrainer:
         if self.use_reference_policy:
             self.ref_policy_wg = all_wg["ref"]
             self.ref_policy_wg.init_model()
+
+        if self.use_prd_prior:
+            self.prd_prior_wg = all_wg["prd_prior"]
+            self.prd_prior_wg.init_model()
 
         if self.use_rm:
             self.rm_wg = all_wg["rm"]
@@ -1277,6 +1289,71 @@ class RayPPOTrainer:
 
         self.actor_rollout_wg.save_checkpoint(actor_local_path, actor_remote_path, self.global_steps, max_ckpt_to_keep=max_actor_ckpt_to_keep)
 
+        if self.use_prd_prior:
+            self.prd_prior_wg.save_checkpoint(
+                os.path.join(local_global_step_folder, "prd_prior"),
+                None,
+                self.global_steps,
+                max_ckpt_to_keep=max_actor_ckpt_to_keep,
+            )
+            import hashlib
+            import json
+            actor_sync = self.actor_rollout_wg.audit_actor_vllm_weight_sync(
+                self.global_steps, self.global_steps, "prd_checkpoint"
+            )
+            prior_sync = self.prd_prior_wg.audit_weight_sync()
+            inventory = []
+            for root, _, names in os.walk(local_global_step_folder):
+                for name in sorted(names):
+                    path = os.path.join(root, name)
+                    if os.path.basename(path) == "prd_checkpoint.json":
+                        continue
+                    digest = hashlib.sha256()
+                    with open(path, "rb") as stream:
+                        for block in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(block)
+                    inventory.append({
+                        "path": os.path.relpath(path, local_global_step_folder),
+                        "size": os.path.getsize(path),
+                        "sha256": digest.hexdigest(),
+                    })
+            metadata = {
+                "schema_version": 1,
+                "global_step": self.global_steps,
+                "run_id": os.environ.get("PRD_RUN_ID", ""),
+                "git_commit": os.environ.get("PRD_GIT_COMMIT", ""),
+                "frontier_id": os.environ.get("PRD_FRONTIER_ID", ""),
+                "method_active": True,
+                "components": sorted({
+                    "actor", "actor_optimizer", "actor_scheduler", "prior",
+                    "prior_optimizer", "prior_scheduler", "dual", "rng",
+                    "global_step", "frontier_id", "weight_sync",
+                }),
+                "weight_sync": {"verified": True, "actor": actor_sync, "prior": prior_sync},
+                "files": inventory,
+            }
+            if not metadata["run_id"] or not metadata["git_commit"] or not metadata["frontier_id"]:
+                raise RuntimeError("PRD checkpoint identity environment is incomplete")
+            target = os.path.join(local_global_step_folder, "prd_checkpoint.json")
+            temporary = target + ".tmp"
+            with open(temporary, "x", encoding="utf-8") as stream:
+                json.dump(metadata, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+            ledger_path = os.environ.get("PRD_EXECUTION_LEDGER")
+            if ledger_path:
+                from pathlib import Path
+                from tools.h20.prd_memrl_ledger import append_record
+                with open(target, "rb") as metadata_stream:
+                    metadata_sha256 = hashlib.sha256(metadata_stream.read()).hexdigest()
+                append_record(
+                    Path(ledger_path), metadata["run_id"], "CHECKPOINT",
+                    metadata["git_commit"],
+                    {"global_step": self.global_steps, "frontier_id": metadata["frontier_id"], "metadata_sha256": metadata_sha256},
+                )
+
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, "critic")
             critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "critic")
@@ -1286,6 +1363,26 @@ class RayPPOTrainer:
         dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
+        if self.use_prd_prior:
+            # Finalize the inventory only after actor, prior, optional critic,
+            # and dataloader recovery state are durable.
+            inventory = []
+            for root, _, names in os.walk(local_global_step_folder):
+                for name in sorted(names):
+                    path = os.path.join(root, name)
+                    if name == "prd_checkpoint.json" or name.endswith(".tmp"):
+                        continue
+                    digest = hashlib.sha256()
+                    with open(path, "rb") as stream:
+                        for block in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(block)
+                    inventory.append({"path": os.path.relpath(path, local_global_step_folder), "size": os.path.getsize(path), "sha256": digest.hexdigest()})
+            metadata["files"] = inventory
+            target = os.path.join(local_global_step_folder, "prd_checkpoint.json")
+            temporary = target + ".final.tmp"
+            with open(temporary, "x", encoding="utf-8") as stream:
+                json.dump(metadata, stream, indent=2, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, target)
 
         # latest checkpointed iteration tracker (for atomic usage)
         local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
@@ -1573,6 +1670,15 @@ class RayPPOTrainer:
         actor_load_acks = self.actor_rollout_wg.load_checkpoint(
             actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
         )
+        if self.use_prd_prior:
+            prior_acks = self.prd_prior_wg.load_checkpoint(
+                os.path.join(global_step_folder, "prd_prior"),
+                del_local_after_load=self.config.trainer.del_local_ckpt_after_load,
+            )
+            values = {float(ack["dual_value"]) for ack in prior_acks}
+            if len(values) != 1:
+                raise RuntimeError(f"PRD dual checkpoint disagreement: {values}")
+            self.prd_dual_value = values.pop()
         # load critic
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
@@ -1933,6 +2039,19 @@ class RayPPOTrainer:
                     ####################
                     if "response_mask" not in batch.batch:
                         batch.batch["response_mask"] = compute_response_mask(batch)
+                    if bool(self.config.actor_rollout_ref.actor.get("prd_memrl", {}).get("enable", False)):
+                        required_prior = {
+                            "prd_prior_input_ids",
+                            "prd_prior_attention_mask",
+                            "prd_prior_position_ids",
+                            "final_mask",
+                        }
+                        missing_prior = sorted(required_prior - set(batch.batch))
+                        if missing_prior:
+                            raise RuntimeError(f"PRD_METHOD_INACTIVE missing recurrent prior fields: {missing_prior}")
+                        batch.batch["writer_mask"] = batch.batch["response_mask"] * (
+                            ~batch.batch["final_mask"].bool()
+                        ).unsqueeze(-1).to(batch.batch["response_mask"].dtype)
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
                     # Please take care when you implement group based adv computation such as GRPO and rloo
@@ -2009,6 +2128,18 @@ class RayPPOTrainer:
                         with _timer("ref", timing_raw):
                             ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
+
+                    if self.use_prd_prior:
+                        with _timer("prd_prior_log_prob", timing_raw):
+                            prd_batch = batch.select(batch_keys=[
+                                "prd_prior_input_ids", "prd_prior_attention_mask",
+                                "prd_prior_position_ids", "responses", "writer_mask",
+                            ])
+                            prior_log_prob = self.prd_prior_wg.compute_prior_log_prob(prd_batch)
+                            batch = batch.union(prior_log_prob)
+                            batch.batch["prd_dual_value"] = torch.full(
+                                (len(batch),), self.prd_dual_value, dtype=torch.float32
+                            )
 
                     # compute values
                     if self.use_critic:
@@ -2159,6 +2290,36 @@ class RayPPOTrainer:
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
+                        if self.use_prd_prior:
+                            with _timer("update_prd_prior", timing_raw):
+                                prior_output = self.prd_prior_wg.update_prior(prd_batch)
+                            metrics.update(reduce_metrics(prior_output.meta_info["metrics"]))
+                            observed_rate = float(actor_output_metrics["prd/rate_nats"])
+                            dual_acks = self.prd_prior_wg.update_dual(
+                                observed_rate, float(self.config.prd_memrl.capacity_nats)
+                            )
+                            dual_values = {float(ack["value"]) for ack in dual_acks}
+                            if len(dual_values) != 1:
+                                raise RuntimeError(f"PRD dual synchronization failure: {dual_values}")
+                            self.prd_dual_value = dual_values.pop()
+                            metrics["prd/dual_value"] = self.prd_dual_value
+                            ledger_path = os.environ.get("PRD_EXECUTION_LEDGER")
+                            if ledger_path:
+                                from pathlib import Path
+                                from tools.h20.prd_memrl_ledger import append_record
+                                append_record(
+                                    Path(ledger_path),
+                                    os.environ["PRD_RUN_ID"],
+                                    "UPDATE",
+                                    os.environ["PRD_GIT_COMMIT"],
+                                    {
+                                        "global_step": int(self.global_steps),
+                                        "frontier_id": os.environ["PRD_FRONTIER_ID"],
+                                        "rate_nats": observed_rate,
+                                        "dual_value": self.prd_dual_value,
+                                        "prior_nll": float(metrics["prd/prior_nll"]),
+                                    },
+                                )
                         self._audit_gate_a_weight_sync(
                             global_step=self.global_steps,
                             actor_version=self.global_steps,

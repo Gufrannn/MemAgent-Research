@@ -246,7 +246,7 @@ class DataParallelPPOActor(BasePPOActor):
         prd_config = self.config.get("prd_memrl", {})
         prd_enabled = bool(prd_config.get("enable", False))
         if prd_enabled:
-            select_keys.extend(["prior_log_probs", "writer_mask"])
+            select_keys.extend(["prior_log_probs", "writer_mask", "prd_dual_value"])
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -396,16 +396,20 @@ class DataParallelPPOActor(BasePPOActor):
 
                     if prd_enabled:
                         from verl.trainer.ppo.core_algos import compute_conditional_rate_loss
-                        required = {"prior_log_probs", "writer_mask"}
+                        required = {"prior_log_probs", "writer_mask", "prd_dual_value"}
                         missing = sorted(required - set(data))
                         if missing:
                             raise RuntimeError(f"PRD_METHOD_INACTIVE missing tensors: {missing}")
-                        dual_value = float(prd_config.get("dual_value", -1.0))
+                        dual_values = data["prd_dual_value"].float()
+                        if not torch.allclose(dual_values, dual_values[:1]):
+                            raise RuntimeError("PRD dual value differs within a micro-batch")
+                        dual_value = float(dual_values[0].item())
                         capacity_nats = float(prd_config.get("capacity_nats", -1.0))
                         if dual_value < 0 or capacity_nats < 0:
                             raise RuntimeError("PRD_METHOD_INACTIVE invalid dual/capacity configuration")
                         rate_loss, rate, violation, _ = compute_conditional_rate_loss(
                             log_prob,
+                            old_log_prob,
                             data["prior_log_probs"],
                             data["writer_mask"],
                             dual_value,

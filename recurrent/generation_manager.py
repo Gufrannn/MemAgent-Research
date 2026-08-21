@@ -183,6 +183,26 @@ class LLMGenerationManager:
                 gen_output = self.generate_with_graceful_padding(input_ids, attention_masks, position_ids, meta_info_gen)
                 logger.info('generation done')
             with _timer('mt_update', timing_raw):
+                if hasattr(self.agent, "prd_prior_messages"):
+                    prior_ids = pad_tensor_list_to_length(
+                        self.agent.prd_prior_messages,
+                        pad_token_id=pad_token_id,
+                        max_length=meta_info_gen['input_pad_to'],
+                        left_pad=True,
+                    )
+                    # Teacher-forced q consumes the legal prefix followed by
+                    # the detached actor-written tokens. The response is a
+                    # prediction target, not conditioning evidence.
+                    full_prior_ids = torch.cat(
+                        [prior_ids, gen_output.batch["responses"].detach().cpu()], dim=-1
+                    )
+                    gen_output.batch["prd_prior_input_ids"] = full_prior_ids
+                    gen_output.batch["prd_prior_attention_mask"] = create_attention_mask(
+                        full_prior_ids, pad_token_id=pad_token_id
+                    )
+                    gen_output.batch["prd_prior_position_ids"] = create_position_ids(
+                        gen_output.batch["prd_prior_attention_mask"]
+                    )
                 gen_output = self.agent.update(gen_output)
                 if trajectory_base_seeds is not None:
                     if len(gen_output) != len(active_sample_indices):

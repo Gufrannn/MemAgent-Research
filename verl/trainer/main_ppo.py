@@ -136,6 +136,12 @@ class TaskRunner:
             Role.ActorRollout: global_pool_id,
             Role.Critic: global_pool_id,
         }
+        if bool(config.get("prd_memrl", {}).get("enable", False)):
+            if config.actor_rollout_ref.actor.strategy != "fsdp":
+                raise RuntimeError("PRD prior currently requires FSDP")
+            from verl.workers.prd_prior_worker import PRDPriorWorker
+            role_worker_mapping[Role.PRDPrior] = ray.remote(PRDPriorWorker)
+            mapping[Role.PRDPrior] = global_pool_id
 
         # we should adopt a multi-source reward function here
         # - for rule-based rm, we directly call a reward score

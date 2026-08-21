@@ -207,6 +207,33 @@ algorithm:
     target_kl: 0.1
   grpo_use_adv: True
 
+prd_memrl:
+  enable: false
+  capacity_nats: -1.0
+  prior:
+    model_path: null
+    micro_batch_size_per_gpu: 1
+    trust_remote_code: ${actor_rollout_ref.model.trust_remote_code}
+    temperature: 1.0
+    gradient_checkpointing: true
+    fsdp_config:
+      model_dtype: fp32
+      mixed_precision:
+        param_dtype: bf16
+        reduce_dtype: fp32
+        buffer_dtype: fp32
+      wrap_policy:
+        min_num_params: 0
+    optim:
+      lr: 1.0e-6
+      betas: [0.9, 0.999]
+      weight_decay: 0.01
+      grad_clip: 1.0
+  dual:
+    initial_value: 0.0
+    learning_rate: 0.01
+    maximum: 100.0
+
 
 trainer:
   balance_batch: True

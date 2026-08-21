@@ -146,6 +146,19 @@ TEMPLATE_FINAL_BOXED = """You are presented with a problem and a previous memory
 Your answer:
 """
 
+PRD_PRIOR_TEMPLATE = """Predict the next memory using only the previous memory and rewrite index.
+
+<rewrite_index>
+{turn_index}
+</rewrite_index>
+
+<previous_memory>
+{memory}
+</previous_memory>
+
+Next memory:
+"""
+
 
 class MemoryAgent(RAgent):
     def __init__(self, tokenizer:PreTrainedTokenizer, config: MemoryConfig):
@@ -158,6 +171,7 @@ class MemoryAgent(RAgent):
         self.chat_template = chat_template(tokenizer)
         self.token_message_template = TokenTemplate(self.chat_template.format(message=TEMPLATE), tokenizer)
         self.token_final_message_template = TokenTemplate(self.chat_template.format(message=TEMPLATE_FINAL_BOXED), tokenizer)
+        self.prd_prior_template = TokenTemplate(self.chat_template.format(message=PRD_PRIOR_TEMPLATE), tokenizer)
         # we assume that final_message template is difinately shorter than message_template
         self.max_input_length = self.config.max_raw_input_length + self.token_message_template.length 
         logger.info(f'\n[RECURRENT] max_input_length: {self.config.max_raw_input_length}(raw) '
@@ -202,6 +216,14 @@ class MemoryAgent(RAgent):
                 )
                 for prompt, memory in zip(gen_batch.non_tensor_batch['prompt_ids'], self.memory)
             ]
+            turn_tokens = self.tokenizer.encode(str(self.step), add_special_tokens=False)
+            self.prd_prior_messages = [
+                self.prd_prior_template.format(
+                    memory=memory if memory is not None else self.NO_MEMORY_TOKENS,
+                    turn_index=turn_tokens,
+                )
+                for memory in self.memory
+            ]
             sample_index = torch.arange(self.bsz, dtype=torch.int)
             final_mask = torch.full(sample_index.shape, True, dtype=torch.bool) # all False
             self.meta_info = {'input_pad_to': self.max_input_length,
@@ -227,6 +249,17 @@ class MemoryAgent(RAgent):
                         chunk=chunk[chunk != self.tokenizer.pad_token_id], # unpadding needed here
                 )
                 for prompt, memory, chunk in zip(prompt_i, memory_i, chunk_i)
+            ]
+            # This parallel prompt is the coding prior's complete information
+            # set. It intentionally has no problem, chunk, history, answer,
+            # reward, or future field.
+            turn_tokens = self.tokenizer.encode(str(self.step), add_special_tokens=False)
+            self.prd_prior_messages = [
+                self.prd_prior_template.format(
+                    memory=memory if memory is not None else self.NO_MEMORY_TOKENS,
+                    turn_index=turn_tokens,
+                )
+                for memory in memory_i
             ]
             sample_index = torch.arange(self.bsz, dtype=torch.long)[active_mask] # map active sample to original batch
             final_mask = torch.full(sample_index.shape, False, dtype=torch.bool) # all False
@@ -260,6 +293,8 @@ class MemoryAgent(RAgent):
         del self.meta_info
         del self.memory
         del self.messages
+        if hasattr(self, "prd_prior_messages"):
+            del self.prd_prior_messages
         sample_index = torch.cat(self.sample_index_list)
         final_mask = torch.cat(self.final_mask_list)
         del self.final_mask_list

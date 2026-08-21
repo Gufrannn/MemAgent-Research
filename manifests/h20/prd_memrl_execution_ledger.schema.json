@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PRD-MemRL append-only execution record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "sequence", "timestamp", "run_id", "event", "git_commit", "payload", "previous_record_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "sequence": {"type": "integer", "minimum": 0},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "run_id": {"type": "string", "minLength": 8},
+    "event": {"enum": ["P0", "E0", "E1", "BASELINE_IMPORT", "T5_LAUNCH", "T5_COMPLETE", "T5_GATE", "CONTINUE_LAUNCH", "ANCHOR_COMPLETE", "FINAL_AUDIT", "FAILURE"]},
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "payload": {"type": "object"},
+    "previous_record_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+  }
+}

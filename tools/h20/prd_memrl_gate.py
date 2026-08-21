@@ -47,15 +47,19 @@ def git(*args: str) -> str:
 
 def command_e0(args: argparse.Namespace) -> int:
     import torch
-    from recurrent.research.prd_memrl import PriorTaintError, ProjectedDual, conditional_rate_nats, validate_prior_record
+    from recurrent.research.prd_memrl import PriorTaintError, ProjectedDual, load_prd_checkpoint, save_prd_checkpoint, validate_prior_record
 
     failures = []
-    actor = torch.log(torch.tensor([[0.8], [0.8], [0.2], [0.2]], dtype=torch.float64))
-    prior = torch.full_like(actor, -torch.log(torch.tensor(2.0, dtype=torch.float64)))
-    _, bound = conditional_rate_nats(actor, prior, torch.ones_like(actor))
-    mi = float(torch.log(torch.tensor(2.0)) + 0.2 * torch.log(torch.tensor(0.2)) + 0.8 * torch.log(torch.tensor(0.8)))
-    if float(bound) + 1e-9 < mi:
+    error = torch.tensor(0.2, dtype=torch.float64)
+    mi_tensor = torch.log(torch.tensor(2.0, dtype=torch.float64)) + error * torch.log(error) + (1-error) * torch.log(1-error)
+    # Exact expectation for a uniform-input binary symmetric channel and its
+    # exact history-blind output marginal q(y)=1/2.
+    bound = (1-error) * torch.log(2*(1-error)) + error * torch.log(2*error)
+    mi = float(mi_tensor)
+    if abs(float(bound) - mi) > 1e-12:
         failures.append("synthetic KL upper bound failed")
+    if abs(float(bound - mi_tensor)) > 1e-12:
+        failures.append("synthetic KL decomposition failed")
     for field in ("new_evidence", "history_chunk", "gold", "future", "reward"):
         try:
             validate_prior_record({"previous_memory": "m", "turn_index": 0, field: "taint"})
@@ -70,6 +74,12 @@ def command_e0(args: argparse.Namespace) -> int:
         dual.step(0.0)
     if not rose or dual.value != 0:
         failures.append("projected dual direction/recovery failed")
+    import tempfile
+    with tempfile.TemporaryDirectory() as directory:
+        saved = save_prd_checkpoint(directory, actor_state={"w": torch.ones(1)}, prior_state={"w": torch.zeros(1)}, dual=dual)
+        actor_state, prior_state, restored = load_prd_checkpoint(saved)
+        if actor_state["w"].item() != 1 or prior_state["w"].item() != 0 or restored.state_dict() != dual.state_dict():
+            failures.append("actor/prior/dual checkpoint roundtrip failed")
     result = certificate("PRD_E0_PASS" if not failures else "PRD_E0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "synthetic_mi_nats": mi, "variational_bound_nats": float(bound), "git_commit": git("rev-parse", "HEAD")})
     write_json_exclusive(Path(args.output), result)
     return 0 if not failures else 2
@@ -79,18 +89,38 @@ def command_e1(args: argparse.Namespace) -> int:
     from recurrent.research.prd_memrl import assert_rate_not_length
 
     rows = [json.loads(line) for line in Path(args.rows).read_text().splitlines() if line.strip()]
-    required = {"stable_id", "writer_tokens", "actor_logprob_sum", "prior_logprob_sum"}
+    required = {
+        "stable_id", "turn_index", "writer_tokens", "actor_logprob_sum",
+        "prior_logprob_sum", "unigram_logprob_sum", "turn_only_logprob_sum",
+        "entropy_nats", "reference_kl_nats", "prior_context_sha256",
+        "mutated_evidence_prior_context_sha256",
+    }
     failures = []
     if not rows or any(set(row) < required for row in rows):
         failures.append("missing exact E1 row fields")
     discordance = None
+    coding_gain = None
+    controlled_r2 = None
     if not failures:
+        import numpy as np
         rates = [float(row["actor_logprob_sum"]) - float(row["prior_logprob_sum"]) for row in rows]
         try:
             discordance = assert_rate_not_length(rates, [int(row["writer_tokens"]) for row in rows])
         except ValueError as exc:
             failures.append(str(exc))
-    result = certificate("PRD_E1_PASS" if not failures else "PRD_E1_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "row_count": len(rows), "rate_length_discordance": discordance, "rows_sha256": sha256(Path(args.rows)), "git_commit": git("rev-parse", "HEAD")})
+        coding_gain = sum(float(row["prior_logprob_sum"]) - max(float(row["unigram_logprob_sum"]), float(row["turn_only_logprob_sum"])) for row in rows) / len(rows)
+        if coding_gain <= 0:
+            failures.append("legal learned prior has no coding gain over legal baselines")
+        if any(row["prior_context_sha256"] != row["mutated_evidence_prior_context_sha256"] for row in rows):
+            failures.append("dynamic evidence mutation changed history-blind prior context")
+        design = np.asarray([[1.0, float(row["writer_tokens"]), float(row["turn_index"]), float(row["entropy_nats"]), float(row["reference_kl_nats"])] for row in rows])
+        target = np.asarray(rates)
+        prediction = design @ np.linalg.lstsq(design, target, rcond=None)[0]
+        denominator = float(((target-target.mean())**2).sum())
+        controlled_r2 = 1.0 if denominator == 0 else 1.0-float(((target-prediction)**2).sum())/denominator
+        if controlled_r2 >= 0.95:
+            failures.append("conditional rate is explained by length/turn/entropy/reference-KL controls")
+    result = certificate("PRD_E1_PASS" if not failures else "PRD_E1_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "row_count": len(rows), "rate_length_discordance": discordance, "legal_prior_coding_gain_nats": coding_gain, "controlled_r2": controlled_r2, "rows_sha256": sha256(Path(args.rows)), "git_commit": git("rev-parse", "HEAD")})
     write_json_exclusive(Path(args.output), result)
     return 0 if not failures else 3
 

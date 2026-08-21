@@ -431,17 +431,26 @@ def compute_policy_loss(
 
 
 def compute_conditional_rate_loss(
-    actor_log_prob, prior_log_prob, writer_mask, dual_value, capacity_nats
+    actor_log_prob, behavior_log_prob, prior_log_prob, writer_mask, dual_value, capacity_nats
 ):
-    """Compute the PRD sampled rate penalty and detached dual statistics."""
+    """Compute reverse-KL gradient and rollout-policy rate evidence."""
     from recurrent.research.prd_memrl import conditional_rate_nats
 
     per_trajectory, mean_rate = conditional_rate_nats(
-        actor_log_prob, prior_log_prob.detach(), writer_mask
+        behavior_log_prob.detach(), prior_log_prob.detach(), writer_mask
     )
+    mask = writer_mask.to(actor_log_prob.dtype)
+    active = mask.sum(dim=-1) > 0
+    log_importance = ((actor_log_prob - behavior_log_prob.detach()) * mask).sum(dim=-1)
+    if torch.any(log_importance[active].abs() > 20):
+        raise FloatingPointError("PRD sequence importance ratio left the safe numerical aperture")
+    sampled_code = ((actor_log_prob - prior_log_prob.detach()) * mask).sum(dim=-1)
+    # Autograd through both rho and sampled_code gives the forward-KL
+    # score-function term rho*(1+log pi/q) on behavior trajectories.
+    differentiable_rate = (torch.exp(log_importance[active]) * sampled_code[active]).mean()
     violation = mean_rate.detach() - float(capacity_nats)
     return (
-        mean_rate * float(dual_value),
+        differentiable_rate * float(dual_value),
         mean_rate.detach(),
         violation,
         per_trajectory.detach(),

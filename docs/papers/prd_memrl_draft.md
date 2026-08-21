@@ -1,9 +1,17 @@
 # Paper IV Draft — Conditional Innovation Rate for Recurrent Text Memory
 
-**Scientific status (2026-08-22): REFRAME, pre-E1.** This document states a
+**Scientific status (2026-08-22): REFRAME-GO, pre-E1.** This document states a
 falsifiable paper program, not a result claim. Bracketed entries are experiment
 placeholders. A failure of the Original rate-not-length audit, prior coding-gain
 gate, or three-point frontier gate changes the status to NO-GO.
+
+The reframe is substantive: “innovation” is defined only for a source-isolated
+writer whose non-memory input at turn `t` is newly arriving evidence `E_t` plus
+public turn metadata. If the production actor reads additional unrecorded
+history, the estimand is residual-history rate and the main claim is blocked.
+Likewise, a PPO minibatch log-ratio is not automatically a channel KL: the rate
+ledger must use on-policy writer samples and their behavior log-probabilities
+(or a preregistered support-valid importance estimator).
 
 ## Working title
 
@@ -61,12 +69,12 @@ but does not impose a communication budget and may reward information unrelated
 to future utility.
 
 We study a narrower question: **at a fixed previous memory, how much new
-information may the next free-text state carry about the history newly visible
-to the writer?** Let the actor be
-`pi_theta(M_{t+1}|H_t,M_t,t)`. We introduce a coding distribution
+information may the next free-text state carry about the evidence newly visible
+to a source-isolated writer?** Let the actor be
+`pi_theta(M_{t+1}|E_t,M_t,t)`. We introduce a coding distribution
 `q_psi(M_{t+1}|M_t,t)` whose input is restricted by construction. Because the
 prior cannot observe the new chunk, the expected log-density ratio from actor
-to prior upper-bounds `I(H_t;M_{t+1}|M_t,t)`. The ratio is measured on the exact
+to prior upper-bounds `I(E_t;M_{t+1}|M_t,t)`. The ratio is measured on the exact
 generated writer tokens and summed across rewrites. It is therefore an
 operational conditional code length, not a token count and not an embedding
 score.
@@ -132,10 +140,14 @@ The intended contributions are fourfold, pending evidence:
 
 ## 2. Problem formulation and main propositions
 
-At turn `t`, let `M_t` be the materialized text state, `E_t` the newly arriving
-evidence, and `H_t` the legal actor history including `E_t`. The writer samples
+At turn `t`, let `M_t` be the materialized text state and `E_t` the newly
+arriving evidence. The source-isolated writer samples
 
-`M_{t+1} ~ pi_theta(. | H_t, M_t, t)`.
+`M_{t+1} ~ pi_theta(. | E_t, M_t, t)`.
+
+This is an interface contract, not shorthand: no additional hidden history may
+reach the writer. If the host exposes more context, the paper must name that
+exact source and may not interpret the rate as current-evidence innovation.
 
 The legal coding prior is
 
@@ -147,7 +159,7 @@ full histories are forbidden.
 
 Define the per-turn variational innovation rate
 
-`R_t(theta,psi) = E_pi[log pi_theta(M_{t+1}|H_t,M_t,t) - log q_psi(M_{t+1}|M_t,t)]`,
+`R_t(theta,psi) = E_pi[log pi_theta(M_{t+1}|E_t,M_t,t) - log q_psi(M_{t+1}|M_t,t)]`,
 
 and episode rate `R=sum_t R_t`. The constrained objective is
 
@@ -163,7 +175,7 @@ log-likelihood on detached actor text; and
 For any normalized `q(M_{t+1}|M_t,t)` with support wherever the actor-induced
 conditional marginal has support,
 
-`I(H_t;M_{t+1}|M_t,t) <= E KL(pi_theta(.|H_t,M_t,t) || q(.|M_t,t))`.
+`I(E_t;M_{t+1}|M_t,t) <= E KL(pi_theta(.|E_t,M_t,t) || q(.|M_t,t))`.
 
 **Proof sketch.** Insert the actor-induced marginal
 `p_theta(M_{t+1}|M_t,t)`. The expected KL to `q` decomposes into the conditional
@@ -171,6 +183,13 @@ mutual information plus
 `E KL(p_theta(.|M_t,t)||q(.|M_t,t))`, which is non-negative. Equality holds for
 the exact conditional marginal. The synthetic E0 test evaluates this identity
 on a finite channel, not merely the inequality.
+
+**Estimator boundary.** Samples from behavior actor `pi_b` with
+`log pi_b(M|E,M_t,t)-log q(M|M_t,t)` estimate the behavior channel's rate.
+Substituting a post-update `pi_theta` in the log term while retaining unweighted
+`pi_b` samples generally estimates neither channel's KL. Current-rate claims
+therefore require fresh on-policy samples or explicit sequence-level importance
+weighting with support and effective-sample-size diagnostics.
 
 ### Proposition 2 — why length is not rate
 
@@ -185,7 +204,7 @@ false, coding assumptions.
 ### Proposition 3 — successive accounting is necessary
 
 There exist two recurrent channels with identical distribution over final memory
-`M_T` and return but different `sum_t I(H_t;M_{t+1}|M_t,t)`: one transmits and
+`M_T` and return but different `sum_t I(E_t;M_{t+1}|M_t,t)`: one transmits and
 later deletes a bit; the other never transmits it. A final-state bottleneck cannot
 distinguish their communication cost. Our ledger must therefore retain every
 turn's actor/prior log-probability and mask.
@@ -212,6 +231,14 @@ finite-channel instance; H20 ledgers test constraint error and oscillation.
 | [Variational Predictive Information Bottleneck (2020)](https://proceedings.mlr.press/v118/alemi20a.html) | Variational predictive-IB objective and learned variational distributions. | Not a recurrent text-memory RL algorithm or empirical rate frontier. | Theory foundation, not claimed novelty. |
 | [Recurrent model-free RL for POMDPs, ICML 2022](https://proceedings.mlr.press/v162/ni22a.html) | Strong recurrent baselines and careful POMDP evaluation. | Does not constrain explicit text-state communication. | Motivates recurrent and memoryless controls in the query-blind test. |
 | [InstructGPT (2022)](https://arxiv.org/abs/2203.02155) and PPO | Per-token KL to a fixed reference controls policy drift in language RL. | Reference sees the same prompt and encodes model change, not evidence information injected into memory. | Fixed-base KL is a mandatory ablation at matched realized KL/rate. |
+| [SPPO: Sequence-Level PPO (2026)](https://arxiv.org/abs/2604.08865) | Treats a generated reasoning sequence as the optimization unit and develops sequence-level clipping/normalization for outcome RL. | Does not define or constrain an evidence-to-memory channel, learn a source-firewalled coding marginal, or measure successive rewrite rate. | Sequence-level optimization is not our novelty; compare writer sequence-ratio and tokenwise rate-gradient implementations at matched samples. |
+| [Counterfactual Credit Assignment, ICML 2021](https://proceedings.mlr.press/v139/mesnard21a.html) | Future-conditioned values separate controllable action effects from luck and yield low-variance policy gradients. | Addresses action credit, not representational capacity or conditional coding of materialized text state. | A rate constraint does not solve delayed writer credit; retain credit diagnostics and avoid that claim. |
+| [Sequence Compression / Chunked-TD, ICML 2024](https://proceedings.mlr.press/v235/ramesh24b.html) | Model-predicted transitions select TD trace boundaries to accelerate long-delay credit assignment. | “Compression” concerns temporal targets, not an agent's carried state. | Do not imply a shared rate–distortion estimand; diagnose credit effects separately. |
+| [Constrained Policy Optimization, ICML 2017](https://proceedings.mlr.press/v70/achiam17a.html) | Trust-region CMDP optimization with near-constraint-satisfaction guarantees. | Does not supply this information cost or text-memory frontier; sampled primal-dual updates lack CPO's per-iterate guarantee. | Do not claim constrained-RL novelty or safety guarantees; report every-update violations and compare fixed penalty. |
+| [SPIBB, ICML 2019](https://proceedings.mlr.press/v97/laroche19a.html) | High-probability batch safe improvement over a behavior policy by baseline bootstrapping in uncertain regions. | A capacity health gate is not a return-improvement guarantee, and this training is on-policy. | Never call the T5 gate “safe policy improvement” without a valid confidence-bound guarantee. |
+| [Deep Variational Information Bottleneck, ICLR 2017](https://openreview.net/pdf?id=HyxQzBceg) | Learnable variational upper bound on encoder input information using an auxiliary marginal. | Supervised latent setting; no recurrent text source isolation, sequential accounting, or RL frontier. | The learned-prior upper bound is prior art; novelty must reside in channel/interface/certificates. |
+| [Robust MDPs (Iyengar, 2005)](https://doi.org/10.1287/moor.1050.0129) | Worst-case policies over transition ambiguity sets with robust dynamic programming under structural assumptions. | A capacity sweep is an intervention, not transition-law ambiguity. | Do not label the frontier DRO or robust RL without a prespecified uncertainty set and worst-case objective. |
+| [Average-reward DRRL reduction, ICML 2025](https://proceedings.mlr.press/v267/roch25a.html) | Sample-efficient reduction for distributionally robust average-reward RL with function approximation. | Optimizes transition-distribution uncertainty, not recurrent text information allocation. | DRO is only an external-stress neighbor here, not an algorithm contribution. |
 | Token-length Lagrangian | Directly limits storage/compute. | Cannot distinguish predictable padding from evidence-dependent symbols. | Mandatory matched-token baseline; rate claim fails if it explains all effects. |
 
 **Novelty boundary.** The defensible residual is the combination of (i) the
@@ -222,6 +249,36 @@ predictive-sufficiency certificates. Learned priors, IB, KL control, primal-dual
 RL, memory RL, compression, and Pareto curves are individually prior art. If the
 paper reduces empirically to a length penalty or a CMI-shaped reward, REFRAME
 becomes NO-GO or MERGE with the relevant neighboring line.
+
+### Independent framing review checkpoint
+
+**Decision: REFRAME, then conditional GO to E0/E1; not yet GO to H20 T5.** The
+broad “minimal sufficient memory” story overclaims what a variational upper
+bound plus terminal score identifies. The defensible paper is a source-isolated
+*conditional evidence-rate frontier* for recurrent text-state transitions. It
+can be full-paper-sized because the auditable autoregressive message is reused
+by the same policy, requiring successive channel accounting, a legal learned
+marginal, constrained RL, and predictive failure tests. It is not full-paper-
+sized if presented merely as VIB plus PPO.
+
+The residual is credible but empirical: none of the audited sources combines
+source-isolated recurrent free-text rewrites, actor/prior sequence code lengths,
+an explicit capacity constraint, and multi-anchor predictive-sufficiency
+certificates. Yet Deep VIB, predictive IB, capacity-limited RL, and constrained
+RL cover every generic component. Framing is therefore GO only if:
+
+1. The production writer's complete input is proven to be `(E_t,M_t,t)`.
+2. E0 verifies normalization/support, the finite-channel decomposition, dual
+   direction, and the behavior/current-policy estimator boundary.
+3. E1 shows legal-prior coding gain and rate variation unexplained by token
+   length, turn, entropy, or fixed-reference KL.
+4. At least three preregistered capacities yield distinct realized rates.
+5. Predictive probes plus deletion/injection interventions locate where lower
+   rate preserves or destroys future-useful information.
+
+Failure of (1) or (2) requires an estimand pivot, not tuning. Failure of (3)–(5)
+means `NO-GO_PRD` or merger into a length/CMI line; token count may not be renamed
+as information rate.
 
 ## 4. Experiments, tables, and falsification plan
 
@@ -320,3 +377,10 @@ The nearest-paper search explicitly included recurrent/agent memory RL,
 sequence-level language-policy optimization, conditional information
 bottlenecks/rate distortion, POMDP representation learning, and constrained RL.
 The claim matrix will be revised if E1 or reviewer search finds a closer source.
+
+Official code inspected or located: [MemAgent](https://github.com/BytedTsinghua-SIA/MemAgent),
+[Memory-R1](https://github.com/yansikuan/memory-r1) (the repository currently
+states that code is forthcoming), and
+[ReMemR1](https://github.com/syr-cn/ReMemR1). Code availability is recorded
+separately from paper claims; a forthcoming repository is not evidence that a
+comparison was implemented.
