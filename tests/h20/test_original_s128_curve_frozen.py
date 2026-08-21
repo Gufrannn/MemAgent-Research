@@ -734,6 +734,26 @@ class OriginalS128CurveFrozenTests(unittest.TestCase):
         self.assertLess(runner.index('if [[ $mode == import ]]'), runner.index('mkdir -p "$root"'))
         self.assertNotIn("main_ppo", json.dumps(self.commands["commands"]["p0"]))
 
+    def test_runner_uses_unique_short_ray_tmp_and_cleans_it_on_exit(self) -> None:
+        runner = RUNNER.read_text()
+        self.assertIn('ray_tmp=$(mktemp -d "/tmp/oc${ray_tag}.XXXXXX")', runner)
+        self.assertIn("trap cleanup_original_curve_ray_tmp EXIT", runner)
+        self.assertIn('rm -rf -- "$target"', runner)
+        self.assertIn('unset RAY_TMPDIR', runner)
+        self.assertIn('unset TMPDIR', runner)
+        self.assertIn("export RAY_TMPDIR=$ray_tmp", runner)
+        self.assertIn("export TMPDIR=$ray_tmp", runner)
+        self.assertNotIn("/tmp/moriginal_curve_", runner)
+        self.assertLess(runner.index("export RAY_TMPDIR"), runner.index("-m verl.trainer.main_ppo"))
+
+        # Ray 2.42 names sessions as session_<microsecond timestamp>_<pid>.
+        # Use the longest preregistered tag and a maximum 32-bit decimal PID.
+        ray_base = "/tmp/oc25.ABC123"
+        session = "session_9999-12-31_23-59-59_999999_2147483647"
+        plasma_socket = f"{ray_base}/{session}/sockets/plasma_store"
+        self.assertLess(len(plasma_socket.encode("utf-8")), 107, plasma_socket)
+        self.assertEqual(len(plasma_socket.encode("utf-8")), 83)
+
     def test_curve_ledger_distinguishes_imports_from_new_gpu_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

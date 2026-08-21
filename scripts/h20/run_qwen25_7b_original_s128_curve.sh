@@ -23,6 +23,21 @@ done < <(compgen -v MEMAGENT_T25_ || true)
 export GATE_A_WEIGHT_DIGEST_PARAMETERS=$ORIGINAL_CURVE_DIGEST_PARAMETERS
 export GATE_A_WEIGHT_DIGEST_SAMPLES=256
 
+ORIGINAL_CURVE_ACTIVE_RAY_TMP=
+cleanup_original_curve_ray_tmp() {
+  local target=${ORIGINAL_CURVE_ACTIVE_RAY_TMP:-}
+  [[ -n $target ]] || return 0
+  if [[ ! $target =~ ^/tmp/oc(i|5|10|15|20|25)\.[[:alnum:]]{6}$ ]]; then
+    echo "ORIGINAL_S128_CURVE_NO_GO:CLEANUP refusing unexpected Ray temp path: $target" >&2
+    return 82
+  fi
+  rm -rf -- "$target"
+  [[ ${RAY_TMPDIR:-} != "$target" ]] || unset RAY_TMPDIR
+  [[ ${TMPDIR:-} != "$target" ]] || unset TMPDIR
+  ORIGINAL_CURVE_ACTIVE_RAY_TMP=
+}
+trap cleanup_original_curve_ray_tmp EXIT
+
 interface_root() {
   case "$1" in
     I) echo "$ORIGINAL_CURVE_LOG_ROOT/interface_i_base" ;;
@@ -42,7 +57,7 @@ record_event() {
 }
 
 process_interface() {
-  local interface_id=$1 mode root run_log ray_tmp overrides_file
+  local interface_id=$1 mode root run_log ray_tag ray_tmp overrides_file
   local -a trainer_overrides
   mode=$("$ORIGINAL_CURVE_PYTHON" \
     "$ORIGINAL_CURVE_REPO_DIR/tools/h20/preflight_qwen25_7b_original_s128_curve.py" \
@@ -61,9 +76,23 @@ process_interface() {
   [[ ! -e $root ]] || {
     echo "ORIGINAL_S128_CURVE_NO_GO:APPEND_ONLY interface path exists: $root" >&2; exit 72;
   }
-  ray_tmp=/tmp/moriginal_curve_${UID}_${interface_id}_$$
+  case "$interface_id" in
+    I) ray_tag=i ;;
+    Original5) ray_tag=5 ;;
+    Original10) ray_tag=10 ;;
+    Original15) ray_tag=15 ;;
+    Original20) ray_tag=20 ;;
+    Original25) ray_tag=25 ;;
+    *) echo "ORIGINAL_S128_CURVE_NO_GO:CONFIG unknown Ray tag for $interface_id" >&2; exit 73 ;;
+  esac
+  # Ray appends session_<timestamp>_<pid>/sockets/plasma_store.  Keep this
+  # mktemp base extremely short so the complete Linux AF_UNIX path is <107.
+  ray_tmp=$(mktemp -d "/tmp/oc${ray_tag}.XXXXXX")
+  [[ $ray_tmp =~ ^/tmp/oc(i|5|10|15|20|25)\.[[:alnum:]]{6}$ ]] || {
+    echo "ORIGINAL_S128_CURVE_NO_GO:CONFIG unsafe Ray temp path: $ray_tmp" >&2; exit 73;
+  }
+  ORIGINAL_CURVE_ACTIVE_RAY_TMP=$ray_tmp
   overrides_file=$ray_tmp/trainer_overrides.txt
-  mkdir -p "$ray_tmp"
   "$ORIGINAL_CURVE_PYTHON" \
     "$ORIGINAL_CURVE_REPO_DIR/tools/h20/preflight_qwen25_7b_original_s128_curve.py" \
     --manifest "$ORIGINAL_CURVE_MANIFEST" --emit-trainer-overrides --interface "$interface_id" \
@@ -87,6 +116,7 @@ process_interface() {
     2>&1 | tee -a "$run_log"
   record_event "$interface_id" finish
   original_curve_wait_cleanup
+  cleanup_original_curve_ray_tmp
 }
 
 for interface_id in I Original5 Original10 Original15 Original20 Original25; do
