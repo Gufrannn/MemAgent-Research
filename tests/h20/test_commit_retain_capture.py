@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+import types
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -307,6 +309,11 @@ def pair_payload(index: int = 7, call_offset: int = 0) -> dict:
             "physical_gpu_identity": GPU_IDENTITIES,
             "visible_devices": "6,7",
             "cuda_device_order": "PCI_BUS_ID",
+            "worker_multiproc_method": "spawn",
+            "vllm_observed_worker_multiproc_method": "spawn",
+            "multiprocessing_context_method": "spawn",
+            "parent_cuda_initialized_before_engine": True,
+            "parent_cuda_initialization_policy": "record_observed_spawn_required",
             "prefix_cache_enabled": False,
             "max_num_seqs": 1,
             "one_prompt_per_generate_call": True,
@@ -484,6 +491,10 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
             "reader_decode": pairs[0]["shared_contract"]["reader_decode"],
             "physical_gpu_identity": GPU_IDENTITIES,
             "engine_config_sha256": "e" * 64,
+            "worker_multiproc_method": "spawn",
+            "vllm_observed_worker_multiproc_method": "spawn",
+            "multiprocessing_context_method": "spawn",
+            "parent_cuda_initialization_policy": "record_observed_spawn_required",
             "global_generate_call_count": 24,
             "eos_token_id": 999,
         },
@@ -554,6 +565,7 @@ def test_frozen_manifest_and_shell_wire_parent_authorization_before_capture() ->
     ]
     assert commands["execution"]["physical_gpus"] == [6, 7]
     assert commands["execution"]["backend"] == "strict_vllm_0.8.2"
+    assert commands["execution"]["worker_multiproc_method"] == "spawn"
     assert commands["execution"]["training_updates"] == 0
     shell = (REPO / "scripts/h20/run_qwen25_7b_commit_retain.sh").read_text()
     assert shell.index("COMMIT_RETAIN_CAPTURE_PROFILE=gpu67") < shell.index(
@@ -563,6 +575,9 @@ def test_frozen_manifest_and_shell_wire_parent_authorization_before_capture() ->
         "tools/h20/run_qwen25_7b_commit_retain.py"
     )
     assert '--credential "$COMMIT_RETAIN_CREDENTIAL"' in shell
+    assert shell.index("VLLM_WORKER_MULTIPROC_METHOD=spawn") < shell.index(
+        "tools/h20/run_qwen25_7b_commit_retain.py"
+    )
 
 
 def test_gpu45_overlay_is_fully_independent_and_keeps_gpu67_default() -> None:
@@ -683,6 +698,7 @@ def test_gpu45_runner_authenticates_only_physical_gpu45() -> None:
             "CUDA_VISIBLE_DEVICES": "4,5",
             "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
             "VLLM_USE_V1": "0",
+            "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
         },
         clear=False,
     ):
@@ -699,10 +715,71 @@ def test_gpu45_runner_authenticates_only_physical_gpu45() -> None:
             "CUDA_VISIBLE_DEVICES": "6,7",
             "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
             "VLLM_USE_V1": "0",
+            "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
         },
         clear=False,
     ), pytest.raises(ValueError, match="physical GPU4,5"):
         runner._runtime(Path("unused.json"))
+
+
+def test_spawn_contract_handles_cuda_initialized_parent_and_rejects_fork() -> None:
+    from tools.h20 import run_qwen25_7b_commit_retain as runner
+
+    manifest = {
+        "backend": {
+            "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+            "parent_cuda_initialization_policy": "record_observed_spawn_required",
+        }
+    }
+    fake_vllm = types.ModuleType("vllm")
+    fake_vllm.envs = types.SimpleNamespace(VLLM_WORKER_MULTIPROC_METHOD="spawn")
+    fake_utils = types.ModuleType("vllm.utils")
+    fake_utils.get_mp_context = lambda: __import__("multiprocessing").get_context(
+        fake_vllm.envs.VLLM_WORKER_MULTIPROC_METHOD
+    )
+    with patch.dict(sys.modules, {"vllm": fake_vllm, "vllm.utils": fake_utils}), patch.dict(
+        os.environ, {"VLLM_WORKER_MULTIPROC_METHOD": "spawn"}, clear=False
+    ):
+        evidence = runner._worker_multiprocessing_evidence(
+            manifest, parent_cuda_initialized=True
+        )
+    assert evidence == {
+        "worker_multiproc_method": "spawn",
+        "vllm_observed_worker_multiproc_method": "spawn",
+        "multiprocessing_context_method": "spawn",
+        "parent_cuda_initialized_before_engine": True,
+        "parent_cuda_initialization_policy": "record_observed_spawn_required",
+    }
+
+    fake_vllm.envs.VLLM_WORKER_MULTIPROC_METHOD = "fork"
+    with patch.dict(sys.modules, {"vllm": fake_vllm, "vllm.utils": fake_utils}), patch.dict(
+        os.environ, {"VLLM_WORKER_MULTIPROC_METHOD": "fork"}, clear=False
+    ), pytest.raises(RuntimeError, match="must be spawn.*parent_cuda_initialized=True"):
+        runner._worker_multiprocessing_evidence(
+            manifest, parent_cuda_initialized=True
+        )
+
+
+def test_manifest_and_gpu45_wrappers_fail_closed_on_worker_method_drift() -> None:
+    manifest = json.loads(
+        (REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json").read_text()
+    )
+    assert manifest["backend"]["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
+    drifted = copy.deepcopy(manifest)
+    drifted["backend"]["VLLM_WORKER_MULTIPROC_METHOD"] = "fork"
+    with pytest.raises(ValueError, match="backend.VLLM_WORKER_MULTIPROC_METHOD drifted"):
+        _validate_manifest(drifted)
+
+    commands = json.loads(
+        (REPO / "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_commands.json").read_text()
+    )
+    assert commands["execution"]["worker_multiproc_method"] == "spawn"
+    for name in (
+        "preflight_qwen25_7b_commit_retain_gpu45.sh",
+        "run_qwen25_7b_commit_retain_gpu45.sh",
+    ):
+        shell = (REPO / "scripts/h20" / name).read_text()
+        assert shell.count("VLLM_WORKER_MULTIPROC_METHOD=spawn") == 1
 
 
 def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(

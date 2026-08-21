@@ -7,6 +7,15 @@ writer-turn-0 prompt-length strata. It runs strict vLLM 0.8.2 with TP=2 on
 physical H20 GPUs 6 and 7. It never attaches a trainer, restores an optimizer,
 updates the actor, selects a method, or changes `sources/`.
 
+The Python coordinator imports the native recurrent utilities before it builds
+the vLLM engine. Those utilities import PyTorch/TensorDict and may initialize
+CUDA in the coordinator. vLLM 0.8.2 otherwise defaults local workers to
+`fork`, which is unsafe after CUDA initialization. This contract therefore
+freezes `VLLM_WORKER_MULTIPROC_METHOD=spawn`. P0 asks the installed vLLM
+runtime which method it observes and verifies a real Python multiprocessing
+`spawn` context. Every capture/run receipt records that method and whether CUDA
+was already initialized in the coordinator immediately before engine creation.
+
 ## Native-interface evidence and minimal patch
 
 The native `recurrent.impls.memory.MemoryAgent.update` has one non-final state

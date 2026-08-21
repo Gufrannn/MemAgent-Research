@@ -303,6 +303,8 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
         "required_version": "0.8.2",
         "strict_vllm": True,
         "VLLM_USE_V1": "0",
+        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+        "parent_cuda_initialization_policy": "record_observed_spawn_required",
         "allow_huggingface_generation_fallback": False,
         "enable_prefix_caching": False,
         "enforce_eager": True,
@@ -410,6 +412,49 @@ def _native_interface_evidence() -> dict[str, Any]:
         "adapter_state_encoding": STATE_ENCODING,
         "training_path_modified": False,
     }
+
+
+def _worker_multiprocessing_runtime_binding(
+    python: Path, repo: Path
+) -> dict[str, Any]:
+    """Ask the frozen vLLM runtime which worker start method it will use."""
+    code = """
+import json
+import os
+from vllm import envs
+from vllm.utils import get_mp_context
+
+configured = os.environ.get("VLLM_WORKER_MULTIPROC_METHOD")
+observed = envs.VLLM_WORKER_MULTIPROC_METHOD
+context = get_mp_context().get_start_method()
+print(json.dumps({
+    "configured_environment": configured,
+    "vllm_observed_method": observed,
+    "multiprocessing_context_method": context,
+}, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [str(python), "-c", code],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ValueError(f"cannot inspect vLLM worker multiprocessing runtime: {detail}")
+    try:
+        binding = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as error:
+        raise ValueError("vLLM worker multiprocessing runtime emitted no binding") from error
+    expected = {
+        "configured_environment": "spawn",
+        "vllm_observed_method": "spawn",
+        "multiprocessing_context_method": "spawn",
+    }
+    if binding != expected:
+        raise ValueError(f"vLLM worker multiprocessing binding drifted: {binding}")
+    return binding
 
 
 def _freeze_pairs(
@@ -522,6 +567,8 @@ def run_preflight(
         failures.append("P0 CUDA_DEVICE_ORDER must be PCI_BUS_ID")
     if os.environ.get("VLLM_USE_V1") != "0":
         failures.append("P0 VLLM_USE_V1 must be 0")
+    if os.environ.get("VLLM_WORKER_MULTIPROC_METHOD") != "spawn":
+        failures.append("P0 VLLM_WORKER_MULTIPROC_METHOD must be spawn")
     try:
         if repo != REPO_ROOT.resolve():
             failures.append("invoked checkout differs from explicit repository")
@@ -575,6 +622,8 @@ def run_preflight(
             "cuda_device_order": "PCI_BUS_ID",
             "tensor_parallel_size": 2,
             "backend": "strict_vllm_0.8.2",
+            "worker_multiproc_method": "spawn",
+            "parent_cuda_initialization_policy": "record_observed_spawn_required",
             "huggingface_generation_fallback": False,
             "single_coordinator_invocation_single_engine": True,
             "one_prompt_per_generate_call": True,
@@ -641,6 +690,7 @@ def run_preflight(
 
     python = Path(manifest["python"])
     runtime_versions: dict[str, str] = {}
+    worker_multiprocessing: dict[str, Any] = {}
     gpu_identity: list[str] = []
     if not python.is_file():
         failures.append(f"frozen Python is missing: {python}")
@@ -649,6 +699,9 @@ def run_preflight(
             runtime_versions = _runtime_versions(python, repo)
             if runtime_versions.get("vllm") != "0.8.2":
                 failures.append(f"vLLM version drifted: {runtime_versions.get('vllm')}")
+            worker_multiprocessing = _worker_multiprocessing_runtime_binding(
+                python, repo
+            )
         except Exception as error:
             failures.append(str(error))
         completed = subprocess.run(
@@ -679,6 +732,7 @@ def run_preflight(
                     f"physical GPU{visible_devices} are not both NVIDIA H20: {gpu_identity}"
                 )
     evidence["runtime_versions"] = runtime_versions
+    evidence["worker_multiprocessing"] = worker_multiprocessing
     evidence["physical_gpu_identity"] = gpu_identity
 
     resolved: dict[str, Any] | None = None
@@ -716,6 +770,7 @@ def run_preflight(
                 "tokenizer_manifest_sha256": tokenizer_manifest_sha,
                 "validation_data_sha256": manifest["data"]["validation_sha256"],
                 "runtime_versions": runtime_versions,
+                "worker_multiprocessing": worker_multiprocessing,
                 "physical_gpu_identity": gpu_identity,
             }
             execution_binding = {
@@ -1100,6 +1155,10 @@ def expected_pair_binding(
         "reader_decode": manifest["intervention"]["reader_decode"],
         "physical_gpu_identity": resolved["runtime_binding"]["physical_gpu_identity"],
         "engine_config_sha256": execution["engine_config_sha256"],
+        "worker_multiproc_method": "spawn",
+        "vllm_observed_worker_multiproc_method": "spawn",
+        "multiprocessing_context_method": "spawn",
+        "parent_cuda_initialization_policy": "record_observed_spawn_required",
         "global_generate_call_count": execution["expected_global_generate_call_count"],
         "eos_token_id": int(tokenizer.eos_token_id),
     }

@@ -92,6 +92,8 @@
     "required_version": "0.8.2",
     "strict_vllm": true,
     "VLLM_USE_V1": "0",
+    "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+    "parent_cuda_initialization_policy": "record_observed_spawn_required",
     "allow_huggingface_generation_fallback": false,
     "enable_prefix_caching": false,
     "enforce_eager": true,

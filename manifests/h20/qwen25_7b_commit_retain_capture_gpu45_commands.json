@@ -15,6 +15,8 @@
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "backend": "strict_vllm_0.8.2",
+    "worker_multiproc_method": "spawn",
+    "parent_cuda_initialization_policy": "record_observed_spawn_required",
     "huggingface_generation_fallback": false,
     "single_coordinator_invocation_single_engine": true,
     "one_prompt_per_generate_call": true,

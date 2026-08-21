@@ -70,6 +70,8 @@ def _runtime(
         raise ValueError("CUDA_DEVICE_ORDER must be PCI_BUS_ID")
     if os.environ.get("VLLM_USE_V1") != "0":
         raise ValueError("VLLM_USE_V1 must be 0")
+    if os.environ.get("VLLM_WORKER_MULTIPROC_METHOD") != "spawn":
+        raise ValueError("VLLM_WORKER_MULTIPROC_METHOD must be spawn")
     current_sha = _current_binding(manifest, resolved, full_model_sha=True)
     completed = subprocess.run(
         [
@@ -134,6 +136,38 @@ def _engine(manifest: Mapping[str, Any]):
         max_num_seqs=1,
         enable_prefix_caching=False,
     )
+
+
+def _worker_multiprocessing_evidence(
+    manifest: Mapping[str, Any], *, parent_cuda_initialized: bool
+) -> dict[str, Any]:
+    """Fail closed unless vLLM will spawn its tensor-parallel workers."""
+    from vllm import envs
+    from vllm.utils import get_mp_context
+
+    if type(parent_cuda_initialized) is not bool:
+        raise ValueError("parent CUDA initialization observation must be boolean")
+    configured = os.environ.get("VLLM_WORKER_MULTIPROC_METHOD")
+    observed = envs.VLLM_WORKER_MULTIPROC_METHOD
+    context_method = get_mp_context().get_start_method()
+    expected = manifest["backend"]["VLLM_WORKER_MULTIPROC_METHOD"]
+    if expected != "spawn":
+        raise ValueError("frozen worker multiprocessing method is not spawn")
+    if configured != expected or observed != expected or context_method != expected:
+        raise RuntimeError(
+            "vLLM worker multiprocessing must be spawn before engine construction: "
+            f"configured={configured}, observed={observed}, context={context_method}, "
+            f"parent_cuda_initialized={parent_cuda_initialized}"
+        )
+    return {
+        "worker_multiproc_method": expected,
+        "vllm_observed_worker_multiproc_method": observed,
+        "multiprocessing_context_method": context_method,
+        "parent_cuda_initialized_before_engine": parent_cuda_initialized,
+        "parent_cuda_initialization_policy": manifest["backend"][
+            "parent_cuda_initialization_policy"
+        ],
+    }
 
 
 def _generate_one(
@@ -325,6 +359,7 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
     tokenizer = _tokenizer(manifest)
     from recurrent.impls.memory import TEMPLATE, TEMPLATE_FINAL_BOXED
     from recurrent.utils import TokenTemplate, chat_template
+    import torch
     import vllm
 
     if vllm.__version__ != "0.8.2":
@@ -339,6 +374,9 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
         raise ValueError("writer prompt template differs from P0")
     if reader_template_sha != execution_binding["reader_prompt_template_sha256"]:
         raise ValueError("reader prompt template differs from P0")
+    worker_multiprocessing = _worker_multiprocessing_evidence(
+        manifest, parent_cuda_initialized=bool(torch.cuda.is_initialized())
+    )
     writer_template = TokenTemplate(writer_template_text, tokenizer)
     reader_template = TokenTemplate(reader_template_text, tokenizer)
     no_memory_ids = list(tokenizer.encode(
@@ -374,6 +412,7 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
         "process_pid": PROCESS_PID,
         "global_generate_call_count": expected_global_calls,
         "engine_config_sha256": execution_binding["engine_config_sha256"],
+        **worker_multiprocessing,
         **credential_evidence,
     }
     checkpoint_sha = execution_binding["model_manifest_sha256"]

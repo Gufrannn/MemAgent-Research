@@ -15,3 +15,15 @@ The GPU45 profile is independent from the original GPU67 profile:
 
 The original GPU67 manifest, wrappers, lock, and output paths remain the
 default profile and are not redirected by this variant.
+
+The inherited backend contract freezes vLLM 0.8.2 tensor-parallel workers to
+the `spawn` start method. P0 verifies both the environment and the method seen
+by the installed vLLM runtime; capture receipts record the selected context and
+whether the coordinator had initialized CUDA before constructing the engine.
+This prevents CUDA state inherited through `fork` from producing a one-worker
+startup followed by a distributed-store timeout.
+
+Failed run roots are immutable evidence. In particular, a run that contains a
+PASS P0 certificate plus a capture credential/log but no four-pair capture,
+run receipt, or final report must be archived as a whole and must never be
+continued. Recovery uses a new run ID and starts again at P0.

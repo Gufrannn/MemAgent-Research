@@ -533,9 +533,11 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
         "vllm_version": "0.8.2",
         "strict_vllm": True,
         "tensor_parallel_size": 2,
-        "physical_gpu_whitelist": [6, 7],
-        "visible_devices": "6,7",
         "cuda_device_order": "PCI_BUS_ID",
+        "worker_multiproc_method": "spawn",
+        "vllm_observed_worker_multiproc_method": "spawn",
+        "multiprocessing_context_method": "spawn",
+        "parent_cuda_initialization_policy": "record_observed_spawn_required",
         "prefix_cache_enabled": False,
         "max_num_seqs": 1,
         "one_prompt_per_generate_call": True,
@@ -547,6 +549,21 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
     for field, expected in fixed.items():
         if value.get(field) != expected or type(value.get(field)) is not type(expected):
             raise ValueError(f"execution.{field} differs from strict capture contract")
+    physical_whitelist = value.get("physical_gpu_whitelist")
+    visible_devices = value.get("visible_devices")
+    allowed_gpu_bindings = {
+        (4, 5): "4,5",
+        (6, 7): "6,7",
+    }
+    if (
+        not isinstance(physical_whitelist, list)
+        or tuple(physical_whitelist) not in allowed_gpu_bindings
+        or visible_devices != allowed_gpu_bindings[tuple(physical_whitelist)]
+    ):
+        raise ValueError("execution physical/visible GPU binding is not preregistered")
+    parent_cuda_initialized = value.get("parent_cuda_initialized_before_engine")
+    if type(parent_cuda_initialized) is not bool:
+        raise ValueError("execution parent CUDA initialization observation is not boolean")
     identities = value.get("physical_gpu_identity")
     if (
         not isinstance(identities, list)
@@ -561,6 +578,9 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("execution.process_instance_uuid is invalid") from error
     result = {
         **fixed,
+        "physical_gpu_whitelist": physical_whitelist,
+        "visible_devices": visible_devices,
+        "parent_cuda_initialized_before_engine": parent_cuda_initialized,
         "physical_gpu_identity": identities,
         "engine_id": str(value.get("engine_id")),
         "cache_namespace": str(value.get("cache_namespace")),
@@ -1064,7 +1084,10 @@ def validate_capture_ledger(
                     raise ValueError(f"pair shared contract differs from P0 {field}")
             for field in (
                 "physical_gpu_identity", "engine_config_sha256",
-                "global_generate_call_count",
+                "global_generate_call_count", "worker_multiproc_method",
+                "vllm_observed_worker_multiproc_method",
+                "multiprocessing_context_method",
+                "parent_cuda_initialization_policy",
             ):
                 if canonical_json(pair["execution"].get(field)) != canonical_json(
                     expected_pair_binding[field]
@@ -1179,6 +1202,9 @@ def validate_capture_ledger(
     process_fields = (
         "engine_id", "cache_namespace", "process_instance_uuid", "process_pid",
         "physical_gpu_identity", "global_generate_call_count", "parent_credential_id",
+        "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
+        "multiprocessing_context_method", "parent_cuda_initialized_before_engine",
+        "parent_cuda_initialization_policy",
         "parent_credential_sha256", "parent_credential_path", "parent_issuer_pid",
         "observed_parent_pid",
         "parent_authorization_record_sha256", "engine_config_sha256",
