@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paired_effect_admissibility_report.schema.json",
+  "title": "MemAgent paired-effect offline candidate admissibility report",
+  "type": "object",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "passGate": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {"status": {"const": "PASS"}}
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema", "status", "decision", "candidate_id", "run_id", "pipeline",
+    "source_capture", "gates", "crossfit_bundle", "claim_boundary",
+    "training_authorized", "method_selected", "provenance_limitation", "failures"
+  ],
+  "properties": {
+    "schema": {"const": "memagent.paired-effect.admissibility-report.v1"},
+    "status": {"enum": ["PENDING", "FAIL"]},
+    "decision": {"type": "string", "minLength": 1},
+    "candidate_id": {"const": "paired_effect_credit"},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"},
+    "pipeline": {
+      "type": "object",
+      "required": [
+        "git_commit", "code_sha256", "code_combined_sha256", "manifest",
+        "manifest_sha256", "report_schema", "report_schema_sha256",
+        "capture32_preregistration", "capture32_preregistration_file_sha256",
+        "capture32_preregistration_sha256"
+      ],
+      "properties": {
+        "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "code_sha256": {
+          "type": "object",
+          "required": [
+            "recurrent/research/commit_retain_capture.py",
+            "recurrent/research/gate_a_execution.py",
+            "recurrent/research/paired_effect_credit.py",
+            "recurrent/research/s128_hotpot_metrics.py",
+            "recurrent/research/serialization_credit_pilots.py",
+            "recurrent/research/stable_eval_identity.py",
+            "recurrent/research/trajectory_seeding.py",
+            "recurrent/impls/memory.py",
+            "recurrent/utils.py",
+            "tools/h20/audit_qwen25_7b_paired_effect_candidate.py",
+            "tools/h20/preflight_qwen25_7b_commit_retain.py",
+            "tools/h20/preflight_qwen25_7b_serialization_credit.py",
+            "tools/h20/preflight_qwen25_7b_s128_it.py",
+            "tools/h20/preflight_qwen25_7b_stable_i4x2.py",
+            "manifests/h20/qwen25_7b_paired_effect_candidate_seed2026.json",
+            "manifests/h20/qwen25_7b_paired_effect_capture32_preregistration.json",
+            "manifests/h20/qwen25_7b_paired_effect_s128_authority.json",
+            "manifests/h20/qwen25_7b_stable_i4x2_seed2026.json",
+            "paired_effect_admissibility_report.schema.json",
+            "docs/h20/paired_effect_candidate_readiness_20260821.md"
+          ],
+          "properties": {
+            "recurrent/research/commit_retain_capture.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/gate_a_execution.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/paired_effect_credit.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/s128_hotpot_metrics.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/serialization_credit_pilots.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/stable_eval_identity.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/research/trajectory_seeding.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/impls/memory.py": {"$ref": "#/$defs/sha256"},
+            "recurrent/utils.py": {"$ref": "#/$defs/sha256"},
+            "tools/h20/audit_qwen25_7b_paired_effect_candidate.py": {"$ref": "#/$defs/sha256"},
+            "tools/h20/preflight_qwen25_7b_commit_retain.py": {"$ref": "#/$defs/sha256"},
+            "tools/h20/preflight_qwen25_7b_serialization_credit.py": {"$ref": "#/$defs/sha256"},
+            "tools/h20/preflight_qwen25_7b_s128_it.py": {"$ref": "#/$defs/sha256"},
+            "tools/h20/preflight_qwen25_7b_stable_i4x2.py": {"$ref": "#/$defs/sha256"},
+            "manifests/h20/qwen25_7b_paired_effect_candidate_seed2026.json": {"$ref": "#/$defs/sha256"},
+            "manifests/h20/qwen25_7b_paired_effect_capture32_preregistration.json": {"$ref": "#/$defs/sha256"},
+            "manifests/h20/qwen25_7b_paired_effect_s128_authority.json": {"$ref": "#/$defs/sha256"},
+            "manifests/h20/qwen25_7b_stable_i4x2_seed2026.json": {"$ref": "#/$defs/sha256"},
+            "paired_effect_admissibility_report.schema.json": {"$ref": "#/$defs/sha256"},
+            "docs/h20/paired_effect_candidate_readiness_20260821.md": {"$ref": "#/$defs/sha256"}
+          },
+          "additionalProperties": false
+        },
+        "code_combined_sha256": {"$ref": "#/$defs/sha256"},
+        "manifest": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "report_schema": {"type": "string", "minLength": 1},
+        "report_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "capture32_preregistration": {"type": "string", "minLength": 1},
+        "capture32_preregistration_file_sha256": {"$ref": "#/$defs/sha256"},
+        "capture32_preregistration_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "source_capture": {"type": "object"},
+    "paired_outcomes": {
+      "type": "object",
+      "required": ["target_name", "observation_count", "observations_sha256", "observations"],
+      "properties": {
+        "target_name": {"const": "token_f1_commit_minus_retain"},
+        "observation_count": {"type": "integer", "minimum": 1},
+        "observations_sha256": {"$ref": "#/$defs/sha256"},
+        "observations": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "gates": {"type": "object"},
+    "crossfit_bundle": {
+      "type": ["object", "null"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "written": {"type": "boolean"},
+        "diagnostics": {
+          "type": "object",
+          "required": ["stable_example_count"],
+          "properties": {"stable_example_count": {"type": "integer", "minimum": 1}}
+        }
+      },
+      "required": ["path", "bundle_sha256", "file_sha256", "written", "diagnostics"],
+      "additionalProperties": false
+    },
+    "claim_boundary": {
+      "type": "object",
+      "required": [
+        "capture_analysis_only", "trainer_attached", "gpu_execution_authorized",
+        "method_selected", "training_authorized", "paper_performance_result",
+        "causal_effect_claim"
+      ],
+      "properties": {
+        "capture_analysis_only": {"const": true},
+        "trainer_attached": {"const": false},
+        "gpu_execution_authorized": {"const": false},
+        "method_selected": {"const": false},
+        "training_authorized": {"const": false},
+        "paper_performance_result": {"const": false},
+        "causal_effect_claim": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "training_authorized": {"const": false},
+    "method_selected": {"const": false},
+    "provenance_limitation": {"type": "string", "minLength": 1},
+    "failures": {"type": "array", "items": {"type": "string"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "PENDING"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "PAIRED_EFFECT_CAPTURE_PENDING",
+              "PAIRED_EFFECT_CAPTURE4_PILOT_ONLY",
+              "PAIRED_EFFECT_CAPTURE_PROVENANCE_PENDING",
+              "PAIRED_EFFECT_MORE_CAPTURE_REQUIRED",
+              "PAIRED_EFFECT_EVIDENCE_READY_FOR_EXTERNAL_REVIEW"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "FAIL"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "PAIRED_EFFECT_NO_GO:INVALID_CAPTURE_OR_PIPELINE",
+              "PAIRED_EFFECT_NO_GO:CAPTURE32_ATTRITION",
+              "PAIRED_EFFECT_NO_GO:SCORER_ADMISSIBILITY"
+            ]
+          },
+          "failures": {"minItems": 1}
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}
