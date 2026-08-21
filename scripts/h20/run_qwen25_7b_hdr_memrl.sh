@@ -50,6 +50,13 @@ import hashlib,json,os,sys
 raw=json.loads(os.environ['OVERRIDES_JSON'])
 values={x.split('=',1)[0].lstrip('+'):x.split('=',1)[1] for x in raw if '=' in x}
 expected={'data.train_batch_size':'4','actor_rollout_ref.rollout.n':'2','actor_rollout_ref.actor.ppo_mini_batch_size':'4','actor_rollout_ref.actor.optim.lr':'1e-6','algorithm.hdr_memrl.enabled':'true','algorithm.hdr_memrl.horizons':'[8,12,16,32]','recurrent.memory.config.hdr_enable':'true','trainer.total_training_steps':sys.argv[2]}
+expected['algorithm.hdr_memrl.dro_enabled']=os.environ['HDR_DRO_ENABLED']
+expected['actor_rollout_ref.rollout.seed']='2026'
+expected['reward_model.reward_manager']='naive'
+expected['actor_rollout_ref.rollout.name']='vllm'
+expected['data.train_files']=os.environ['WORK_ROOT']+'/datasets/hotpotqa/hotpotqa_train_32k.parquet'
+expected['data.val_files']=os.environ['WORK_ROOT']+'/datasets/hotpotqa/hotpotqa_dev.parquet'
+expected['actor_rollout_ref.model.path']=os.environ['WORK_ROOT']+'/models/Qwen2.5-7B-Instruct'
 for key,value in expected.items():
     if values.get(key)!=value: raise SystemExit(f'HDR_NO_GO:runtime_manifest_drift:{key}')
 if int(sys.argv[3])==0 and values.get('trainer.resume_mode')!='disable': raise SystemExit('HDR_NO_GO:fresh_runtime_not_disable')

@@ -1,12 +1,18 @@
 {
   "schema_version": 1,
   "variant": "uniform_multi_horizon_erm",
-  "parent_method_manifest": "manifests/h20/qwen25_7b_hdr_memrl_seed2026.json",
-  "scientific_difference": {"algorithm.hdr_memrl.dro_enabled": false},
-  "shared_frozen_horizons": [8, 12, 16, 32],
-  "budget": {"train_batch_size": 4, "rollout_n": 2, "trajectories_per_update": 8},
-  "training": {"source": "fresh_base", "first_method_update": 1, "anchors": [5, 10, 15, 20, 25]},
-  "experiment_identity": "qwen25_7b_hdr_memrl_uniform_seed2026_${HDR_RUN_ID}",
-  "output_policy": "separate_run_id_output_ledger_checkpoints_and_evaluation",
-  "gpu_authorized_by_manifest_alone": false
+  "branch": "h20/qwen25-7b-hdr-memrl-t25-frozen-20260822",
+  "base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
+  "accepted_original_resolved_manifest": "manifests/h20/qwen25_7b_original_t25_seed2026.json",
+  "accepted_original_resolved_manifest_sha256": "35db74bb4860b9c1de0b3ab80c7d209eb7ec7d336a4e090610ddb7dd49270cff",
+  "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
+  "training": {"source": "fresh_base", "first_method_update": 1, "seed": 2026, "anchors": [5, 10, 15, 20, 25], "one_allowed_revision_class": "none_for_baseline"},
+  "budget": {"train_batch_size": 4, "rollout_n": 2, "ppo_mini_batch_size": 4, "trajectories_per_update": 8, "same_as_original": true},
+  "horizons": {"train": [8, 12, 16, 32], "nominal": 8, "unseen_eval": [10, 24], "selected_before_results": true},
+  "dro": {"enabled": false, "eta": 0.1, "rho": 0.2, "checkpoint_required": true},
+  "e1_gate": {"min_mean_f1_range": 0.02, "min_token_controlled_mean_f1_range": 0.01, "max_permutation_p": 0.05, "permutations": 2000},
+  "allowed_manifest_differences": ["recurrent.memory.config.hdr_*", "algorithm.hdr_memrl", "trainer.experiment_name", "trainer.total_training_steps", "trainer.resume_*", "trainer.default_local_dir", "trainer.save_freq"],
+  "gpu": {"pair_from_environment": "GPU_PAIR", "world_size": 2, "canonical_ascending": true, "lock_template": "locks/memagent_h20_gpu_N.lock"},
+  "authorization": {"requires_own_p0": true, "reuses_authorized_e0_e1_baseline_review": true, "gpu_authorized_by_manifest_alone": false}
 }

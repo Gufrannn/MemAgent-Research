@@ -52,7 +52,8 @@ def preflight(a):
     resolved=copy.deepcopy(accepted)
     resolved["hdr_method"]={"enabled_from_update":1,"horizons":m["horizons"],"dro":m["dro"],"scheduler_seed":2026,"stable_root_identity":True}
     resolved["training"]["source_step"]=0; resolved["training"]["first_update_step"]=1; resolved["training"]["target_step"]=25; resolved["training"]["resume_mode"]="disable_then_same_run_anchor_resume"
-    resolved["experiment_name"]=f"qwen25_7b_hdr_memrl_seed2026_{os.environ.get('HDR_RUN_ID','UNBOUND')}"
+    variant="uniform" if m.get("variant")=="uniform_multi_horizon_erm" else "dro"
+    resolved["experiment_name"]=f"qwen25_7b_hdr_memrl_{variant}_seed2026_{os.environ.get('HDR_RUN_ID','UNBOUND')}"
     resolved_path=str(Path(a.output).with_name("p0_resolved_method_manifest.json")); write_json(resolved_path,resolved)
     cert={"status":"PASS","decision":"HDR_P0_PASS","git_commit":git("rev-parse","HEAD"),"gpu_pair":g,
           "manifest_sha256":digest(a.manifest),"accepted_manifest_sha256":digest(a.accepted_manifest),"resolved_method_manifest":resolved_path,"resolved_method_manifest_sha256":digest(resolved_path),"whitelist_differences":["hdr_method","training.source_step","training.first_update_step","training.target_step","training.resume_mode","experiment_name"]}
@@ -242,13 +243,18 @@ def final_audit(a):
 def health_gate(a):
     baseline=load(a.baseline_import)
     if baseline.get("decision")!="ORIGINAL_BASELINE_IMPORT_PASS": raise HDRContractError("uncertified baseline import")
-    anchor=str(a.anchor)
+    anchor=f"Original{a.anchor}"
     binding=load(a.checkpoint_binding)
     if binding.get("global_step")!=a.anchor or binding.get("git_commit")!=git("rev-parse","HEAD"): raise HDRContractError("health checkpoint binding mismatch")
     checkpoint_root=Path(a.checkpoint_binding).parent
     for item in binding.get("inventory",[]):
         p=checkpoint_root/item["path"]
         if not p.is_file() or digest(p)!=item["sha256"] or p.stat().st_size!=item["size"]: raise HDRContractError("health checkpoint inventory tamper")
+    merge=load(a.merge_receipt)
+    if merge.get("decision")!="HDR_MERGED_MODEL_BOUND" or merge.get("checkpoint_binding_sha256")!=digest(a.checkpoint_binding) or str(Path(merge.get("merged_model","")).resolve())!=str(Path(a.model_path).resolve()): raise HDRContractError("merged model/checkpoint binding mismatch")
+    for item in merge.get("merged_inventory",[]):
+        p=Path(a.model_path)/item["path"]
+        if not p.is_file() or digest(p)!=item["sha256"] or p.stat().st_size!=item["size"]: raise HDRContractError("merged model inventory tamper")
     if anchor not in baseline.get("recomputed_aggregates",{}): raise HDRContractError("baseline anchor absent")
     method_rows=load(a.method_s128); method=aggregate_predictions(method_rows)
     if method["count"]!=128: raise HDRContractError("fixed-S128 method evaluation must contain exactly 128 unique rows")
@@ -284,10 +290,12 @@ def health_gate(a):
     if a.variant=="dro" and a.anchor==25:
         if not a.uniform_horizons: raise HDRContractError("T25 requires uniform-ERM horizon baseline")
         uniform=load(a.uniform_horizons)
-        if uniform.get("status")!="PASS" or float(heval["worst"]["token_f1"]) < float(uniform["worst"]["token_f1"])+.02: failures.append("uniform_erm_worst_gain")
+        if uniform.get("status")!="PASS" or uniform.get("decision")!="UNIFORM_T25_HEALTH_PASS" or uniform.get("git_commit")!=git("rev-parse","HEAD"): raise HDRContractError("uniform T25 health authority mismatch")
+        uniform_eval=uniform.get("method_horizons",{})
+        if float(heval["worst"]["token_f1"]) < float(uniform_eval["worst"]["token_f1"])+.02: failures.append("uniform_erm_worst_gain")
         if float(method["token_f1"]) < float(original["token_f1"])-.01: failures.append("t25_nominal_one_point_floor")
     prefix="HDR" if a.variant=="dro" else "UNIFORM"
-    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"method_horizons":heval,"original_horizons":oeval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"original_horizons_sha256":digest(a.original_horizons),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
+    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"method_horizons":heval,"original_horizons":oeval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"merge_receipt_sha256":digest(a.merge_receipt),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"original_horizons_sha256":digest(a.original_horizons),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
     write_json(a.output,report); append(a.ledger,{"record_type":"audit",**report})
     if failures: raise SystemExit(4)
 
@@ -299,7 +307,7 @@ def main():
     q=s.add_parser("baseline-import"); q.add_argument("--bundle",required=True); q.add_argument("--expected-bundle-sha256",required=True); q.add_argument("--authority-manifest",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=baseline)
     q=s.add_parser("evaluate"); q.add_argument("--rows",required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.set_defaults(fn=ev)
     q=s.add_parser("final-audit"); q.add_argument("--run-root",required=True); q.add_argument("--output-root",required=True); q.add_argument("--report",required=True); q.set_defaults(fn=final_audit)
-    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--original-horizons",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
+    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--merge-receipt",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--original-horizons",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
     a=p.parse_args()
     try: a.fn(a)
     except HDRContractError as e: print(f"HDR_NO_GO:{e}",file=sys.stderr); raise SystemExit(2)

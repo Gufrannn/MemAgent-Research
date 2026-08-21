@@ -81,6 +81,23 @@ $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py baseline
   --authority-manifest "$MEMAGENT_ORIGINAL_CURVE_AUTHORITY_MANIFEST" \
   --output "$HDR_CERT/baseline_import.json" --ledger "$HDR_LEDGER"
 
+# Freeze the exact S128 evaluation suites once; both variants and all anchors reuse them.
+$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/prepare_hdr_horizon_suite.py \
+  --input "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --input-sha256 54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6 \
+  --model "$MEMAGENT_HDR_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
+  --horizons 8 10 12 16 24 32 --count 128 \
+  --output-parquet "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_all_horizons.parquet" \
+  --receipts "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_all_horizons_receipts.json" \
+  --roots "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_all_horizons_roots.json"
+$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/prepare_hdr_horizon_suite.py \
+  --input "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --input-sha256 54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6 \
+  --model "$MEMAGENT_HDR_WORK_ROOT/models/Qwen2.5-7B-Instruct" --horizons 8 --count 128 \
+  --output-parquet "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_nominal_h8.parquet" \
+  --receipts "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_nominal_h8_receipts.json" \
+  --roots "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/eval/fixed_s128_nominal_h8_roots.json"
+
 # paper_review.json is supplied only by the independent reviewer and must say
 # {"status":"PASS","decision":"PAPER_FRAMING_GO"}. No local bypass exists.
 
@@ -92,14 +109,16 @@ HDR_TARGET_STEP=15 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
 HDR_ANCHOR=15 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=20 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
 HDR_ANCHOR=20 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
-HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
-HDR_ANCHOR=25 HDR_VARIANT=dro bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
-# T25 health-gate additionally requires --uniform-horizons from the independently
-# committed, budget-matched uniform-ERM variant; it enforces the registered +2pp gate.
 
 # Budget-matched uniform ERM is a separate experiment identity/output/ledger.
-# Run it from fresh base with its own immutable run ID before the DRO T25 audit:
-export HDR_VARIANT=uniform HDR_RUN_ID=hdr-uniform-seed2026-v1
+# It reuses the immutable E0/E1/baseline/review authority but requires its own P0.
+export HDR_DRO_RUN_ID=$HDR_RUN_ID
+export HDR_VARIANT=uniform HDR_AUTHORITY_RUN_ID=$HDR_DRO_RUN_ID HDR_RUN_ID=hdr-uniform-seed2026-v1
+$MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py preflight \
+  --manifest manifests/h20/qwen25_7b_hdr_uniform_erm_seed2026.json \
+  --accepted-manifest manifests/h20/qwen25_7b_original_t25_seed2026.json \
+  --output "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/certificates/p0.json" \
+  --ledger "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID/hdr_execution_ledger.jsonl"
 HDR_TARGET_STEP=5 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
 HDR_ANCHOR=5 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=10 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
@@ -110,13 +129,16 @@ HDR_TARGET_STEP=20 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
 HDR_ANCHOR=20 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
 HDR_ANCHOR=25 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
-# Copy nothing blindly: register the uniform T25 raw evaluation SHA in the DRO
-# authority bundle, then expose its audited JSON at the exact path required by
-# the DRO anchor auditor. Restore HDR_VARIANT=dro and its original HDR_RUN_ID.
+
+# Only now may the DRO run continue to T25 and compare against the bound uniform health certificate.
+export HDR_UNIFORM_RUN_ID=$HDR_RUN_ID
+export HDR_VARIANT=dro HDR_RUN_ID=$HDR_DRO_RUN_ID HDR_AUTHORITY_RUN_ID=$HDR_DRO_RUN_ID
+HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh
+HDR_ANCHOR=25 bash scripts/h20/audit_qwen25_7b_hdr_anchor.sh
 
 $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py final-audit \
   --run-root "$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_RUN_ID" \
-  --output-root "$MEMAGENT_HDR_WORK_ROOT/logs/memory_agent/qwen25_7b_hdr_memrl_seed2026_$HDR_RUN_ID" \
+  --output-root "$MEMAGENT_HDR_WORK_ROOT/logs/memory_agent/qwen25_7b_hdr_memrl_dro_seed2026_$HDR_RUN_ID" \
   --report "$HDR_CERT/final_audit.json"
 ```
 
