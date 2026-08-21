@@ -1,5 +1,6 @@
 from __future__ import annotations
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -24,7 +25,22 @@ class OrchestrationTests(unittest.TestCase):
         self.base = self.root / "baseline.json"; self.p0 = self.root / "p0.json"
         dump(self.base, {"status":"PASS", "decision":"PRD_ORIGINAL_BASELINE_IMPORT_PASS",
              "recomputed":{"5":{"token_f1":.5}}})
-        dump(self.p0, {"status":"PASS", "decision":"PRD_P0_PASS", "evidence":{"git_commit":self.commit}})
+        self.prior = self.root / "prior"
+        self.prior.mkdir()
+        prior_config = self.prior / "config.json"
+        prior_config.write_text('{"hidden_size":896,"num_hidden_layers":24}')
+        dump(self.p0, {
+            "status":"PASS", "decision":"PRD_P0_PASS",
+            "evidence":{
+                "git_commit":self.commit,
+                "prior_model":{
+                    "id":"Qwen/Qwen2.5-0.5B-Instruct",
+                    "revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8",
+                    "path":str(self.prior.resolve()),
+                    "files":[{"path":"config.json","sha256":hashlib.sha256(prior_config.read_bytes()).hexdigest()}],
+                },
+            },
+        })
         args = type("A", (), dict(run_root=str(self.root/"run"), run_id=self.run_id,
             commit=self.commit, gpu_pair="2,7", baseline=str(self.base), p0=str(self.p0)))
         orch.command_bind(args)

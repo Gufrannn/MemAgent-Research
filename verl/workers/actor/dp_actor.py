@@ -419,6 +419,11 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["prd/rate_nats"] = rate.item()
                         metrics["prd/capacity_violation_nats"] = violation.item()
                         metrics["prd/dual_value"] = dual_value
+                        log_rho = ((log_prob.detach() - old_log_prob.detach()) * data["writer_mask"]).sum(dim=-1)
+                        active_rho = torch.exp(log_rho[data["writer_mask"].sum(dim=-1) > 0])
+                        normalized = active_rho / active_rho.sum()
+                        metrics["prd/is_ess_fraction"] = float(1.0 / (len(normalized) * normalized.square().sum()))
+                        metrics["prd/is_max_weight"] = float(normalized.max())
 
                     if self.config.use_kl_loss:
                         ref_log_prob = data["ref_log_prob"]

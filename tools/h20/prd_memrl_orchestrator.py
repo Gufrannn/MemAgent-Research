@@ -70,6 +70,7 @@ def command_bind(args: argparse.Namespace) -> None:
         "capacities_nats": list(CAPACITIES), "baseline_path": str(Path(args.baseline).resolve()),
         "baseline_sha256": digest(Path(args.baseline).resolve()),
         "p0_path": str(Path(args.p0).resolve()), "p0_sha256": digest(Path(args.p0).resolve()),
+        "prior_model": p0["evidence"]["prior_model"],
     }
     exclusive(root / "resolved_run.json", payload)
     for cap in CAPACITIES:
@@ -115,6 +116,14 @@ def validate_checkpoint(path: Path, step: int, cap: float, commit: str, run_id: 
     prior_acks=meta.get("weight_sync",{}).get("prior")
     if not isinstance(actor_acks,list) or not actor_acks or not isinstance(prior_acks,list) or not prior_acks:
         fail(f"checkpoint lacks actor/prior weight-sync acknowledgements: {path}")
+    actor_ranks=sorted(int(ack["vllm_worker_rank"]) for ack in actor_acks)
+    if actor_ranks != list(range(len(actor_acks))): fail(f"actor sync rank coverage mismatch: {path}")
+    if len({ack["actor_master_sampled_tensor_digest"] for ack in actor_acks}) != 1 or len({ack["actor_rollout_sampled_tensor_digest"] for ack in actor_acks}) != 1:
+        fail(f"actor sync digests disagree: {path}")
+    prior_ranks=sorted(int(ack["rank"]) for ack in prior_acks)
+    worlds={int(ack["world_size"]) for ack in prior_acks}
+    if len(worlds)!=1 or prior_ranks!=list(range(worlds.pop())) or len({ack["global_parameter_moments_sha256"] for ack in prior_acks})!=1:
+        fail(f"prior sync rank/digest disagreement: {path}")
     return meta
 
 
@@ -146,6 +155,7 @@ def command_stage(args: argparse.Namespace) -> None:
         "frontier_id": cid, "capacity_nats": cap, "start_step": start, "target_step": target,
         "resume": str(Path(args.resume).resolve()) if args.resume else None,
         "output_root": str(output.resolve()), "gpu_pair": run["gpu_pair"],
+        "prior_model": run["prior_model"],
         "fresh_base": args.stage == "t5", "update1_enabled": True})
     print(launch)
 
@@ -245,6 +255,12 @@ def command_audit(args: argparse.Namespace) -> None:
                 checkpoints={int(r["payload"]["global_step"]) for r in records if r["event"]=="CHECKPOINT" and r["payload"].get("frontier_id")==cid}
                 if not set(range(1,26)).issubset(updates): failures.append(f"incomplete UPDATE ledger for {cid}")
                 if not set(ANCHORS).issubset(checkpoints): failures.append(f"incomplete CHECKPOINT ledger for {cid}")
+                for record in records:
+                    if record["event"]=="CHECKPOINT" and record["payload"].get("frontier_id")==cid:
+                        step=int(record["payload"]["global_step"])
+                        metadata=run_root/"frontier"/cid/"checkpoints"/f"global_step_{step}"/"prd_checkpoint.json"
+                        if not metadata.is_file() or digest(metadata)!=record["payload"].get("metadata_sha256"):
+                            failures.append(f"checkpoint ledger SHA mismatch for {cid} step {step}")
     output = Path(args.output)
     exclusive(output, {"schema_version": 1, "status": "PASS" if not failures else "FAIL",
         "decision": "PRD_FINAL_AUDIT_PASS" if not failures else "PRD_FINAL_AUDIT_NO_GO", "failures": failures})

@@ -156,7 +156,17 @@ def command_preflight(args: argparse.Namespace) -> int:
     capacities = json.loads(manifest.read_text())["method"]["capacity_points_nats"]
     if len(set(capacities)) < 3 or capacities != sorted(capacities):
         failures.append("invalid capacity frontier")
-    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest)})
+    prior_root=Path(args.prior_model).resolve(); prior_files=[]
+    try:
+        prior_config=json.loads((prior_root/"config.json").read_text())
+        if prior_config.get("hidden_size")!=896 or prior_config.get("num_hidden_layers")!=24:
+            failures.append("prior is not the frozen Qwen2.5-0.5B architecture")
+        for path in sorted(prior_root.iterdir()):
+            if path.is_file() and (path.suffix in {".json",".safetensors",".txt"}):
+                prior_files.append({"path":path.name,"size":path.stat().st_size,"sha256":sha256(path)})
+        if not any(item["path"].endswith(".safetensors") for item in prior_files): failures.append("prior weights missing")
+    except Exception as exc: failures.append(f"invalid prior model inventory: {exc}")
+    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest), "prior_model":{"id":"Qwen/Qwen2.5-0.5B-Instruct","revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8","path":str(prior_root),"files":prior_files}})
     write_json_exclusive(Path(args.output), result)
     return 0 if not failures else 4
 
@@ -167,7 +177,7 @@ def main() -> int:
     e0 = sub.add_parser("e0"); e0.add_argument("--output", required=True); e0.set_defaults(func=command_e0)
     e1 = sub.add_parser("e1"); e1.add_argument("--rows", required=True); e1.add_argument("--output", required=True); e1.set_defaults(func=command_e1)
     p0 = sub.add_parser("preflight")
-    for name in ("expected_commit", "gpu_pair", "e0", "e1", "paper_review", "output"):
+    for name in ("expected_commit", "gpu_pair", "e0", "e1", "paper_review", "prior_model", "output"):
         p0.add_argument("--" + name.replace("_", "-"), required=True)
     p0.set_defaults(func=command_preflight)
     return args.func(args) if (args := parser.parse_args()) else 1

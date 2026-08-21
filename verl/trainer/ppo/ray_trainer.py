@@ -1342,17 +1342,6 @@ class RayPPOTrainer:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, target)
-            ledger_path = os.environ.get("PRD_EXECUTION_LEDGER")
-            if ledger_path:
-                from pathlib import Path
-                from tools.h20.prd_memrl_ledger import append_record
-                with open(target, "rb") as metadata_stream:
-                    metadata_sha256 = hashlib.sha256(metadata_stream.read()).hexdigest()
-                append_record(
-                    Path(ledger_path), metadata["run_id"], "CHECKPOINT",
-                    metadata["git_commit"],
-                    {"global_step": self.global_steps, "frontier_id": metadata["frontier_id"], "metadata_sha256": metadata_sha256},
-                )
 
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, "critic")
@@ -1383,6 +1372,13 @@ class RayPPOTrainer:
             with open(temporary, "x", encoding="utf-8") as stream:
                 json.dump(metadata, stream, indent=2, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
             os.replace(temporary, target)
+            ledger_path = os.environ.get("PRD_EXECUTION_LEDGER")
+            if ledger_path:
+                from pathlib import Path
+                from tools.h20.prd_memrl_ledger import append_record
+                with open(target, "rb") as metadata_stream:
+                    metadata_sha256 = hashlib.sha256(metadata_stream.read()).hexdigest()
+                append_record(Path(ledger_path), metadata["run_id"], "CHECKPOINT", metadata["git_commit"], {"global_step": self.global_steps, "frontier_id": metadata["frontier_id"], "metadata_sha256": metadata_sha256})
 
         # latest checkpointed iteration tracker (for atomic usage)
         local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")

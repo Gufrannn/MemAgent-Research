@@ -22,10 +22,11 @@ case "$ACTION" in
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" e1 --rows "$E1_ROWS" --output "$E1_CERT"
     ;;
   preflight)
+    [[ ${PRD_PRIOR_MODEL:-} == /* ]] || prd_die 'PRD_PRIOR_MODEL must be explicit for P0'
     [[ ! -e $P0_CERT ]] || prd_die 'P0 certificate already exists; use a new RUN_ID'
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" preflight \
       --expected-commit "$EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$E0_CERT" \
-      --e1 "$E1_CERT" --paper-review "$PAPER_CERT" --output "$P0_CERT"
+      --e1 "$E1_CERT" --paper-review "$PAPER_CERT" --prior-model "$PRD_PRIOR_MODEL" --output "$P0_CERT"
     ;;
   bind)
     [[ ${BASELINE_CERT:-} == /* && -f ${BASELINE_CERT:-} ]] || prd_die 'BASELINE_CERT must name the read-only certified import'
@@ -76,13 +77,18 @@ case "$ACTION" in
     cid=c${CAPACITY_NATS%.*}
     stage=t5
     [[ $ACTION == continue-t25 ]] && stage=continue
-    "$PRD_PYTHON" - "$PRD_RUN_ROOT/resolved_run.json" "$PRD_RUN_ROOT/frontier/$cid/launch_${stage}.json" "$RUN_ID" "$EXPECTED_COMMIT" "$GPU_PAIR" "$CAPACITY_NATS" <<'PY'
-import json,sys
+    "$PRD_PYTHON" - "$PRD_RUN_ROOT/resolved_run.json" "$PRD_RUN_ROOT/frontier/$cid/launch_${stage}.json" "$RUN_ID" "$EXPECTED_COMMIT" "$GPU_PAIR" "$CAPACITY_NATS" "$PRD_PRIOR_MODEL" <<'PY'
+import hashlib,json,pathlib,sys
 run=json.load(open(sys.argv[1])); launch=json.load(open(sys.argv[2]))
 assert run["run_id"]==sys.argv[3] and run["git_commit"]==sys.argv[4]
 assert run["gpu_pair"]==sys.argv[5] and launch["gpu_pair"]==sys.argv[5]
 assert float(launch["capacity_nats"])==float(sys.argv[6])
 assert launch["frontier_id"]=="c"+str(int(float(sys.argv[6])))
+prior=pathlib.Path(sys.argv[7]).resolve(); frozen=run["prior_model"]
+assert str(prior)==frozen["path"] and launch["prior_model"]==frozen
+for item in frozen["files"]:
+ p=prior/item["path"]; assert p.is_file() and not p.is_symlink() and p.stat().st_size==item["size"]
+ assert hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]
 PY
     phase=fresh
     [[ $ACTION == continue-t25 ]] && phase=resume
