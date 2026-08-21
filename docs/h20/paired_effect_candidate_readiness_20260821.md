@@ -99,30 +99,32 @@ nearest-row substitution, run stitching, or capture4 padding. A restart uses a
 new run ID and executes the full 32 again. A legal empty model answer is an
 observed zero-score outcome; a missing receipt is attrition.
 
-The future capture32 producer must emit exactly these run-root artifacts:
+The capture32 producer closure emits exactly these run-root artifacts plus two
+local export candidates under `WORK_ROOT/provenance/commit_retain_capture32`:
 
 ```text
 certificates/p0_preflight.json
 certificates/p0_resolved_manifest.json
+commit_retain_capture32_execution_ledger.jsonl
+credentials/capture_child.json
+credentials/capture_child_consumed.json
 captures/commit_retain_pairs.jsonl
+captures/run_receipt.json
 certificates/commit_retain_capture32_final_report.json
 ```
 
 The consumer authenticates their exact paths, schemas, SHA chain, Git blobs,
 32 identities, canonical pair envelopes, prompts, state/candidate relation,
 RNG/cost contracts, one-process vLLM receipt, and contiguous global generation
-calls. The producer is intentionally not added here to avoid changing the live
-GPU runner while another experiment owns it.
-
-Accordingly, this branch is a preregistration/consumer closure, not a runnable
-capture32 producer. A future reviewed producer commit must provide both frozen
-capture32 scripts and the exact dependency inventory required by the auditor;
-missing objects or extra unreviewed objects fail closed. It must also emit
-structured execution, runtime, and current bindings whose SHA-256 values are
-independently recomputed. P0, all three bindings, expected pair binding, and
-every pair must agree on physical GPU4-5, visible devices `4,5`, checkpoint,
-strict vLLM 0.8.2, templates, decode, engine config, multiprocessing mode, and
-the exact global generation-call count.
+calls. The separately named capture32 producer now lives in this Git closure;
+it does not modify the trainer or authorize a GPU run. It requires an explicit
+ascending pair of two physical H20 indices, per-device locks plus intersecting
+legacy aggregate locks, one parent-issued credential, one process/engine, and
+exactly 353 generation calls. P0, all three bindings, expected pair binding,
+and every pair must agree on the selected physical pair, checkpoint, strict
+vLLM 0.8.2, templates, decode, engine config, multiprocessing mode, lock
+inodes, credential consumption, and the exact call count. The local anchors
+remain `PENDING_EXTERNAL_SIGNATURE` and cannot authorize training.
 
 ## Frozen admissibility thresholds
 

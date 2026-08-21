@@ -28,9 +28,29 @@ while str(REPO_ROOT) in sys.path:
     sys.path.remove(str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT))
 
+
+def _preexisting_repo_python_objects() -> frozenset[str]:
+    """Separate this auditor's imports from unrelated embedding-process state."""
+    objects: set[str] = set()
+    for module in tuple(sys.modules.values()):
+        origin = getattr(module, "__file__", None)
+        if origin is None:
+            continue
+        try:
+            relative = Path(origin).resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            continue
+        if relative.endswith(".py"):
+            objects.add(relative)
+    return frozenset(objects)
+
+
+_PREEXISTING_REPO_PYTHON_OBJECTS = _preexisting_repo_python_objects()
+
 import recurrent.research.commit_retain_capture as _capture_module  # noqa: E402
 import recurrent.research.paired_effect_credit as _paired_module  # noqa: E402
 import tools.h20.preflight_qwen25_7b_commit_retain as _capture_preflight_module  # noqa: E402
+import tools.h20.preflight_qwen25_7b_commit_retain_capture32 as _capture32_preflight_module  # noqa: E402
 
 from recurrent.research.commit_retain_capture import (  # noqa: E402
     ARMS,
@@ -77,12 +97,18 @@ from tools.h20.preflight_qwen25_7b_commit_retain import (  # noqa: E402
     validate_capture_credential,
     validate_p0,
 )
+from tools.h20.preflight_qwen25_7b_commit_retain_capture32 import (  # noqa: E402
+    _validate_manifest as validate_capture32_producer_manifest,
+    load_manifest as load_capture32_producer_manifest,
+)
 
 
 _EXPECTED_IMPORT_ORIGINS = {
     _capture_module: REPO_ROOT / "recurrent/research/commit_retain_capture.py",
     _paired_module: REPO_ROOT / "recurrent/research/paired_effect_credit.py",
     _capture_preflight_module: REPO_ROOT / "tools/h20/preflight_qwen25_7b_commit_retain.py",
+    _capture32_preflight_module:
+        REPO_ROOT / "tools/h20/preflight_qwen25_7b_commit_retain_capture32.py",
 }
 for _module, _expected_origin in _EXPECTED_IMPORT_ORIGINS.items():
     if Path(_module.__file__).resolve() != _expected_origin.resolve():
@@ -144,6 +170,16 @@ PIPELINE_CODE_OBJECTS = (
     "tools/h20/preflight_qwen25_7b_serialization_credit.py",
     "tools/h20/preflight_qwen25_7b_s128_it.py",
     "tools/h20/preflight_qwen25_7b_stable_i4x2.py",
+    "tools/h20/preflight_qwen25_7b_commit_retain_capture32.py",
+    "tools/h20/run_qwen25_7b_commit_retain_capture32.py",
+    "scripts/h20/commit_retain_capture32_common.sh",
+    "scripts/h20/preflight_qwen25_7b_commit_retain_capture32.sh",
+    "scripts/h20/run_qwen25_7b_commit_retain_capture32.sh",
+    "manifests/h20/qwen25_7b_commit_retain_capture32_seed2026.json",
+    "manifests/h20/qwen25_7b_commit_retain_capture32_commands.json",
+    "commit_retain_capture32_execution_ledger.schema.json",
+    "commit_retain_capture32_provenance_anchor.schema.json",
+    "docs/h20/commit_retain_capture32_freeze_20260821.md",
     MANIFEST_REL,
     CAPTURE32_PREREG_REL,
     S128_AUTHORITY_REL,
@@ -166,11 +202,19 @@ CAPTURE32_EXECUTION_CODE_OBJECTS = (
     "tools/h20/preflight_qwen25_7b_stable_i4x2.py",
     "tools/h20/preflight_qwen25_7b_commit_retain_capture32.py",
     "tools/h20/run_qwen25_7b_commit_retain_capture32.py",
+    "scripts/h20/commit_retain_capture32_common.sh",
+    "scripts/h20/preflight_qwen25_7b_commit_retain_capture32.sh",
+    "scripts/h20/run_qwen25_7b_commit_retain_capture32.sh",
+    "manifests/h20/qwen25_7b_commit_retain_capture32_seed2026.json",
+    "manifests/h20/qwen25_7b_commit_retain_capture32_commands.json",
+    "commit_retain_capture32_execution_ledger.schema.json",
+    "commit_retain_capture32_provenance_anchor.schema.json",
+    "docs/h20/commit_retain_capture32_freeze_20260821.md",
     "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
-    "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_seed2026.json",
+    "recurrent/research/paired_effect_credit.py",
+    "tools/h20/run_qwen25_7b_commit_retain.py",
     CAPTURE32_PREREG_REL,
     S128_AUTHORITY_REL,
-    "manifests/h20/qwen25_7b_stable_i4x2_seed2026.json",
 )
 
 
@@ -189,7 +233,7 @@ def _loaded_pipeline_python_objects() -> tuple[str, ...]:
             continue
         if relative.endswith(".py"):
             objects.add(relative)
-    return tuple(sorted(objects))
+    return tuple(sorted(objects - _PREEXISTING_REPO_PYTHON_OBJECTS))
 
 
 LOADED_PIPELINE_PYTHON_OBJECTS = _loaded_pipeline_python_objects()
@@ -501,24 +545,46 @@ def _validate_candidate_manifest(manifest: Mapping[str, Any]) -> None:
     capture32_root = (
         Path(manifest["work_root"])
         / "logs"
-        / "commit_retain_capture32_gpu45_frozen_20260821"
+        / "commit_retain_capture32_frozen_20260821"
         / manifest["capture_run_id"]
     )
     expected_capture32 = {
         "status": "PREREGISTERED_NOT_YET_CAPTURED",
         "role": "development_admissibility_evidence",
         "preregistration": CAPTURE32_PREREG_REL,
+        "producer_manifest": "manifests/h20/qwen25_7b_commit_retain_capture32_seed2026.json",
+        "expected_experiment_name": "qwen25_7b_commit_retain_capture32_seed2026",
         "required_pair_count": 32,
         "output_root": str(capture32_root),
         "commitment_marker": str(capture32_root / "certificates" / "p0_preflight.json"),
         "resolved_manifest": str(
             capture32_root / "certificates" / "p0_resolved_manifest.json"
         ),
+        "supervisor_ledger": str(
+            capture32_root / "commit_retain_capture32_execution_ledger.jsonl"
+        ),
+        "capture_credential": str(
+            capture32_root / "credentials" / "capture_child.json"
+        ),
+        "credential_consumption": str(
+            capture32_root / "credentials" / "capture_child_consumed.json"
+        ),
         "capture_ledger": str(
             capture32_root / "captures" / "commit_retain_pairs.jsonl"
         ),
+        "capture_run_receipt": str(
+            capture32_root / "captures" / "run_receipt.json"
+        ),
         "final_report": str(
             capture32_root / "certificates" / "commit_retain_capture32_final_report.json"
+        ),
+        "external_preregistration_anchor": str(
+            Path(manifest["work_root"]) / "provenance" / "commit_retain_capture32"
+            / f"{manifest['capture_run_id']}.preregistration.json"
+        ),
+        "external_terminal_anchor": str(
+            Path(manifest["work_root"]) / "provenance" / "commit_retain_capture32"
+            / f"{manifest['capture_run_id']}.terminal.json"
         ),
         "partial_after_commitment_is_failure": True,
         "capture4_may_fill_missing": False,
@@ -552,11 +618,11 @@ def _validate_candidate_manifest(manifest: Mapping[str, Any]) -> None:
     if admissibility != expected_admissibility:
         raise ValueError("paired-effect admissibility thresholds/decisions drifted")
     expected_anchor = {
-        "status": "NOT_YET_FROZEN",
+        "status": "LOCAL_EXPORT_PENDING_EXTERNAL_SIGNATURE",
         "required": True,
         "path": str(
-            Path(manifest["repo_dir"])
-            / "manifests/h20/qwen25_7b_paired_effect_capture32_external_anchor.json"
+            Path(manifest["work_root"]) / "provenance" / "commit_retain_capture32"
+            / f"{manifest['capture_run_id']}.terminal.json"
         ),
         "expected_anchor_git_commit": None,
         "expected_anchor_file_sha256": None,
@@ -792,8 +858,16 @@ def _capture32_paths(manifest: Mapping[str, Any]) -> dict[str, Path]:
     return {
         "p0_certificate": Path(source["commitment_marker"]),
         "resolved_manifest": Path(source["resolved_manifest"]),
+        "supervisor_ledger": Path(source["supervisor_ledger"]),
+        "capture_credential": Path(source["capture_credential"]),
+        "credential_consumption": Path(source["credential_consumption"]),
         "capture_ledger": Path(source["capture_ledger"]),
+        "capture_run_receipt": Path(source["capture_run_receipt"]),
         "final_report": Path(source["final_report"]),
+        "external_preregistration_anchor": Path(
+            source["external_preregistration_anchor"]
+        ),
+        "external_terminal_anchor": Path(source["external_terminal_anchor"]),
     }
 
 
@@ -818,8 +892,15 @@ def _capture32_artifact_state(manifest: Mapping[str, Any]) -> tuple[str, dict[st
     root = Path(manifest["capture32"]["output_root"])
     if root.is_symlink() or root.resolve() != root:
         raise ValueError("capture32 run root is symlinked or non-canonical")
-    for path in paths.values():
-        _assert_confined_regular_file(path, root)
+    external_names = {
+        "external_preregistration_anchor", "external_terminal_anchor"
+    }
+    for name, path in paths.items():
+        authority_root = (
+            Path(manifest["work_root"]) / "provenance" / "commit_retain_capture32"
+            if name in external_names else root
+        )
+        _assert_confined_regular_file(path, authority_root)
     return "COMPLETE", paths
 
 
@@ -835,6 +916,36 @@ def _validate_capture32_runtime_bindings(
         expected_pair, execution, runtime, current
     )):
         raise ValueError("capture32 structured runtime bindings are missing")
+    physical = resolved.get("physical_gpu_whitelist")
+    visible = resolved.get("visible_devices")
+    if not isinstance(physical, list) or len(physical) != 2 \
+            or any(type(item) is not int or item < 0 for item in physical) \
+            or physical != sorted(set(physical)) \
+            or visible != ",".join(str(item) for item in physical):
+        raise ValueError("capture32 P0 GPU pair is not explicit/distinct/ascending")
+    gpu_lock = resolved.get("gpu_lock_binding")
+    lock_sha = resolved.get("gpu_lock_binding_sha256")
+    if not isinstance(gpu_lock, Mapping) or set(gpu_lock) != {
+        "schema", "physical_gpu_indices", "locks", "gpu_lock_binding_sha256",
+    } or gpu_lock.get("schema") != "memagent.capture32.lock-holder-receipt.v1" \
+            or gpu_lock.get("physical_gpu_indices") != physical \
+            or gpu_lock.get("gpu_lock_binding_sha256") != lock_sha:
+        raise ValueError("capture32 GPU lock binding structure drifted")
+    locks = gpu_lock.get("locks")
+    if not isinstance(locks, list) or len(locks) < 2 \
+            or any(not isinstance(item, Mapping) or set(item) != {
+                "path", "fd", "device", "inode", "owner_uid",
+            } for item in locks):
+        raise ValueError("capture32 GPU lock inventory is incomplete")
+    recomputed_lock_sha = canonical_sha256({
+        "physical_gpu_indices": physical,
+        "locks": [
+            {key: item[key] for key in ("path", "device", "inode", "owner_uid")}
+            for item in locks
+        ],
+    })
+    if lock_sha != recomputed_lock_sha:
+        raise ValueError("capture32 GPU lock binding digest mismatch")
     pair_sha = canonical_sha256(expected_pair)
     execution_sha = canonical_sha256(execution)
     runtime_sha = canonical_sha256(runtime)
@@ -848,8 +959,8 @@ def _validate_capture32_runtime_bindings(
         "execution_binding_sha256": execution_sha,
         "runtime_binding_sha256": runtime_sha,
         "expected_pair_binding_sha256": pair_sha,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": physical,
+        "visible_devices": visible,
     }
     if dict(current) != expected_current \
             or resolved.get("current_binding_sha256") != canonical_sha256(current):
@@ -868,8 +979,9 @@ def _validate_capture32_runtime_bindings(
             "execution_code_combined_sha256"
         ),
         "expected_pair_binding_sha256": pair_sha,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": physical,
+        "visible_devices": visible,
+        "gpu_lock_binding_sha256": resolved.get("gpu_lock_binding_sha256"),
         "rollout_backend": "strict_vllm_0.8.2",
     }
     if dict(execution) != expected_execution:
@@ -881,7 +993,7 @@ def _validate_capture32_runtime_bindings(
         "vllm_observed_worker_multiproc_method", "multiprocessing_context_method",
         "parent_cuda_initialization_policy", "writer_checkpoint_sha256",
         "reader_checkpoint_sha256", "model_file_manifest_sha256",
-        "tokenizer_manifest_sha256",
+        "tokenizer_manifest_sha256", "gpu_lock_binding_sha256",
     }
     if set(runtime) != runtime_fields:
         raise ValueError("capture32 runtime binding fields drifted")
@@ -889,8 +1001,8 @@ def _validate_capture32_runtime_bindings(
         "run_id": resolved.get("run_id"),
         "git_commit": resolved.get("git_commit"),
         "expected_pair_binding_sha256": pair_sha,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": physical,
+        "visible_devices": visible,
         "rollout_backend": "strict_vllm_0.8.2",
         "worker_multiproc_method": "spawn",
         "vllm_observed_worker_multiproc_method": "spawn",
@@ -902,6 +1014,7 @@ def _validate_capture32_runtime_bindings(
         "tokenizer_manifest_sha256": preregistration["source"][
             "tokenizer_manifest_sha256"
         ],
+        "gpu_lock_binding_sha256": resolved.get("gpu_lock_binding_sha256"),
     }
     if runtime.get("schema") != "memagent.commit-retain.capture32-runtime-binding.v1" \
             or any(canonical_json(runtime.get(field)) != canonical_json(expected)
@@ -928,14 +1041,48 @@ def _validate_capture32_runtime_bindings(
         )
         if canonical_json(pair_field) != canonical_json(runtime.get(field)):
             raise ValueError(f"capture32 pair/runtime split binding: {field}")
-    if not isinstance(runtime.get("physical_gpu_identity"), list) \
-            or len(runtime["physical_gpu_identity"]) != 2:
+    identities = runtime.get("physical_gpu_identity")
+    if not isinstance(identities, list) or len(identities) != 2 \
+            or any(not isinstance(item, Mapping) or set(item) != {
+                "physical_index", "uuid", "pci_bus_id", "name",
+                "compute_mode", "mig_mode",
+            } for item in identities) \
+            or [item["physical_index"] for item in identities] != physical \
+            or len({item["uuid"] for item in identities}) != 2 \
+            or any("NVIDIA H20" not in item["name"] for item in identities) \
+            or any(item["compute_mode"] != "Default" for item in identities) \
+            or any(item["mig_mode"] not in {"Disabled", "N/A", "[N/A]"}
+                   for item in identities):
         raise ValueError("capture32 physical GPU identity must contain two devices")
-    if resolved.get("physical_gpu_whitelist") != [4, 5] \
-            or resolved.get("visible_devices") != "4,5" \
-            or expected_pair.get("physical_gpu_whitelist") != [4, 5] \
-            or expected_pair.get("visible_devices") != "4,5":
-        raise ValueError("capture32 P0/runtime/pair GPU binding is not GPU4-5")
+    expected_pair_fields = {
+        "writer_checkpoint_sha256", "reader_checkpoint_sha256",
+        "writer_prompt_template_sha256", "reader_prompt_template_sha256",
+        "writer_decode", "reader_decode", "physical_gpu_whitelist",
+        "visible_devices", "physical_gpu_identity", "engine_config_sha256",
+        "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
+        "multiprocessing_context_method", "parent_cuda_initialization_policy",
+        "global_generate_call_count", "eos_token_id",
+        "gpu_lock_binding_sha256",
+    }
+    expected_calls = sum(
+        int(row["intervention_writer_turn"])
+        + 1
+        + 2 * (
+            int(row["total_writer_turns"])
+            - int(row["intervention_writer_turn"])
+        )
+        for row in preregistration["selected_inventory"]
+    )
+    if set(expected_pair) != expected_pair_fields \
+            or expected_pair.get("global_generate_call_count") != expected_calls \
+            or expected_pair.get("gpu_lock_binding_sha256") != lock_sha:
+        raise ValueError("capture32 expected pair binding is incomplete or drifted")
+    if expected_pair.get("physical_gpu_whitelist") != physical \
+            or expected_pair.get("visible_devices") != visible \
+            or expected_pair.get("gpu_lock_binding_sha256") != resolved.get(
+                "gpu_lock_binding_sha256"
+            ):
+        raise ValueError("capture32 P0/runtime/pair GPU/lock binding is split")
     return {
         "expected_pair_binding_sha256": pair_sha,
         "execution_binding_sha256": execution_sha,
@@ -1120,7 +1267,8 @@ def external_capture_anchor_state(
                 "reviewed commit must freeze this run and its terminal digests."
             ),
         }
-    # This branch is unreachable under the initial NOT_YET_FROZEN manifest.
+    # This branch is unreachable while the local export lacks an externally
+    # reviewed immutable digest/signature.
     # It deliberately fails until the later anchor-format/signature validator
     # is reviewed together with the literal anchor values.
     raise ValueError("external capture anchor claims frozen without a reviewed validator")
@@ -1390,6 +1538,7 @@ def _validate_capture32_envelopes(
     records: Sequence[Mapping[str, Any]], *, preregistration: Mapping[str, Any],
     run_id: str, git_commit: str, resolved: Mapping[str, Any], decoder: Any,
     writer_prompt_builder: Any, reader_prompt_builder: Any,
+    execution_evidence: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     _validate_capture32_runtime_bindings(
         resolved, preregistration=preregistration
@@ -1412,7 +1561,7 @@ def _validate_capture32_envelopes(
             raise ValueError(f"capture32 envelope {index} fields drifted")
         for field, expected in {
             "record_type": "commit_retain_pair_capture",
-            "experiment_name": "qwen25_7b_commit_retain_capture32_gpu45_seed2026",
+            "experiment_name": "qwen25_7b_commit_retain_capture32_seed2026",
             "git_commit": git_commit,
             "run_id": run_id,
             "eval_manifest_hash": preregistration["source"]["eval_manifest_hash"],
@@ -1437,7 +1586,7 @@ def _validate_capture32_envelopes(
             raise ValueError(f"capture32 envelope {index} identity differs from pair")
         canonical = build_capture_envelope(
             pair,
-            experiment_name="qwen25_7b_commit_retain_capture32_gpu45_seed2026",
+            experiment_name="qwen25_7b_commit_retain_capture32_seed2026",
             git_commit=git_commit,
             run_id=run_id,
             execution_binding_sha256=resolved["execution_binding_sha256"],
@@ -1458,7 +1607,8 @@ def _validate_capture32_envelopes(
         "physical_gpu_whitelist", "visible_devices", "physical_gpu_identity",
         "engine_config_sha256", "worker_multiproc_method",
         "vllm_observed_worker_multiproc_method", "multiprocessing_context_method",
-        "parent_cuda_initialization_policy",
+        "parent_cuda_initialization_policy", "global_generate_call_count",
+        "gpu_lock_binding_sha256",
     )
     for pair in pairs:
         for field in shared_fields:
@@ -1471,6 +1621,11 @@ def _validate_capture32_envelopes(
                 expected_binding.get(field)
             ):
                 raise ValueError(f"capture32 pair execution binding differs: {field}")
+        for field, expected in execution_evidence.items():
+            if canonical_json(pair["execution"].get(field)) != canonical_json(expected):
+                raise ValueError(
+                    f"capture32 pair execution credential binding differs: {field}"
+                )
         question = list(pair["question_token_ids"])
         writers = [*pair["prefix_turns"], pair["candidate"]]
         for arm in ARMS:
@@ -1497,6 +1652,13 @@ def _validate_capture32_envelopes(
         "engine_id", "cache_namespace", "process_instance_uuid", "process_pid",
         "physical_gpu_whitelist", "visible_devices", "physical_gpu_identity",
         "global_generate_call_count", "parent_credential_id", "engine_config_sha256",
+        "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
+        "multiprocessing_context_method", "parent_cuda_initialized_before_engine",
+        "parent_cuda_initialization_policy", "parent_credential_sha256",
+        "parent_credential_path", "parent_issuer_pid", "observed_parent_pid",
+        "parent_authorization_record_sha256", "gpu_lock_binding_sha256",
+        "lock_holder_receipt_sha256", "credential_consumption_sha256",
+        "credential_consumption_file_sha256", "credential_consumption_path",
     )
     executions = [pair["execution"] for pair in pairs]
     for field in process_fields:
@@ -1524,6 +1686,222 @@ def _validate_capture32_envelopes(
     return pairs, report
 
 
+def _capture32_process_identity(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "pid", "boot_id", "process_start_ticks",
+    } or type(value.get("pid")) is not int or value["pid"] < 1 \
+            or not isinstance(value.get("boot_id"), str) or not value["boot_id"] \
+            or type(value.get("process_start_ticks")) is not int \
+            or value["process_start_ticks"] < 0:
+        raise ValueError(f"capture32 {field} process identity is invalid")
+    return dict(value)
+
+
+def _validate_capture32_persisted_control_plane(
+    *, manifest: Mapping[str, Any], capture_manifest: Mapping[str, Any],
+    paths: Mapping[str, Path], p0: Mapping[str, Any], resolved: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Independently authenticate the stored supervisor/lock/credential chain."""
+    run_id = str(p0["run_id"])
+    git_commit = str(p0["git_commit"])
+    physical = list(p0["physical_gpu_whitelist"])
+    visible = str(p0["visible_devices"])
+    lock_binding = resolved["gpu_lock_binding"]
+    expected_lock_paths = list(capture_manifest["gpu"]["per_gpu_lock_paths"])
+    selected = set(physical)
+    for pair in ((4, 5), (6, 7)):
+        if selected.intersection(pair):
+            expected_lock_paths.append(
+                f"{manifest['work_root']}/locks/memagent_gate_a_gpu_{pair[0]}_{pair[1]}.lock"
+            )
+    locks = lock_binding["locks"]
+    if [item.get("path") for item in locks] != expected_lock_paths \
+            or len({item.get("fd") for item in locks}) != len(locks) \
+            or any(type(item.get(field)) is not int or item[field] < minimum
+                   for item in locks
+                   for field, minimum in (
+                       ("fd", 0), ("device", 0), ("inode", 1), ("owner_uid", 0)
+                   )):
+        raise ValueError("capture32 persisted per-device/legacy lock inventory drifted")
+
+    credential = json.loads(paths["capture_credential"].read_text(encoding="utf-8"))
+    credential_fields = {
+        "schema", "run_id", "git_commit", "child_kind", "parent_identity",
+        "issued_at", "nonce", "single_use", "execution_binding_sha256",
+        "runtime_binding_sha256", "current_binding_sha256",
+        "gpu_lock_binding_sha256", "lock_holder_receipt",
+        "training_authorized", "method_selected", "parent_credential_id",
+    }
+    unsigned_credential = dict(credential)
+    credential_id = unsigned_credential.pop("parent_credential_id", None)
+    if set(credential) != credential_fields \
+            or credential_id != canonical_sha256(unsigned_credential) \
+            or credential.get("schema") != "memagent.commit-retain.capture32-parent-credential.v1" \
+            or credential.get("run_id") != run_id \
+            or credential.get("git_commit") != git_commit \
+            or credential.get("child_kind") != "single_engine_exact_32_pair_capture" \
+            or credential.get("single_use") is not True \
+            or credential.get("execution_binding_sha256") != resolved["execution_binding_sha256"] \
+            or credential.get("runtime_binding_sha256") != resolved["runtime_binding_sha256"] \
+            or credential.get("current_binding_sha256") != resolved["current_binding_sha256"] \
+            or credential.get("gpu_lock_binding_sha256") != resolved["gpu_lock_binding_sha256"] \
+            or credential.get("training_authorized") is not False \
+            or credential.get("method_selected") is not False \
+            or re.fullmatch(r"[0-9a-f]{64}", str(credential.get("nonce", ""))) is None:
+        raise ValueError("capture32 persisted parent credential is non-canonical")
+    parent = _capture32_process_identity(
+        credential.get("parent_identity"), "credential parent"
+    )
+    holder = credential.get("lock_holder_receipt")
+    if not isinstance(holder, Mapping) or set(holder) != {
+        "schema", "physical_gpu_indices", "locks", "holder",
+        "gpu_lock_binding_sha256", "lock_holder_receipt_sha256",
+    }:
+        raise ValueError("capture32 credential lock-holder receipt is malformed")
+    unsigned_holder = dict(holder)
+    holder_sha = unsigned_holder.pop("lock_holder_receipt_sha256", None)
+    if holder_sha != canonical_sha256(unsigned_holder) \
+            or holder.get("schema") != "memagent.capture32.lock-holder-receipt.v1" \
+            or holder.get("physical_gpu_indices") != physical \
+            or canonical_json({
+                key: holder[key] for key in (
+                    "schema", "physical_gpu_indices", "locks",
+                    "gpu_lock_binding_sha256",
+                )
+            }) != canonical_json(lock_binding) \
+            or holder.get("holder") != parent:
+        raise ValueError("capture32 lock-holder receipt differs from P0 lock binding")
+
+    consumption = json.loads(paths["credential_consumption"].read_text(encoding="utf-8"))
+    consumption_fields = {
+        "schema", "run_id", "git_commit", "parent_credential_id",
+        "child_identity", "parent_identity", "consumed_at",
+        "gpu_lock_binding_sha256", "credential_consumption_sha256",
+    }
+    unsigned_consumption = dict(consumption)
+    consumption_sha = unsigned_consumption.pop("credential_consumption_sha256", None)
+    if set(consumption) != consumption_fields \
+            or consumption_sha != canonical_sha256(unsigned_consumption) \
+            or consumption.get("schema") != "memagent.commit-retain.capture32-credential-consumption.v1" \
+            or consumption.get("run_id") != run_id \
+            or consumption.get("git_commit") != git_commit \
+            or consumption.get("parent_credential_id") != credential_id \
+            or consumption.get("parent_identity") != parent \
+            or consumption.get("gpu_lock_binding_sha256") != resolved["gpu_lock_binding_sha256"]:
+        raise ValueError("capture32 credential-consumption receipt is non-canonical")
+    child = _capture32_process_identity(
+        consumption.get("child_identity"), "credential child"
+    )
+
+    supervisor = read_jsonl(paths["supervisor_ledger"])
+    record_types = [
+        "s0_preflight", "capture_authorization", "capture_started",
+        "capture_complete", "audit_result",
+    ]
+    if validate_jsonl_chain(supervisor) or [
+        item.get("record_type") for item in supervisor
+    ] != record_types:
+        raise ValueError("capture32 supervisor state machine/hash chain failed")
+    _capture32_preflight_module._validate_supervisor_schema(supervisor)
+    base_fields = {
+        "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+        "eval_manifest_hash", "execution_binding_sha256",
+        "runtime_binding_sha256", "current_binding_sha256",
+        "gpu_lock_binding_sha256", "artifact", "artifact_sha256", "status",
+        "decision", "training_authorized", "method_selected", "record_index",
+        "previous_record_sha256", "record_sha256",
+    }
+    extras = {
+        "s0_preflight": {
+            "resolved_manifest", "resolved_manifest_sha256",
+            "external_preregistration_anchor",
+            "external_preregistration_anchor_sha256",
+        },
+        "capture_authorization": {
+            "lock_holder_receipt_sha256", "parent_credential_id",
+            "parent_issuer_pid",
+        },
+        "capture_started": {
+            "lock_holder_receipt_sha256", "parent_credential_id",
+            "credential_consumption_sha256",
+        },
+        "capture_complete": {
+            "run_receipt", "run_receipt_sha256", "pair_count", "pair_ids",
+            "stable_write_ids", "generate_call_count",
+        },
+        "audit_result": {
+            "pair_count", "pair_ids", "stable_write_ids", "generate_call_count",
+        },
+    }
+    decisions = {
+        "s0_preflight": "COMMIT_RETAIN_CAPTURE32_P0_PASS",
+        "capture_authorization": "COMMIT_RETAIN_CAPTURE32_CHILD_AUTHORIZED",
+        "capture_started": "COMMIT_RETAIN_CAPTURE32_STARTED",
+        "capture_complete": "COMMIT_RETAIN_CAPTURE32_COMPLETE",
+        "audit_result": "COMMIT_RETAIN_CAPTURE32_LOCAL_AUDIT_COMPLETE_PROVENANCE_PENDING",
+    }
+    artifact_paths = {
+        "s0_preflight": paths["p0_certificate"],
+        "capture_authorization": paths["capture_credential"],
+        "capture_started": paths["credential_consumption"],
+        "capture_complete": paths["capture_ledger"],
+        "audit_result": paths["final_report"],
+    }
+    for record_type, record in zip(record_types, supervisor):
+        artifact_path = artifact_paths[record_type]
+        if set(record) != base_fields | extras[record_type] \
+                or record.get("experiment_name") != "qwen25_7b_commit_retain_capture32_seed2026" \
+                or record.get("git_commit") != git_commit \
+                or record.get("run_id") != run_id \
+                or record.get("eval_manifest_hash") != resolved["eval_manifest_hash"] \
+                or record.get("execution_binding_sha256") != resolved["execution_binding_sha256"] \
+                or record.get("runtime_binding_sha256") != resolved["runtime_binding_sha256"] \
+                or record.get("current_binding_sha256") != resolved["current_binding_sha256"] \
+                or record.get("gpu_lock_binding_sha256") != resolved["gpu_lock_binding_sha256"] \
+                or record.get("artifact") != str(artifact_path.resolve()) \
+                or record.get("artifact_sha256") != sha256_file(artifact_path) \
+                or record.get("status") != "PASS" \
+                or record.get("decision") != decisions[record_type] \
+                or record.get("training_authorized") is not False \
+                or record.get("method_selected") is not False:
+            raise ValueError(f"capture32 supervisor {record_type} record drifted")
+    if supervisor[0].get("resolved_manifest") != str(paths["resolved_manifest"].resolve()) \
+            or supervisor[0].get("resolved_manifest_sha256") != sha256_file(paths["resolved_manifest"]) \
+            or supervisor[0].get("external_preregistration_anchor") != str(
+                paths["external_preregistration_anchor"].resolve()
+            ) \
+            or supervisor[0].get("external_preregistration_anchor_sha256") != sha256_file(
+                paths["external_preregistration_anchor"]
+            ):
+        raise ValueError("capture32 P0 supervisor artifact bindings drifted")
+    if supervisor[1].get("lock_holder_receipt_sha256") != holder_sha \
+            or supervisor[1].get("parent_credential_id") != credential_id \
+            or supervisor[1].get("parent_issuer_pid") != parent["pid"] \
+            or supervisor[2].get("lock_holder_receipt_sha256") != holder_sha \
+            or supervisor[2].get("parent_credential_id") != credential_id \
+            or supervisor[2].get("credential_consumption_sha256") != consumption_sha:
+        raise ValueError("capture32 supervisor credential transition drifted")
+    return {
+        "parent_credential_id": credential_id,
+        "parent_credential_sha256": sha256_file(paths["capture_credential"]),
+        "parent_credential_path": str(paths["capture_credential"].resolve()),
+        "parent_issuer_pid": parent["pid"],
+        "observed_parent_pid": parent["pid"],
+        "parent_authorization_record_sha256": supervisor[1]["record_sha256"],
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
+        "lock_holder_receipt_sha256": holder_sha,
+        "credential_consumption_sha256": consumption_sha,
+        "credential_consumption_file_sha256": sha256_file(
+            paths["credential_consumption"]
+        ),
+        "credential_consumption_path": str(
+            paths["credential_consumption"].resolve()
+        ),
+        "child_identity": child,
+        "supervisor": supervisor,
+    }
+
+
 def authenticate_capture32(
     manifest: Mapping[str, Any], *, tokenizer_factory: Any = _tokenizer
 ) -> dict[str, Any]:
@@ -1538,12 +1916,18 @@ def authenticate_capture32(
         "preregistration", "preregistration_file_sha256",
         "preregistration_sha256", "resolved_manifest", "resolved_manifest_sha256",
         "capture_ledger", "final_report", "physical_gpu_whitelist",
-        "visible_devices", "commitment_frozen_before_first_generate",
+        "visible_devices", "gpu_lock_binding_sha256",
+        "commitment_frozen_before_first_generate",
         "training_authorized", "method_selected", "failures",
     }
     prereg_path = Path(manifest["repo_dir"]) / CAPTURE32_PREREG_REL
+    p0_physical = p0.get("physical_gpu_whitelist")
+    physical_ok = isinstance(p0_physical, list) \
+        and len(p0_physical) == 2 \
+        and all(type(item) is int and item >= 0 for item in p0_physical) \
+        and p0_physical == sorted(set(p0_physical))
     if set(p0) != required_p0 or any((
-        p0.get("schema") != "memagent.commit-retain.capture32-p0.v1",
+        p0.get("schema") != "memagent.commit-retain.capture32-p0.v2",
         p0.get("status") != "PASS",
         p0.get("decision") != "COMMIT_RETAIN_CAPTURE32_P0_PASS",
         p0.get("run_id") != manifest["capture_run_id"],
@@ -1554,8 +1938,11 @@ def authenticate_capture32(
         p0.get("resolved_manifest_sha256") != sha256_file(paths["resolved_manifest"]),
         p0.get("capture_ledger") != str(paths["capture_ledger"].resolve()),
         p0.get("final_report") != str(paths["final_report"].resolve()),
-        p0.get("physical_gpu_whitelist") != [4, 5],
-        p0.get("visible_devices") != "4,5",
+        not physical_ok,
+        p0.get("visible_devices") != (
+            ",".join(str(item) for item in p0_physical) if physical_ok else None
+        ),
+        not _is_sha(p0.get("gpu_lock_binding_sha256")),
         p0.get("commitment_frozen_before_first_generate") is not True,
         p0.get("training_authorized") is not False,
         p0.get("method_selected") is not False,
@@ -1574,9 +1961,12 @@ def authenticate_capture32(
         "runtime_binding_sha256", "current_binding_sha256", "execution_binding",
         "runtime_binding", "current_binding", "expected_pair_binding",
         "execution_code_sha256", "execution_code_combined_sha256",
+        "gpu_lock_binding", "gpu_lock_binding_sha256",
+        "lightweight_current_binding", "lightweight_current_binding_sha256",
+        "expected_global_generate_call_count",
     }
     if set(resolved) != required_resolved \
-            or resolved.get("schema") != "memagent.commit-retain.capture32-resolved.v1" \
+            or resolved.get("schema") != "memagent.commit-retain.capture32-resolved.v2" \
             or resolved.get("run_id") != manifest["capture_run_id"] \
             or resolved.get("git_commit") != p0.get("git_commit") \
             or resolved.get("preregistration_sha256") != prereg["preregistration_sha256"] \
@@ -1603,8 +1993,13 @@ def authenticate_capture32(
                 "s128_authority_sha256"
             ] \
             or resolved.get("rollout_backend") != "strict_vllm_0.8.2" \
-            or resolved.get("physical_gpu_whitelist") != [4, 5] \
-            or resolved.get("visible_devices") != "4,5" \
+            or resolved.get("physical_gpu_whitelist") != p0.get(
+                "physical_gpu_whitelist"
+            ) \
+            or resolved.get("visible_devices") != p0.get("visible_devices") \
+            or resolved.get("gpu_lock_binding_sha256") != p0.get(
+                "gpu_lock_binding_sha256"
+            ) \
             or resolved.get("selected_inventory_sha256") != prereg["inventory"][
                 "selected_inventory_sha256"
             ] \
@@ -1616,11 +2011,13 @@ def authenticate_capture32(
             ] \
             or canonical_json(resolved.get("frozen_pairs")) != canonical_json(
                 prereg["selected_inventory"]
-            ):
+            ) \
+            or resolved.get("expected_global_generate_call_count") != 353:
         raise ValueError("capture32 resolved manifest differs from preregistration")
     for field in (
         "execution_binding_sha256", "runtime_binding_sha256", "current_binding_sha256",
-        "execution_code_combined_sha256",
+        "execution_code_combined_sha256", "gpu_lock_binding_sha256",
+        "lightweight_current_binding_sha256",
     ):
         if not _is_sha(resolved.get(field)):
             raise ValueError(f"capture32 resolved {field} is invalid")
@@ -1635,10 +2032,45 @@ def authenticate_capture32(
         raise ValueError("capture32 combined code inventory digest mismatch")
     _validate_capture32_runtime_bindings(resolved, preregistration=prereg)
 
-    capture_manifest = load_capture_manifest(
-        Path(manifest["repo_dir"]) / manifest["source_capture"]["manifest"],
-        _capture_manifest_environment(manifest),
+    producer_manifest_path = (
+        Path(manifest["repo_dir"]) / manifest["capture32"]["producer_manifest"]
     )
+    if producer_manifest_path.is_symlink() \
+            or producer_manifest_path.resolve() != (
+                REPO_ROOT / "manifests/h20/qwen25_7b_commit_retain_capture32_seed2026.json"
+            ).resolve():
+        raise ValueError("capture32 producer manifest path escaped frozen Git closure")
+    capture_manifest = load_capture32_producer_manifest(
+        producer_manifest_path,
+        {
+            "MEMAGENT_CAPTURE32_WORK_ROOT": str(manifest["work_root"]),
+            "MEMAGENT_CAPTURE32_REPO_DIR": str(manifest["repo_dir"]),
+            "MEMAGENT_CAPTURE32_EXPECTED_COMMIT": str(p0["git_commit"]),
+            "MEMAGENT_CAPTURE32_RUN_ID": str(manifest["capture_run_id"]),
+            "MEMAGENT_CAPTURE32_PHYSICAL_GPUS": str(p0["visible_devices"]),
+        },
+    )
+    validate_capture32_producer_manifest(capture_manifest)
+    producer_path_bindings = {
+        "p0_certificate": "p0_certificate",
+        "resolved_manifest": "resolved_manifest",
+        "supervisor_ledger": "execution_ledger",
+        "capture_credential": "capture_credential",
+        "capture_ledger": "capture_ledger",
+        "capture_run_receipt": "capture_run_receipt",
+        "final_report": "final_report",
+        "external_preregistration_anchor": "external_preregistration_anchor",
+        "external_terminal_anchor": "external_terminal_anchor",
+    }
+    for consumer_name, producer_name in producer_path_bindings.items():
+        if paths[consumer_name].resolve() != Path(
+            capture_manifest["paths"][producer_name]
+        ).resolve():
+            raise ValueError(f"capture32 producer/consumer path split: {consumer_name}")
+    if paths["credential_consumption"].resolve() != Path(
+        capture_manifest["paths"]["capture_credential"]
+    ).with_name("capture_child_consumed.json").resolve():
+        raise ValueError("capture32 producer/consumer credential-consumption path split")
     tokenizer = tokenizer_factory(capture_manifest)
     from recurrent.impls.memory import TEMPLATE, TEMPLATE_FINAL_BOXED
     from recurrent.utils import TokenTemplate, chat_template
@@ -1660,10 +2092,12 @@ def authenticate_capture32(
         writer_prompt_builder=writer_prompt_builder,
     )
     binding = resolved["expected_pair_binding"]
+    physical = list(p0["physical_gpu_whitelist"])
+    visible = str(p0["visible_devices"])
     engine_config = {
         **dict(capture_manifest["backend"]),
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": physical,
+        "visible_devices": visible,
         "tensor_parallel_size": 2,
         "one_prompt_per_generate_call": True,
     }
@@ -1676,6 +2110,9 @@ def authenticate_capture32(
         )
         for row in prereg["selected_inventory"]
     )
+    if expected_generate_calls != 353 \
+            or resolved.get("expected_global_generate_call_count") != 353:
+        raise ValueError("capture32 frozen exact 32/353 schedule drifted")
     static_binding = {
         "writer_checkpoint_sha256": prereg["source"]["model_file_manifest_sha256"],
         "reader_checkpoint_sha256": prereg["source"]["model_file_manifest_sha256"],
@@ -1687,8 +2124,8 @@ def authenticate_capture32(
         ).hexdigest(),
         "writer_decode": capture_manifest["intervention"]["writer_decode"],
         "reader_decode": capture_manifest["intervention"]["reader_decode"],
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": physical,
+        "visible_devices": visible,
         "worker_multiproc_method": "spawn",
         "vllm_observed_worker_multiproc_method": "spawn",
         "multiprocessing_context_method": "spawn",
@@ -1696,6 +2133,7 @@ def authenticate_capture32(
         "engine_config_sha256": canonical_sha256(engine_config),
         "global_generate_call_count": expected_generate_calls,
         "eos_token_id": int(tokenizer.eos_token_id),
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
     }
     binding_fields = {
         "writer_checkpoint_sha256", "reader_checkpoint_sha256",
@@ -1705,6 +2143,7 @@ def authenticate_capture32(
         "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
         "multiprocessing_context_method", "parent_cuda_initialization_policy",
         "global_generate_call_count", "eos_token_id",
+        "gpu_lock_binding_sha256",
     }
     if not isinstance(binding, Mapping) or set(binding) != binding_fields or any(
         canonical_json(binding.get(field)) != canonical_json(expected)
@@ -1717,6 +2156,22 @@ def authenticate_capture32(
         "reader_checkpoint_sha256"
     ):
         raise ValueError("capture32 strict-vLLM/model/decode binding drifted")
+    control = _validate_capture32_persisted_control_plane(
+        manifest=manifest,
+        capture_manifest=capture_manifest,
+        paths=paths,
+        p0=p0,
+        resolved=resolved,
+    )
+    execution_evidence = {
+        key: control[key] for key in (
+            "parent_credential_id", "parent_credential_sha256",
+            "parent_credential_path", "parent_issuer_pid", "observed_parent_pid",
+            "parent_authorization_record_sha256", "gpu_lock_binding_sha256",
+            "lock_holder_receipt_sha256", "credential_consumption_sha256",
+            "credential_consumption_file_sha256", "credential_consumption_path",
+        )
+    }
     records = read_jsonl(paths["capture_ledger"])
     pairs, capture_report = _validate_capture32_envelopes(
         records,
@@ -1729,13 +2184,67 @@ def authenticate_capture32(
         reader_prompt_builder=lambda question, memory: reader_template.format(
             prompt=question, memory=memory
         ).tolist(),
+        execution_evidence=execution_evidence,
     )
-    expected_final = {
-        "schema": "memagent.commit-retain.capture32-final.v1",
-        "status": "PASS",
-        "decision": "COMMIT_RETAIN_CAPTURE32_AUDIT_COMPLETE",
+    first_execution = pairs[0]["execution"]
+    if first_execution.get("process_pid") != control["child_identity"]["pid"]:
+        raise ValueError("capture32 credential child process differs from vLLM producer")
+    claim_boundary = {
+        "capture_and_audit_only": True,
+        "method_selected": False,
+        "training_authorized": False,
+        "causal_or_performance_claim": False,
+    }
+    training = {"trainer_attached": False, "actor_updates": 0, "optimizer_steps": 0}
+    expected_receipt_unsigned = {
+        "schema": "memagent.commit-retain.capture32-run-receipt.v1",
         "run_id": manifest["capture_run_id"],
         "git_commit": p0["git_commit"],
+        "eval_manifest_hash": prereg["source"]["eval_manifest_hash"],
+        "execution_binding_sha256": resolved["execution_binding_sha256"],
+        "runtime_binding_sha256": resolved["runtime_binding_sha256"],
+        "current_binding_sha256": resolved["current_binding_sha256"],
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
+        "capture_ledger": str(paths["capture_ledger"].resolve()),
+        "capture_ledger_sha256": sha256_file(paths["capture_ledger"]),
+        "pair_count": 32,
+        "pair_ids": capture_report["pair_ids"],
+        "stable_write_ids": capture_report["stable_write_ids"],
+        "generate_call_count": 353,
+        "execution": first_execution,
+        "training": training,
+        "claim_boundary": claim_boundary,
+    }
+    expected_receipt = {
+        **expected_receipt_unsigned,
+        "run_receipt_id": canonical_sha256(expected_receipt_unsigned),
+    }
+    actual_receipt = json.loads(
+        paths["capture_run_receipt"].read_text(encoding="utf-8")
+    )
+    if canonical_json(actual_receipt) != canonical_json(expected_receipt):
+        raise ValueError("capture32 run receipt does not independently reproduce")
+    complete, audit = control["supervisor"][3], control["supervisor"][4]
+    for record, is_complete in ((complete, True), (audit, False)):
+        if record.get("pair_count") != 32 \
+                or record.get("pair_ids") != capture_report["pair_ids"] \
+                or record.get("stable_write_ids") != capture_report["stable_write_ids"] \
+                or record.get("generate_call_count") != 353:
+            raise ValueError("capture32 supervisor exact inventory receipt drifted")
+        if is_complete and (
+            record.get("run_receipt") != str(paths["capture_run_receipt"].resolve())
+            or record.get("run_receipt_sha256") != sha256_file(
+                paths["capture_run_receipt"]
+            )
+        ):
+            raise ValueError("capture32 supervisor run-receipt binding drifted")
+    expected_final = {
+        "schema": "memagent.commit-retain.capture32-final.v2",
+        "status": "PASS",
+        "decision": "COMMIT_RETAIN_CAPTURE32_LOCAL_AUDIT_COMPLETE_PROVENANCE_PENDING",
+        "run_id": manifest["capture_run_id"],
+        "git_commit": p0["git_commit"],
+        "eval_manifest_hash": prereg["source"]["eval_manifest_hash"],
         "preregistration_sha256": prereg["preregistration_sha256"],
         "p0_certificate": str(paths["p0_certificate"].resolve()),
         "p0_certificate_sha256": sha256_file(paths["p0_certificate"]),
@@ -1743,8 +2252,17 @@ def authenticate_capture32(
         "resolved_manifest_sha256": sha256_file(paths["resolved_manifest"]),
         "capture_ledger": str(paths["capture_ledger"].resolve()),
         "capture_ledger_sha256": sha256_file(paths["capture_ledger"]),
-        **capture_report,
-        "training": {"trainer_attached": False, "actor_updates": 0, "optimizer_steps": 0},
+        "capture_run_receipt": str(paths["capture_run_receipt"].resolve()),
+        "capture_run_receipt_sha256": sha256_file(paths["capture_run_receipt"]),
+        **{
+            key: capture_report[key] for key in (
+                "pair_count", "stable_write_ids", "pair_ids",
+                "generate_call_count", "outcomes",
+            )
+        },
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
+        "external_provenance_status": "PENDING_EXTERNAL_SIGNATURE",
+        "training": training,
         "claim_boundary": {
             "development_admissibility_only": True,
             "method_selected": False,
@@ -1757,8 +2275,85 @@ def authenticate_capture32(
     if set(actual_final) != set(expected_final) \
             or canonical_json(actual_final) != canonical_json(expected_final):
         raise ValueError("capture32 final report does not independently reproduce")
+    prereg_anchor = json.loads(
+        paths["external_preregistration_anchor"].read_text(encoding="utf-8")
+    )
+    _capture32_preflight_module._validate_anchor_schema(prereg_anchor)
+    unsigned_prereg_anchor = dict(prereg_anchor)
+    prereg_anchor_digest = unsigned_prereg_anchor.pop("anchor_payload_sha256", None)
+    expected_prereg_anchor_fields = {
+        "schema", "anchor_kind", "trust_status", "run_id", "git_commit",
+        "recorded_at", "preregistration", "preregistration_sha256",
+        "p0_certificate", "p0_certificate_sha256", "resolved_manifest",
+        "resolved_manifest_sha256", "training_authorized", "method_selected",
+        "anchor_payload_sha256",
+    }
+    if set(prereg_anchor) != expected_prereg_anchor_fields \
+            or prereg_anchor_digest != canonical_sha256(unsigned_prereg_anchor) \
+            or prereg_anchor.get("schema") != "memagent.commit-retain.capture32-provenance-anchor.v1" \
+            or prereg_anchor.get("anchor_kind") != "PRE_GENERATION_LOCAL_EXPORT_CANDIDATE" \
+            or prereg_anchor.get("trust_status") != "PENDING_EXTERNAL_SIGNATURE" \
+            or prereg_anchor.get("run_id") != manifest["capture_run_id"] \
+            or prereg_anchor.get("git_commit") != p0["git_commit"] \
+            or prereg_anchor.get("preregistration") != str(prereg_path.resolve()) \
+            or prereg_anchor.get("preregistration_sha256") != sha256_file(prereg_path) \
+            or prereg_anchor.get("p0_certificate") != str(paths["p0_certificate"].resolve()) \
+            or prereg_anchor.get("p0_certificate_sha256") != sha256_file(paths["p0_certificate"]) \
+            or prereg_anchor.get("resolved_manifest") != str(paths["resolved_manifest"].resolve()) \
+            or prereg_anchor.get("resolved_manifest_sha256") != sha256_file(paths["resolved_manifest"]) \
+            or prereg_anchor.get("training_authorized") is not False \
+            or prereg_anchor.get("method_selected") is not False:
+        raise ValueError("capture32 pre-generation local export anchor drifted")
+    terminal_anchor = json.loads(
+        paths["external_terminal_anchor"].read_text(encoding="utf-8")
+    )
+    _capture32_preflight_module._validate_anchor_schema(terminal_anchor)
+    unsigned_terminal_anchor = dict(terminal_anchor)
+    terminal_anchor_digest = unsigned_terminal_anchor.pop(
+        "anchor_payload_sha256", None
+    )
+    expected_terminal_fields = {
+        "schema", "anchor_kind", "trust_status", "run_id", "git_commit",
+        "recorded_at", "pre_generation_anchor", "pre_generation_anchor_sha256",
+        "supervisor_ledger", "supervisor_ledger_sha256",
+        "supervisor_tail_sha256", "capture_ledger", "capture_ledger_sha256",
+        "capture_run_receipt", "capture_run_receipt_sha256", "final_report",
+        "final_report_sha256", "pair_ids_sha256", "stable_write_ids_sha256",
+        "training_authorized", "method_selected", "anchor_payload_sha256",
+    }
+    supervisor = control["supervisor"]
+    if set(terminal_anchor) != expected_terminal_fields \
+            or terminal_anchor_digest != canonical_sha256(unsigned_terminal_anchor) \
+            or terminal_anchor.get("schema") != "memagent.commit-retain.capture32-provenance-anchor.v1" \
+            or terminal_anchor.get("anchor_kind") != "POST_CAPTURE_LOCAL_EXPORT_CANDIDATE" \
+            or terminal_anchor.get("trust_status") != "PENDING_EXTERNAL_SIGNATURE" \
+            or terminal_anchor.get("run_id") != manifest["capture_run_id"] \
+            or terminal_anchor.get("git_commit") != p0["git_commit"] \
+            or terminal_anchor.get("pre_generation_anchor") != str(paths["external_preregistration_anchor"].resolve()) \
+            or terminal_anchor.get("pre_generation_anchor_sha256") != sha256_file(paths["external_preregistration_anchor"]) \
+            or terminal_anchor.get("supervisor_ledger") != str(paths["supervisor_ledger"].resolve()) \
+            or terminal_anchor.get("supervisor_ledger_sha256") != sha256_file(paths["supervisor_ledger"]) \
+            or terminal_anchor.get("supervisor_tail_sha256") != supervisor[-1]["record_sha256"] \
+            or terminal_anchor.get("capture_ledger") != str(paths["capture_ledger"].resolve()) \
+            or terminal_anchor.get("capture_ledger_sha256") != sha256_file(paths["capture_ledger"]) \
+            or terminal_anchor.get("capture_run_receipt") != str(paths["capture_run_receipt"].resolve()) \
+            or terminal_anchor.get("capture_run_receipt_sha256") != sha256_file(paths["capture_run_receipt"]) \
+            or terminal_anchor.get("final_report") != str(paths["final_report"].resolve()) \
+            or terminal_anchor.get("final_report_sha256") != sha256_file(paths["final_report"]) \
+            or terminal_anchor.get("pair_ids_sha256") != canonical_sha256(capture_report["pair_ids"]) \
+            or terminal_anchor.get("stable_write_ids_sha256") != canonical_sha256(capture_report["stable_write_ids"]) \
+            or terminal_anchor.get("training_authorized") is not False \
+            or terminal_anchor.get("method_selected") is not False:
+        raise ValueError("capture32 terminal local export anchor drifted")
     return {
         "capture_role": "preregistered_capture32",
+        # These values have already been closed across P0, resolved/runtime/
+        # current bindings, every pair record, and the persisted control
+        # plane above.  Carry them into the consumer report so the report
+        # cannot silently relabel a dynamic two-H20 run as the legacy gpu45
+        # profile.
+        "physical_gpu_whitelist": list(p0["physical_gpu_whitelist"]),
+        "visible_devices": str(p0["visible_devices"]),
         "pairs": pairs,
         "contract_evidence": _contract_evidence(pairs),
         "capture_report": capture_report,
@@ -1993,7 +2588,7 @@ def build_report(
     capture32_source_base = {
         "capture_role": "preregistered_capture32",
         "capture_run_id": manifest["capture_run_id"],
-        "expected_profile": "gpu45",
+        "expected_profile": "dynamic_explicit_two_h20",
         "expected_root": manifest["capture32"]["output_root"],
         "preregistration": str(preregistration_path.resolve()),
         "preregistration_file_sha256": sha256_file(preregistration_path),
@@ -2066,7 +2661,20 @@ def build_report(
             manifest, tokenizer_factory=tokenizer_factory
         )
         capture_role = "preregistered_capture32"
-        source_base = capture32_source_base
+        physical = capture.get("physical_gpu_whitelist")
+        visible = capture.get("visible_devices")
+        if not isinstance(physical, list) or len(physical) != 2 \
+                or physical != sorted(set(physical)) \
+                or any(type(item) is not int or item < 0 for item in physical) \
+                or visible != ",".join(str(item) for item in physical):
+            raise ValueError(
+                "capture32 authenticated result omitted its dynamic two-H20 binding"
+            )
+        source_base = {
+            **capture32_source_base,
+            "physical_gpu_whitelist": physical,
+            "visible_devices": visible,
+        }
     except Capture32AttritionError as error:
         return capture_failure(
             error,

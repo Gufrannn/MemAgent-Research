@@ -432,7 +432,7 @@ def test_candidate_count_and_handwritten_pass_are_not_trusted() -> None:
         validate_pair_record({"status": "PASS", "decision": "looks-good"})
 
 
-def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> None:
+def test_execution_accepts_self_consistent_explicit_gpu_pairs() -> None:
     gpu67 = canonical_pair()
     assert validate_pair_record(gpu67)["execution"]["visible_devices"] == "6,7"
 
@@ -450,8 +450,8 @@ def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> 
     with pytest.raises(ValueError, match="identity indices differ from physical whitelist"):
         validate_pair_record(mismatched_identity)
 
-    arbitrary = copy.deepcopy(gpu45)
-    arbitrary["execution"].update(
+    arbitrary_payload = pair_payload()
+    arbitrary_payload["execution"].update(
         physical_gpu_whitelist=[0, 1],
         visible_devices="0,1",
         physical_gpu_identity=[
@@ -459,8 +459,17 @@ def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> 
             "1, GPU-deadbeef-0001, NVIDIA H20",
         ],
     )
-    with pytest.raises(ValueError, match="GPU binding is not preregistered"):
-        validate_pair_record(arbitrary)
+    arbitrary = build_pair_record(arbitrary_payload)
+    assert validate_pair_record(arbitrary)["execution"]["visible_devices"] == "0,1"
+
+    descending = copy.deepcopy(arbitrary)
+    descending["execution"].update(
+        physical_gpu_whitelist=[1, 0],
+        visible_devices="1,0",
+        physical_gpu_identity=list(reversed(arbitrary["execution"]["physical_gpu_identity"])),
+    )
+    with pytest.raises(ValueError, match="explicit ascending pair"):
+        validate_pair_record(descending)
 
 
 def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_path) -> None:

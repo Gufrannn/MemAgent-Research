@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "commit_retain_capture32_execution_ledger.schema.json",
+  "title": "MemAgent 7B exact-32 COMMIT versus RETAIN supervisor receipt",
+  "type": "object",
+  "oneOf": [
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": [
+            "resolved_manifest",
+            "resolved_manifest_sha256",
+            "external_preregistration_anchor",
+            "external_preregistration_anchor_sha256"
+          ],
+          "properties": {
+            "record_type": {"const": "s0_preflight"},
+            "decision": {"const": "COMMIT_RETAIN_CAPTURE32_P0_PASS"},
+            "resolved_manifest": {"$ref": "#/$defs/path"},
+            "resolved_manifest_sha256": {"$ref": "#/$defs/sha256"},
+            "external_preregistration_anchor": {"$ref": "#/$defs/path"},
+            "external_preregistration_anchor_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": [
+            "lock_holder_receipt_sha256",
+            "parent_credential_id",
+            "parent_issuer_pid"
+          ],
+          "properties": {
+            "record_type": {"const": "capture_authorization"},
+            "decision": {"const": "COMMIT_RETAIN_CAPTURE32_CHILD_AUTHORIZED"},
+            "lock_holder_receipt_sha256": {"$ref": "#/$defs/sha256"},
+            "parent_credential_id": {"$ref": "#/$defs/sha256"},
+            "parent_issuer_pid": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": [
+            "lock_holder_receipt_sha256",
+            "parent_credential_id",
+            "credential_consumption_sha256"
+          ],
+          "properties": {
+            "record_type": {"const": "capture_started"},
+            "decision": {"const": "COMMIT_RETAIN_CAPTURE32_STARTED"},
+            "lock_holder_receipt_sha256": {"$ref": "#/$defs/sha256"},
+            "parent_credential_id": {"$ref": "#/$defs/sha256"},
+            "credential_consumption_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"$ref": "#/$defs/completedCapture"},
+        {
+          "type": "object",
+          "required": ["run_receipt", "run_receipt_sha256"],
+          "properties": {
+            "record_type": {"const": "capture_complete"},
+            "decision": {"const": "COMMIT_RETAIN_CAPTURE32_COMPLETE"},
+            "run_receipt": {"$ref": "#/$defs/path"},
+            "run_receipt_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"$ref": "#/$defs/completedCapture"},
+        {
+          "type": "object",
+          "properties": {
+            "record_type": {"const": "audit_result"},
+            "decision": {
+              "const": "COMMIT_RETAIN_CAPTURE32_LOCAL_AUDIT_COMPLETE_PROVENANCE_PENDING"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "exact32Hashes": {
+      "type": "array",
+      "minItems": 32,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "record_type",
+        "experiment_name",
+        "git_commit",
+        "run_id",
+        "recorded_at",
+        "eval_manifest_hash",
+        "execution_binding_sha256",
+        "runtime_binding_sha256",
+        "current_binding_sha256",
+        "gpu_lock_binding_sha256",
+        "artifact",
+        "artifact_sha256",
+        "status",
+        "decision",
+        "record_index",
+        "previous_record_sha256",
+        "record_sha256",
+        "training_authorized",
+        "method_selected"
+      ],
+      "properties": {
+        "record_type": {"type": "string"},
+        "experiment_name": {
+          "const": "qwen25_7b_commit_retain_capture32_seed2026"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"
+        },
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "eval_manifest_hash": {"$ref": "#/$defs/sha256"},
+        "execution_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "current_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "gpu_lock_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact": {"$ref": "#/$defs/path"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"const": "PASS"},
+        "decision": {"type": "string"},
+        "record_index": {"type": "integer", "minimum": 0},
+        "previous_record_sha256": {"$ref": "#/$defs/sha256"},
+        "record_sha256": {"$ref": "#/$defs/sha256"},
+        "training_authorized": {"const": false},
+        "method_selected": {"const": false}
+      }
+    },
+    "completedCapture": {
+      "type": "object",
+      "required": [
+        "pair_count",
+        "pair_ids",
+        "stable_write_ids",
+        "generate_call_count"
+      ],
+      "properties": {
+        "pair_count": {"const": 32},
+        "pair_ids": {"$ref": "#/$defs/exact32Hashes"},
+        "stable_write_ids": {"$ref": "#/$defs/exact32Hashes"},
+        "generate_call_count": {"const": 353}
+      }
+    }
+  },
+  "unevaluatedProperties": false
+}

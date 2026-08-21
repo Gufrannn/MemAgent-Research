@@ -551,16 +551,15 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"execution.{field} differs from strict capture contract")
     physical_whitelist = value.get("physical_gpu_whitelist")
     visible_devices = value.get("visible_devices")
-    allowed_gpu_bindings = {
-        (4, 5): "4,5",
-        (6, 7): "6,7",
-    }
     if (
         not isinstance(physical_whitelist, list)
-        or tuple(physical_whitelist) not in allowed_gpu_bindings
-        or visible_devices != allowed_gpu_bindings[tuple(physical_whitelist)]
+        or len(physical_whitelist) != 2
+        or any(type(item) is not int or item < 0 for item in physical_whitelist)
+        or len(set(physical_whitelist)) != 2
+        or physical_whitelist != sorted(physical_whitelist)
+        or visible_devices != ",".join(str(item) for item in physical_whitelist)
     ):
-        raise ValueError("execution physical/visible GPU binding is not preregistered")
+        raise ValueError("execution physical/visible GPU binding is not an explicit ascending pair")
     parent_cuda_initialized = value.get("parent_cuda_initialized_before_engine")
     if type(parent_cuda_initialized) is not bool:
         raise ValueError("execution parent CUDA initialization observation is not boolean")
@@ -568,11 +567,16 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(identities, list)
         or len(identities) != 2
-        or any(not isinstance(item, str) or not item for item in identities)
+        or any(not isinstance(item, (str, Mapping)) or not item for item in identities)
     ):
         raise ValueError("execution.physical_gpu_identity must bind two devices")
     try:
-        identity_indices = [int(item.split(",", 1)[0].strip()) for item in identities]
+        identity_indices = [
+            int(item["physical_index"])
+            if isinstance(item, Mapping)
+            else int(item.split(",", 1)[0].strip())
+            for item in identities
+        ]
     except (ValueError, IndexError) as error:
         raise ValueError(
             "execution.physical_gpu_identity has invalid physical indices"
@@ -628,6 +632,25 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("execution parent credential path is empty")
     if result["observed_parent_pid"] != result["parent_issuer_pid"]:
         raise ValueError("execution parent process credential mismatch")
+    optional_capture32 = (
+        "gpu_lock_binding_sha256",
+        "lock_holder_receipt_sha256",
+        "credential_consumption_sha256",
+        "credential_consumption_file_sha256",
+        "credential_consumption_path",
+    )
+    present = [field in value for field in optional_capture32]
+    if any(present) and not all(present):
+        raise ValueError("execution capture32 lock/credential evidence is incomplete")
+    if all(present):
+        for field in optional_capture32[:-1]:
+            result[field] = require_sha256(value.get(field), f"execution.{field}")
+        result["credential_consumption_path"] = str(
+            value.get("credential_consumption_path")
+        )
+        if not result["credential_consumption_path"] \
+                or result["credential_consumption_path"] == "None":
+            raise ValueError("execution credential consumption path is empty")
     return result
 
 
@@ -1024,16 +1047,26 @@ def validate_capture_ledger(
     writer_prompt_builder: Callable[[list[int], list[int], list[int]], list[int]] | None = None,
     reader_prompt_builder: Callable[[list[int], list[int]], list[int]] | None = None,
     expected_pair_binding: Mapping[str, Any] | None = None,
+    expected_pair_count: int = 4,
 ) -> dict[str, Any]:
-    """Recompute a complete four-pair artifact; persisted PASS flags are forbidden."""
+    """Recompute a complete exact-size artifact; persisted PASS flags are forbidden.
+
+    The reviewed capture4 contract remains the default.  Larger preregistered
+    captures must opt in with an explicit positive ``expected_pair_count``.
+    """
     normalized_records = [dict(item) for item in records]
+    if type(expected_pair_count) is not int or expected_pair_count < 1:
+        raise ValueError("expected_pair_count must be a positive integer")
     if (writer_prompt_builder is None) != (reader_prompt_builder is None):
         raise ValueError("writer and reader prompt reconstruction callbacks must be paired")
     chain_failures = validate_jsonl_chain(normalized_records)
     if chain_failures:
         raise ValueError(f"capture ledger hash chain failed: {chain_failures}")
-    if len(normalized_records) != 4 or len(frozen_pairs) != 4:
-        raise ValueError("capture attrition: exactly four frozen pairs are required")
+    if len(normalized_records) != expected_pair_count \
+            or len(frozen_pairs) != expected_pair_count:
+        raise ValueError(
+            f"capture attrition: exactly {expected_pair_count} frozen pairs are required"
+        )
     expected_by_write: dict[str, dict[str, Any]] = {}
     for item in frozen_pairs:
         identity = _stable_identity(item)
@@ -1049,7 +1082,7 @@ def validate_capture_ledger(
             "intervention_writer_turn": writer_turn,
             "total_writer_turns": total,
         }
-    if len(expected_by_write) != 4:
+    if len(expected_by_write) != expected_pair_count:
         raise ValueError("frozen stable-write inventory is not unique")
 
     pairs: list[dict[str, Any]] = []
@@ -1104,6 +1137,21 @@ def validate_capture_ledger(
                     expected_pair_binding[field]
                 ):
                     raise ValueError(f"pair execution differs from P0 {field}")
+            optional_execution_binding = (
+                "gpu_lock_binding_sha256",
+                "lock_holder_receipt_sha256",
+                "credential_consumption_sha256",
+                "credential_consumption_file_sha256",
+                "credential_consumption_path",
+            )
+            if any(field in expected_pair_binding for field in optional_execution_binding):
+                if not all(field in expected_pair_binding for field in optional_execution_binding):
+                    raise ValueError("P0 capture32 lock/credential binding is incomplete")
+                for field in optional_execution_binding:
+                    if canonical_json(pair["execution"].get(field)) != canonical_json(
+                        expected_pair_binding[field]
+                    ):
+                        raise ValueError(f"pair execution differs from P0 {field}")
             expected_eos = require_int(
                 expected_pair_binding.get("eos_token_id"),
                 "expected_pair_binding.eos_token_id",
@@ -1221,6 +1269,12 @@ def validate_capture_ledger(
         "observed_parent_pid",
         "parent_authorization_record_sha256", "engine_config_sha256",
     )
+    if executions and "gpu_lock_binding_sha256" in executions[0]:
+        process_fields += (
+            "gpu_lock_binding_sha256", "lock_holder_receipt_sha256",
+            "credential_consumption_sha256",
+            "credential_consumption_file_sha256", "credential_consumption_path",
+        )
     for field in process_fields:
         if len({canonical_json(item[field]) for item in executions}) != 1:
             raise ValueError(f"capture pairs do not share one process/engine {field}")
@@ -1239,7 +1293,7 @@ def validate_capture_ledger(
     return {
         "status": "PASS",
         "decision": "COMMIT_RETAIN_CAPTURE_AUDIT_COMPLETE",
-        "pair_count": 4,
+        "pair_count": expected_pair_count,
         "stable_write_ids": [pair["stable_write_id"] for pair in pairs],
         "pair_ids": [pair["pair_id"] for pair in pairs],
         "generate_call_count": len(call_indices),

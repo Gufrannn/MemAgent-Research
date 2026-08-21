@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "branch": "h20/qwen25-7b-paired-effect-pipeline-20260821",
+  "required_sequence": [
+    "standalone_p0_and_external_preregistration_anchor",
+    "parent_issued_single_use_capture_credential",
+    "single_engine_exact_32_pair_capture",
+    "readonly_audit",
+    "external_terminal_anchor"
+  ],
+  "entrypoints": {
+    "p0": "scripts/h20/preflight_qwen25_7b_commit_retain_capture32.sh",
+    "capture": "scripts/h20/run_qwen25_7b_commit_retain_capture32.sh",
+    "gpu_runner": "tools/h20/run_qwen25_7b_commit_retain_capture32.py",
+    "supervisor_and_audit": "tools/h20/preflight_qwen25_7b_commit_retain_capture32.py"
+  },
+  "execution": {
+    "physical_gpus": "explicit MEMAGENT_CAPTURE32_PHYSICAL_GPUS; exactly two distinct indices",
+    "automatic_gpu_selection": false,
+    "required_gpu_name_substring": "NVIDIA H20",
+    "required_compute_mode": "Default",
+    "allowed_mig_modes": ["Disabled", "N/A", "[N/A]"],
+    "per_gpu_locks": "MEMAGENT_CAPTURE32_WORK_ROOT/locks/memagent_h20_gpu_N.lock",
+    "cuda_device_order": "PCI_BUS_ID",
+    "tensor_parallel_size": 2,
+    "backend": "strict_vllm_0.8.2",
+    "worker_multiproc_method": "spawn",
+    "huggingface_generation_fallback": false,
+    "single_coordinator_invocation_single_engine": true,
+    "one_prompt_per_generate_call": true,
+    "max_num_seqs": 1,
+    "prefix_cache_enabled": false,
+    "candidate_generated_once_before_arms": true,
+    "arm_order": ["COMMIT", "RETAIN"],
+    "required_pairs": 32,
+    "capture4_may_fill_missing": false,
+    "run_stitching": false,
+    "training_updates": 0
+  },
+  "supervision": {
+    "p0_before_first_generate": true,
+    "parent_issued_single_use_capture_credential": true,
+    "append_only_run_artifacts": true,
+    "attrition_after_p0_is_failure": true,
+    "external_preregistration_anchor_outside_run_root": true,
+    "external_terminal_anchor_outside_run_root": true
+  },
+  "claim_firewall": {
+    "capture_and_audit_only": true,
+    "method_selected": false,
+    "training_authorized": false,
+    "paper_performance_result": false,
+    "causal_effect_claim": false
+  },
+  "gpu_execution_authorized_by_this_manifest": false
+}

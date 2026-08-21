@@ -669,6 +669,23 @@ def _capture32_binding_fixture(*, pair_gpus: list[int] | None = None) -> dict:
     prereg = validate_capture32_preregistration(_capture32_preregistration())
     pair_gpus = [4, 5] if pair_gpus is None else pair_gpus
     visible = ",".join(str(item) for item in pair_gpus)
+    locks = [
+        {
+            "path": f"/work/locks/memagent_h20_gpu_{item}.lock",
+            "fd": 180 + offset,
+            "device": 1,
+            "inode": 100 + offset,
+            "owner_uid": 1000,
+        }
+        for offset, item in enumerate(pair_gpus)
+    ]
+    lock_sha = canonical_sha256({
+        "physical_gpu_indices": pair_gpus,
+        "locks": [
+            {key: item[key] for key in ("path", "device", "inode", "owner_uid")}
+            for item in locks
+        ],
+    })
     pair = {
         "writer_checkpoint_sha256": "1" * 64,
         "reader_checkpoint_sha256": "1" * 64,
@@ -679,22 +696,38 @@ def _capture32_binding_fixture(*, pair_gpus: list[int] | None = None) -> dict:
         "physical_gpu_whitelist": pair_gpus,
         "visible_devices": visible,
         "physical_gpu_identity": [
-            {"physical_index": item, "uuid": f"GPU-{item}"} for item in pair_gpus
+            {
+                "physical_index": item,
+                "uuid": f"GPU-{item}",
+                "pci_bus_id": f"00000000:{item:02X}:00.0",
+                "name": "NVIDIA H20",
+                "compute_mode": "Default",
+                "mig_mode": "Disabled",
+            }
+            for item in pair_gpus
         ],
         "engine_config_sha256": "4" * 64,
         "worker_multiproc_method": "spawn",
         "vllm_observed_worker_multiproc_method": "spawn",
         "multiprocessing_context_method": "spawn",
         "parent_cuda_initialization_policy": "record_observed_spawn_required",
-        "global_generate_call_count": 400,
+        "global_generate_call_count": 353,
         "eos_token_id": 151645,
+        "gpu_lock_binding_sha256": lock_sha,
     }
     resolved = {
         "run_id": "capture32_test",
         "git_commit": "5" * 40,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": pair_gpus,
+        "visible_devices": visible,
         "execution_code_combined_sha256": "6" * 64,
+        "gpu_lock_binding": {
+            "schema": "memagent.capture32.lock-holder-receipt.v1",
+            "physical_gpu_indices": pair_gpus,
+            "locks": locks,
+            "gpu_lock_binding_sha256": lock_sha,
+        },
+        "gpu_lock_binding_sha256": lock_sha,
         "expected_pair_binding": pair,
     }
     pair_sha = canonical_sha256(pair)
@@ -708,8 +741,9 @@ def _capture32_binding_fixture(*, pair_gpus: list[int] | None = None) -> dict:
         "fold_membership_sha256": prereg["folds"]["membership_sha256"],
         "execution_code_combined_sha256": resolved["execution_code_combined_sha256"],
         "expected_pair_binding_sha256": pair_sha,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": pair_gpus,
+        "visible_devices": visible,
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
         "rollout_backend": "strict_vllm_0.8.2",
     }
     runtime = {
@@ -732,6 +766,7 @@ def _capture32_binding_fixture(*, pair_gpus: list[int] | None = None) -> dict:
             "model_file_manifest_sha256"
         ],
         "tokenizer_manifest_sha256": prereg["source"]["tokenizer_manifest_sha256"],
+        "gpu_lock_binding_sha256": resolved["gpu_lock_binding_sha256"],
     }
     resolved["execution_binding"] = execution
     resolved["runtime_binding"] = runtime
@@ -744,8 +779,8 @@ def _capture32_binding_fixture(*, pair_gpus: list[int] | None = None) -> dict:
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "expected_pair_binding_sha256": pair_sha,
-        "physical_gpu_whitelist": [4, 5],
-        "visible_devices": "4,5",
+        "physical_gpu_whitelist": pair_gpus,
+        "visible_devices": visible,
     }
     resolved["current_binding"] = current
     resolved["current_binding_sha256"] = canonical_sha256(current)
@@ -765,10 +800,27 @@ def test_capture32_runtime_binding_recomputes_all_three_digests() -> None:
         _validate_capture32_runtime_bindings(forged, preregistration=prereg)
 
 
-def test_capture32_split_gpu67_pair_binding_is_rejected() -> None:
+def test_capture32_dynamic_gpu67_pair_binding_is_accepted() -> None:
     prereg = validate_capture32_preregistration(_capture32_preregistration())
     resolved = _capture32_binding_fixture(pair_gpus=[6, 7])
-    with pytest.raises(ValueError, match="runtime binding values|GPU binding"):
+    digests = _validate_capture32_runtime_bindings(resolved, preregistration=prereg)
+    assert digests["runtime_binding_sha256"] == resolved["runtime_binding_sha256"]
+
+
+def test_capture32_split_gpu_pair_binding_is_rejected() -> None:
+    prereg = validate_capture32_preregistration(_capture32_preregistration())
+    resolved = _capture32_binding_fixture(pair_gpus=[6, 7])
+    resolved["runtime_binding"]["visible_devices"] = "4,5"
+    resolved["runtime_binding_sha256"] = canonical_sha256(
+        resolved["runtime_binding"]
+    )
+    resolved["current_binding"]["runtime_binding_sha256"] = resolved[
+        "runtime_binding_sha256"
+    ]
+    resolved["current_binding_sha256"] = canonical_sha256(
+        resolved["current_binding"]
+    )
+    with pytest.raises(ValueError, match="runtime binding values|split binding"):
         _validate_capture32_runtime_bindings(resolved, preregistration=prereg)
 
 
@@ -902,6 +954,8 @@ def test_complete_capture32_reaches_scientific_review_but_not_training(
     )
     monkeypatch.setattr(audit, "authenticate_capture32", lambda *args, **kwargs: {
         "capture_role": "preregistered_capture32",
+        "physical_gpu_whitelist": [6, 7],
+        "visible_devices": "6,7",
         "pairs": [{} for _ in range(32)],
         "contract_evidence": [{} for _ in range(32)],
         "capture_report": {"status": "PASS", "pair_count": 32},
@@ -933,6 +987,10 @@ def test_complete_capture32_reaches_scientific_review_but_not_training(
     assert report["status"] == "PENDING"
     assert report["decision"] == "PAIRED_EFFECT_CAPTURE_PROVENANCE_PENDING"
     assert report["source_capture"]["capture_role"] == "preregistered_capture32"
+    assert report["source_capture"]["expected_profile"] \
+        == "dynamic_explicit_two_h20"
+    assert report["source_capture"]["physical_gpu_whitelist"] == [6, 7]
+    assert report["source_capture"]["visible_devices"] == "6,7"
     assert report["gates"]["capture32_inventory"]["status"] == "PASS"
     assert report["gates"]["training_evidence"]["predictive_signal"]["status"] == "PASS"
     assert report["training_authorized"] is False
@@ -952,6 +1010,8 @@ def test_scorer_failure_is_not_hidden_by_pending_provenance(
     )
     monkeypatch.setattr(audit, "authenticate_capture32", lambda *args, **kwargs: {
         "capture_role": "preregistered_capture32",
+        "physical_gpu_whitelist": [4, 5],
+        "visible_devices": "4,5",
         "pairs": [{} for _ in range(32)],
         "contract_evidence": [],
         "capture_report": {"status": "PASS"},

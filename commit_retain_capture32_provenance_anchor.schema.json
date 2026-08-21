@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "commit_retain_capture32_provenance_anchor.schema.json",
+  "title": "MemAgent exact-32 external-location provenance export candidate",
+  "type": "object",
+  "oneOf": [
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": [
+            "preregistration",
+            "preregistration_sha256",
+            "p0_certificate",
+            "p0_certificate_sha256",
+            "resolved_manifest",
+            "resolved_manifest_sha256"
+          ],
+          "properties": {
+            "anchor_kind": {"const": "PRE_GENERATION_LOCAL_EXPORT_CANDIDATE"},
+            "preregistration": {"$ref": "#/$defs/path"},
+            "preregistration_sha256": {"$ref": "#/$defs/sha256"},
+            "p0_certificate": {"$ref": "#/$defs/path"},
+            "p0_certificate_sha256": {"$ref": "#/$defs/sha256"},
+            "resolved_manifest": {"$ref": "#/$defs/path"},
+            "resolved_manifest_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": [
+            "pre_generation_anchor",
+            "pre_generation_anchor_sha256",
+            "supervisor_ledger",
+            "supervisor_ledger_sha256",
+            "supervisor_tail_sha256",
+            "capture_ledger",
+            "capture_ledger_sha256",
+            "capture_run_receipt",
+            "capture_run_receipt_sha256",
+            "final_report",
+            "final_report_sha256",
+            "pair_ids_sha256",
+            "stable_write_ids_sha256"
+          ],
+          "properties": {
+            "anchor_kind": {"const": "POST_CAPTURE_LOCAL_EXPORT_CANDIDATE"},
+            "pre_generation_anchor": {"$ref": "#/$defs/path"},
+            "pre_generation_anchor_sha256": {"$ref": "#/$defs/sha256"},
+            "supervisor_ledger": {"$ref": "#/$defs/path"},
+            "supervisor_ledger_sha256": {"$ref": "#/$defs/sha256"},
+            "supervisor_tail_sha256": {"$ref": "#/$defs/sha256"},
+            "capture_ledger": {"$ref": "#/$defs/path"},
+            "capture_ledger_sha256": {"$ref": "#/$defs/sha256"},
+            "capture_run_receipt": {"$ref": "#/$defs/path"},
+            "capture_run_receipt_sha256": {"$ref": "#/$defs/sha256"},
+            "final_report": {"$ref": "#/$defs/path"},
+            "final_report_sha256": {"$ref": "#/$defs/sha256"},
+            "pair_ids_sha256": {"$ref": "#/$defs/sha256"},
+            "stable_write_ids_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "schema",
+        "anchor_kind",
+        "trust_status",
+        "run_id",
+        "git_commit",
+        "recorded_at",
+        "training_authorized",
+        "method_selected",
+        "anchor_payload_sha256"
+      ],
+      "properties": {
+        "schema": {
+          "const": "memagent.commit-retain.capture32-provenance-anchor.v1"
+        },
+        "anchor_kind": {"type": "string"},
+        "trust_status": {"const": "PENDING_EXTERNAL_SIGNATURE"},
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "training_authorized": {"const": false},
+        "method_selected": {"const": false},
+        "anchor_payload_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "unevaluatedProperties": false
+}
