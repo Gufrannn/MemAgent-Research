@@ -27,6 +27,7 @@ from tools.h20.preflight_qwen25_7b_commit_retain_capture32 import (
     _validate_schema_instance,
     capture_lock_holder_receipt,
     load_manifest,
+    project_frozen_pair_eval_identity,
 )
 from tools.h20.run_qwen25_7b_commit_retain_capture32 import (
     _pair_identity_from_frozen,
@@ -119,6 +120,67 @@ def test_runtime_rejects_conflicting_or_invalid_eval_hash_projection() -> None:
     frozen.pop("eval_manifest_hash")
     with pytest.raises(ValueError, match="canonical SHA-256"):
         _pair_identity_from_frozen(frozen, eval_manifest_hash="not-a-sha")
+
+
+def test_post_generation_validator_projects_real_preregistered_inventory_shape() -> None:
+    prereg = json.loads((
+        REPO / "manifests/h20/qwen25_7b_paired_effect_capture32_preregistration.json"
+    ).read_text())
+    frozen = prereg["selected_inventory"]
+    manifest_hash = prereg["source"]["eval_manifest_hash"]
+    assert len(frozen) == 32
+    assert all("eval_manifest_hash" not in row for row in frozen)
+
+    projected = project_frozen_pair_eval_identity(frozen, manifest_hash)
+    assert len(projected) == 32
+    assert all(row["eval_manifest_hash"] == manifest_hash for row in projected)
+    assert all("eval_manifest_hash" not in row for row in frozen)
+
+
+def test_post_generation_validator_rejects_missing_invalid_or_conflicting_hash() -> None:
+    prereg = json.loads((
+        REPO / "manifests/h20/qwen25_7b_paired_effect_capture32_preregistration.json"
+    ).read_text())
+    frozen = prereg["selected_inventory"]
+    manifest_hash = prereg["source"]["eval_manifest_hash"]
+    conflicting = copy.deepcopy(frozen)
+    conflicting[7]["eval_manifest_hash"] = "f" * 64
+    with pytest.raises(ValueError, match="conflicts with P0"):
+        project_frozen_pair_eval_identity(conflicting, manifest_hash)
+    for invalid in ("", "f" * 63, "F" * 64, None):
+        with pytest.raises(ValueError, match="canonical SHA-256"):
+            project_frozen_pair_eval_identity(frozen, invalid)  # type: ignore[arg-type]
+
+
+def test_post_generation_real_shape_roundtrips_through_generic_ledger_validator(
+    tmp_path: Path,
+) -> None:
+    records, frozen_with_hash = _capture32_records(tmp_path)
+    manifest_hash = frozen_with_hash[0]["eval_manifest_hash"]
+    real_preregistered_shape = copy.deepcopy(frozen_with_hash)
+    for row in real_preregistered_shape:
+        assert row.pop("eval_manifest_hash") == manifest_hash
+
+    with pytest.raises(ValueError, match="stable identity is missing"):
+        validate_capture_ledger(
+            records, frozen_pairs=real_preregistered_shape,
+            experiment_name="capture32-fixture", git_commit="f" * 40,
+            run_id="capture32_fixture", execution_binding_sha256="6" * 64,
+            runtime_binding_sha256="7" * 64,
+            current_binding_sha256="8" * 64, expected_pair_count=32,
+        )
+
+    projected = project_frozen_pair_eval_identity(
+        real_preregistered_shape, manifest_hash
+    )
+    report = validate_capture_ledger(
+        records, frozen_pairs=projected,
+        experiment_name="capture32-fixture", git_commit="f" * 40,
+        run_id="capture32_fixture", execution_binding_sha256="6" * 64,
+        runtime_binding_sha256="7" * 64,
+        current_binding_sha256="8" * 64, expected_pair_count=32,
+    )
+    assert report["pair_count"] == 32
 
 
 def test_manifest_resolves_dynamic_pair_and_per_gpu_locks() -> None:

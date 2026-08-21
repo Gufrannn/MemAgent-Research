@@ -1164,6 +1164,33 @@ def execution_frozen_pairs(manifest: Mapping[str, Any], tokenizer: Any) -> list[
     return _execution_frozen_pairs(manifest, _load_preregistration(manifest), tokenizer)
 
 
+def project_frozen_pair_eval_identity(
+    frozen_pairs: Sequence[Mapping[str, Any]], eval_manifest_hash: str
+) -> list[dict[str, Any]]:
+    """Attach the authenticated manifest hash to execution-only pair identities.
+
+    The preregistered inventory deliberately stores this hash once at the
+    manifest level.  The generic COMMIT/RETAIN ledger validator requires it on
+    every execution identity.  Projection is therefore explicit and rejects a
+    conflicting row-level copy rather than silently overwriting it.
+    """
+    if not isinstance(eval_manifest_hash, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", eval_manifest_hash
+    ):
+        raise ValueError("capture32 eval_manifest_hash is not a canonical SHA-256")
+    projected: list[dict[str, Any]] = []
+    for index, item in enumerate(frozen_pairs):
+        row = dict(item)
+        row_copy = row.get("eval_manifest_hash")
+        if row_copy is not None and row_copy != eval_manifest_hash:
+            raise ValueError(
+                f"capture32 frozen row {index} eval_manifest_hash conflicts with P0"
+            )
+        row["eval_manifest_hash"] = eval_manifest_hash
+        projected.append(row)
+    return projected
+
+
 def _expected_run_receipt(
     *, manifest: Mapping[str, Any], resolved: Mapping[str, Any], current_binding_sha256: str,
     capture_report: Mapping[str, Any], capture_path: Path,
@@ -1201,6 +1228,9 @@ def validate_capture_artifacts(manifest_path: Path, *, require_supervisor_receip
     chat = chat_template(tokenizer)
     writer, reader = TokenTemplate(chat.format(message=TEMPLATE), tokenizer), TokenTemplate(chat.format(message=TEMPLATE_FINAL_BOXED), tokenizer)
     frozen = execution_frozen_pairs(manifest, tokenizer)
+    validation_frozen = project_frozen_pair_eval_identity(
+        frozen, resolved["eval_manifest_hash"]
+    )
     credential_path = Path(manifest["paths"]["capture_credential"])
     credential = validate_capture_credential(
         credential_path, manifest=manifest, resolved=resolved,
@@ -1249,7 +1279,8 @@ def validate_capture_artifacts(manifest_path: Path, *, require_supervisor_receip
         "credential_consumption_path": str(consumption_path.resolve()),
     }
     report = validate_capture_ledger(
-        read_jsonl(capture_path), frozen_pairs=frozen, experiment_name=EXPERIMENT_NAME,
+        read_jsonl(capture_path), frozen_pairs=validation_frozen,
+        experiment_name=EXPERIMENT_NAME,
         git_commit=expected_git_commit(), run_id=manifest["run_id"],
         execution_binding_sha256=resolved["execution_binding_sha256"],
         runtime_binding_sha256=resolved["runtime_binding_sha256"],

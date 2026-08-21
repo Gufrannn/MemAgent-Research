@@ -41,6 +41,7 @@ from tools.h20.preflight_qwen25_7b_commit_retain_capture32 import (  # noqa: E40
     expected_git_commit,
     expected_pair_binding,
     load_manifest,
+    project_frozen_pair_eval_identity,
     validate_p0,
 )
 
@@ -294,8 +295,12 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
             "credential_consumption_path",
         )
     }}
+    validation_frozen = project_frozen_pair_eval_identity(
+        frozen, resolved["eval_manifest_hash"]
+    )
     report = validate_capture_ledger(
-        read_jsonl(capture_path), frozen_pairs=frozen, experiment_name=EXPERIMENT_NAME,
+        read_jsonl(capture_path), frozen_pairs=validation_frozen,
+        experiment_name=EXPERIMENT_NAME,
         git_commit=expected_git_commit(), run_id=manifest["run_id"],
         execution_binding_sha256=resolved["execution_binding_sha256"],
         runtime_binding_sha256=resolved["runtime_binding_sha256"],
