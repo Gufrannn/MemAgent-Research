@@ -34,6 +34,8 @@
     "execution_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "runtime_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "current_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_id_tombstone": {"type": "string"},
+    "run_id_tombstone_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "record_index": {"type": "integer", "minimum": 0},
     "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

@@ -193,6 +193,30 @@ def expected_git_commit() -> str:
     return os.environ[REQUIRED_ENV[2]]
 
 
+def _run_id_tombstone_evidence(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    resources = manifest["execution_resources"]
+    tombstone = Path(resources["run_id_tombstone"])
+    receipt_path = Path(resources["run_id_tombstone_receipt"])
+    if not tombstone.is_dir() or not receipt_path.is_file():
+        raise ValueError("run ID tombstone/receipt is missing")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    profile = _gpu_profile(manifest)
+    expected = {
+        "schema": "memagent.commit-retain.run-id-tombstone.v1",
+        "run_id": manifest["run_id"],
+        "gpu_pair": profile["visible_devices"],
+        "gpu_pair_slug": profile["pair_slug"],
+        "git_commit": expected_git_commit(),
+    }
+    if receipt != expected:
+        raise ValueError("run ID tombstone receipt differs from explicit runtime binding")
+    return {
+        "path": str(tombstone.resolve()),
+        "receipt": str(receipt_path.resolve()),
+        "receipt_sha256": sha256_file(receipt_path),
+    }
+
+
 def _code_objects(manifest: Mapping[str, Any]) -> tuple[str, ...]:
     profile = _gpu_profile(manifest)
     if profile["name"] == "gpu67":
@@ -367,11 +391,25 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     if manifest.get("paths") != expected_paths:
         raise ValueError("GPU-pair output/certificate paths drifted")
     expected_locks = [
-        f"{work_root}/locks/memagent_gate_a_gpu_{index}.lock" for index in parsed_pair
+        f"{work_root}/locks/memagent_h20_gpu_{index}.lock" for index in parsed_pair
     ]
     if manifest.get("execution_resources") != {
         "project_locks": expected_locks,
         "output_root": log_root,
+        "run_id_tombstone": (
+            f"{work_root}/logs/commit_retain_capture_run_ids_frozen_20260821/"
+            f"{run_id}.tombstone"
+        ),
+        "run_id_tombstone_receipt": (
+            f"{work_root}/logs/commit_retain_capture_run_ids_frozen_20260821/"
+            f"{run_id}.tombstone/receipt.json"
+        ),
+        "legacy_default_root": (
+            f"{work_root}/logs/commit_retain_capture_frozen_20260821/{run_id}"
+        ),
+        "legacy_gpu45_root": (
+            f"{work_root}/logs/commit_retain_capture_gpu45_frozen_20260821/{run_id}"
+        ),
     }:
         raise ValueError("per-GPU lock/output resource binding drifted")
     backend = manifest.get("backend", {})
@@ -639,6 +677,23 @@ def run_preflight(
         "physical_gpu_whitelist": gpu_indices,
         "visible_devices": visible_devices,
     }
+    resources = manifest["execution_resources"]
+    if Path(resources["legacy_default_root"]).exists():
+        failures.append("run ID already has a legacy default root")
+    if Path(resources["legacy_gpu45_root"]).exists():
+        failures.append("run ID already has a legacy GPU45 root")
+    sibling_roots = sorted(
+        str(path)
+        for path in Path(manifest["paths"]["log_root"]).parent.glob(
+            f"{manifest['run_id']}_gpu*_*"
+        )
+    )
+    if sibling_roots:
+        failures.append(f"run ID already has GPU-pair roots: {sibling_roots}")
+    try:
+        evidence["run_id_tombstone"] = _run_id_tombstone_evidence(manifest)
+    except Exception as error:
+        failures.append(str(error))
     if os.environ.get("CUDA_VISIBLE_DEVICES") != visible_devices:
         failures.append(
             f"P0 CUDA_VISIBLE_DEVICES must be exactly {visible_devices}"
@@ -700,6 +755,8 @@ def run_preflight(
             "gpu_pair_environment": "MEMAGENT_COMMIT_RETAIN_GPU_PAIR",
             "canonical_ascending_distinct_pair_required": True,
             "per_gpu_locking": True,
+            "per_gpu_lock_namespace": "locks/memagent_h20_gpu_N.lock",
+            "global_one_time_run_id": True,
             "cuda_device_order": "PCI_BUS_ID",
             "tensor_parallel_size": 2,
             "backend": "strict_vllm_0.8.2",
@@ -856,6 +913,9 @@ def run_preflight(
                 "gpu_pair_slug": profile["pair_slug"],
                 "physical_gpu_whitelist": gpu_indices,
                 "visible_devices": visible_devices,
+                "run_id_tombstone_receipt_sha256": evidence["run_id_tombstone"][
+                    "receipt_sha256"
+                ],
             }
             execution_binding = {
                 "git_commit": evidence["git_commit"],
@@ -894,6 +954,7 @@ def run_preflight(
                 "gpu_pair_slug": profile["pair_slug"],
                 "physical_gpu_whitelist": gpu_indices,
                 "visible_devices": visible_devices,
+                "run_id_tombstone": evidence["run_id_tombstone"],
                 "eval_manifest_hash": stable_resolved["eval_manifest_hash"],
                 "stable_identity_resolved_manifest_sha256": sha256_file(
                     manifest["stable_identity_prerequisite"]["resolved_manifest"]
@@ -961,6 +1022,10 @@ def write_preflight(manifest_path: Path, *, check_runtime: bool) -> dict[str, An
                 "execution_binding_sha256": resolved["execution_binding_sha256"],
                 "runtime_binding_sha256": resolved["runtime_binding_sha256"],
                 "current_binding_sha256": resolved["lightweight_current_binding_sha256"],
+                "run_id_tombstone": resolved["run_id_tombstone"]["path"],
+                "run_id_tombstone_receipt_sha256": resolved["run_id_tombstone"][
+                    "receipt_sha256"
+                ],
                 "artifact": str(p0_path.resolve()),
                 "artifact_sha256": sha256_file(p0_path),
                 "resolved_manifest": str(resolved_path.resolve()),
@@ -994,6 +1059,7 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "physical_gpu_identity",
         "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
         "current_binding_sha256", "artifact", "artifact_sha256",
+        "run_id_tombstone", "run_id_tombstone_receipt_sha256",
         "resolved_manifest", "resolved_manifest_sha256", "status", "decision",
         "training_authorized", "method_selected", "record_index",
         "previous_record_sha256", "record_sha256",
@@ -1002,6 +1068,7 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise ValueError("P0 supervisor receipt has handcrafted fields")
     expected_commit = expected_git_commit()
     pair = _pair_evidence(manifest, resolved)
+    tombstone = _run_id_tombstone_evidence(manifest)
     valid = all(
         (
             p0.get("status") == "PASS",
@@ -1016,6 +1083,7 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             p0.get("evidence", {}).get("visible_devices") == pair["visible_devices"],
             p0.get("evidence", {}).get("physical_gpu_identity")
             == pair["physical_gpu_identity"],
+            p0.get("evidence", {}).get("run_id_tombstone") == tombstone,
             resolved.get("gpu_pair_slug") == pair["gpu_pair_slug"],
             resolved.get("physical_gpu_whitelist") == pair["physical_gpu_whitelist"],
             resolved.get("visible_devices") == pair["visible_devices"],
@@ -1025,6 +1093,10 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             == pair["physical_gpu_whitelist"],
             resolved.get("runtime_binding", {}).get("visible_devices")
             == pair["visible_devices"],
+            resolved.get("run_id_tombstone") == tombstone,
+            resolved.get("runtime_binding", {}).get(
+                "run_id_tombstone_receipt_sha256"
+            ) == tombstone["receipt_sha256"],
             p0.get("evidence", {}).get("resolved_manifest_sha256") == sha256_file(resolved_path),
             canonical_sha256(resolved.get("runtime_binding")) == resolved.get("runtime_binding_sha256"),
             canonical_sha256(resolved.get("execution_binding")) == resolved.get("execution_binding_sha256"),
@@ -1043,6 +1115,8 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             head.get("execution_binding_sha256") == resolved.get("execution_binding_sha256"),
             head.get("runtime_binding_sha256") == resolved.get("runtime_binding_sha256"),
             head.get("current_binding_sha256") == resolved.get("lightweight_current_binding_sha256"),
+            head.get("run_id_tombstone") == tombstone["path"],
+            head.get("run_id_tombstone_receipt_sha256") == tombstone["receipt_sha256"],
             head.get("status") == "PASS",
             head.get("decision") == "COMMIT_RETAIN_P0_PASS",
             head.get("training_authorized") is False,

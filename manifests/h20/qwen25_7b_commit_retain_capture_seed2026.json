@@ -146,10 +146,14 @@
   },
   "execution_resources": {
     "project_locks": [
-      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_gate_a_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_FIRST}.lock",
-      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_gate_a_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_SECOND}.lock"
+      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_h20_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_FIRST}.lock",
+      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_h20_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_SECOND}.lock"
     ],
-    "output_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}"
+    "output_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}",
+    "run_id_tombstone": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_run_ids_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}.tombstone",
+    "run_id_tombstone_receipt": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_run_ids_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}.tombstone/receipt.json",
+    "legacy_default_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}",
+    "legacy_gpu45_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_gpu45_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}"
   },
   "paths": {
     "log_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}",

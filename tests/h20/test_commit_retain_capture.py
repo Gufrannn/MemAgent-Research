@@ -30,6 +30,7 @@ from recurrent.research.trajectory_seeding import derive_turn_request_seeds
 from tools.h20.preflight_qwen25_7b_commit_retain import (
     _code_objects,
     _gpu_profile,
+    _run_id_tombstone_evidence,
     _validate_manifest,
     expected_pair_binding,
     experiment_name,
@@ -392,7 +393,7 @@ def test_overlapping_pairs_share_one_physical_gpu_lock_but_not_output_root() -> 
     locks45 = set(pair45["execution_resources"]["project_locks"])
     locks56 = set(pair56["execution_resources"]["project_locks"])
     assert locks45 & locks56 == {
-        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_5.lock"
+        "/data/cw/memagent_work/locks/memagent_h20_gpu_5.lock"
     }
     assert pair45["paths"]["log_root"].endswith("_gpu4_5")
     assert pair56["paths"]["log_root"].endswith("_gpu5_6")
@@ -716,8 +717,8 @@ def test_gpu45_overlay_is_fully_independent_and_keeps_gpu67_default() -> None:
     assert experiment_name(gpu45) == "qwen25_7b_commit_retain_capture_gpu45_seed2026"
     assert gpu45["paths"]["log_root"].endswith("commitretain45a_gpu2_4")
     assert gpu45["execution_resources"]["project_locks"] == [
-        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_2.lock",
-        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_4.lock",
+        "/data/cw/memagent_work/locks/memagent_h20_gpu_2.lock",
+        "/data/cw/memagent_work/locks/memagent_h20_gpu_4.lock",
     ]
     assert gpu45["paths"]["log_root"] == base["paths"]["log_root"]
     assert gpu45["command_manifest"] != base["command_manifest"]
@@ -807,11 +808,108 @@ def test_gpu45_wrappers_select_profile_before_common_and_never_name_gpu67() -> N
         assert "6,7" not in shell
         assert "gpu_6_7" not in shell
     common = (REPO / "scripts/h20/commit_retain_capture_common.sh").read_text()
-    assert "memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock" in common
-    assert "memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock" in common
+    assert "memagent_h20_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock" in common
+    assert "memagent_h20_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock" in common
     assert "flock -n 8" in common and "flock -n 9" in common
     assert "commit_retain_capture_frozen_20260821" in common
-    assert "commit_retain_capture_gpu45_frozen_20260821" not in common
+    assert "COMMIT_RETAIN_LEGACY_GPU45_ROOT" in common
+
+
+def test_commit_retain_uses_exact_published_curve_lock_namespace() -> None:
+    common = (REPO / "scripts/h20/commit_retain_capture_common.sh").read_text()
+    # These suffixes are the published Original S128 curve runner contract;
+    # variable names differ, but the work-root-relative lock names must not.
+    published_curve_locks = {
+        "locks/memagent_h20_gpu_A.lock",
+        "locks/memagent_h20_gpu_B.lock",
+    }
+    commit_retain_locks = {
+        "locks/memagent_h20_gpu_A.lock"
+        if "locks/memagent_h20_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock" in common
+        else "missing-A",
+        "locks/memagent_h20_gpu_B.lock"
+        if "locks/memagent_h20_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock" in common
+        else "missing-B",
+    }
+    assert commit_retain_locks == published_curve_locks
+
+
+def _claim_run_id(tmp_path: Path, *, run_id: str, pair: str) -> subprocess.CompletedProcess:
+    environment = os.environ.copy()
+    environment.update(
+        MEMAGENT_COMMIT_RETAIN_WORK_ROOT=str(tmp_path),
+        MEMAGENT_COMMIT_RETAIN_REPO_DIR=str(REPO),
+        MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT="f" * 40,
+        MEMAGENT_COMMIT_RETAIN_RUN_ID=run_id,
+        MEMAGENT_COMMIT_RETAIN_GPU_PAIR=pair,
+    )
+    return subprocess.run(
+        [
+            "bash", "-c",
+            'source "$1"; commit_retain_claim_run_id',
+            "commit-retain-claim",
+            str(REPO / "scripts/h20/commit_retain_capture_common.sh"),
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_run_id_is_global_one_time_across_pair_slugs(tmp_path: Path) -> None:
+    first = _claim_run_id(tmp_path, run_id="failedr3", pair="4,5")
+    assert first.returncode == 0, first.stderr
+    receipt_path = (
+        tmp_path / "logs/commit_retain_capture_run_ids_frozen_20260821/"
+        "failedr3.tombstone/receipt.json"
+    )
+    assert json.loads(receipt_path.read_text()) == {
+        "schema": "memagent.commit-retain.run-id-tombstone.v1",
+        "run_id": "failedr3",
+        "gpu_pair": "4,5",
+        "gpu_pair_slug": "gpu4_5",
+        "git_commit": "f" * 40,
+    }
+    manifest = load_manifest(
+        REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
+        {
+            **manifest_environment("4,5"),
+            "MEMAGENT_COMMIT_RETAIN_WORK_ROOT": str(tmp_path),
+            "MEMAGENT_COMMIT_RETAIN_REPO_DIR": str(REPO),
+            "MEMAGENT_COMMIT_RETAIN_RUN_ID": "failedr3",
+        },
+    )
+    with patch.dict(
+        os.environ,
+        {"MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40},
+        clear=False,
+    ):
+        evidence = _run_id_tombstone_evidence(manifest)
+    assert evidence["receipt"] == str(receipt_path.resolve())
+    assert evidence["receipt_sha256"] == hashlib.sha256(
+        receipt_path.read_bytes()
+    ).hexdigest()
+    reused = _claim_run_id(tmp_path, run_id="failedr3", pair="6,7")
+    assert reused.returncode == 55
+    assert "tombstone already exists" in reused.stderr
+
+
+@pytest.mark.parametrize(
+    "kind,relative",
+    [
+        ("legacy default", "logs/commit_retain_capture_frozen_20260821/oldr3"),
+        ("legacy GPU45", "logs/commit_retain_capture_gpu45_frozen_20260821/oldr3"),
+        ("GPU-pair", "logs/commit_retain_capture_frozen_20260821/oldr3_gpu2_4"),
+    ],
+)
+def test_run_id_claim_rejects_every_legacy_or_pair_root(
+    tmp_path: Path, kind: str, relative: str
+) -> None:
+    (tmp_path / relative).mkdir(parents=True)
+    claimed = _claim_run_id(tmp_path, run_id="oldr3", pair="6,7")
+    assert claimed.returncode == 55
+    assert kind in claimed.stderr
 
 
 def test_gpu45_runner_authenticates_only_physical_gpu45() -> None:

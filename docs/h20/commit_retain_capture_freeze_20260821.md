@@ -113,10 +113,17 @@ screen -D -r xinman-commit-retain-0821
 ```
 
 P0 asks `nvidia-smi` to authenticate both requested indices, UUIDs, and H20
-names. The wrappers hold one lock per physical GPU, in ascending order, for the
-whole invocation. Thus runs on `4,5` and `5,6` cannot overlap. The immutable
-run root ends in `<run-id>_gpuA_B`; changing the pair requires a new P0 and a
-new root while leaving the scientific protocol unchanged.
+names. The wrappers hold the same published per-H20 lock namespace used by the
+Original S128 curve runner: `locks/memagent_h20_gpu_N.lock`. Both locks are
+held in ascending order for the whole invocation, so runs on `4,5` and `5,6`
+cannot overlap, including across the two experiment runners.
+
+The immutable run root ends in `<run-id>_gpuA_B`, but the run ID itself is
+global and one-time rather than pair-local. Before P0, the wrapper atomically
+creates `<run-id>.tombstone` in the run-ID registry. It refuses an existing
+tombstone, either legacy unsuffixed root, or any existing `<run-id>_gpuA_B`
+root. A failed P0 consumes the ID; changing the GPU pair never permits an old
+r3 ID to be reused. Recovery always chooses a new run ID.
 
 After screen exits, the metadata-only re-audit is:
 

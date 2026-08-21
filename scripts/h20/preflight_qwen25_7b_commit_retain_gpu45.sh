@@ -11,6 +11,7 @@ commit_retain_require_checkout
 commit_retain_validate_gpu_pair
 commit_retain_acquire_lock
 commit_retain_require_idle
+commit_retain_claim_run_id
 
 [[ ! -e $COMMIT_RETAIN_LOG_ROOT ]] || {
   echo 'COMMIT_RETAIN_NO_GO:P0 append-only GPU45 run root exists; choose a new run ID' >&2; exit 73;

@@ -32,20 +32,26 @@ readonly COMMIT_RETAIN_EXPECTED_COMMIT=$MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT
 readonly COMMIT_RETAIN_RUN_ID=$MEMAGENT_COMMIT_RETAIN_RUN_ID
 readonly COMMIT_RETAIN_GPUS=$MEMAGENT_COMMIT_RETAIN_GPU_PAIR
 readonly COMMIT_RETAIN_GPU_PAIR_SLUG=gpu${COMMIT_RETAIN_GPU_FIRST}_${COMMIT_RETAIN_GPU_SECOND}
-readonly COMMIT_RETAIN_LOCK_FIRST=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock
-readonly COMMIT_RETAIN_LOCK_SECOND=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock
+readonly COMMIT_RETAIN_LOCK_FIRST=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_h20_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock
+readonly COMMIT_RETAIN_LOCK_SECOND=$COMMIT_RETAIN_WORK_ROOT/locks/memagent_h20_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock
+readonly COMMIT_RETAIN_CURRENT_ROOT_PREFIX=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_frozen_20260821
+readonly COMMIT_RETAIN_LEGACY_DEFAULT_ROOT=$COMMIT_RETAIN_CURRENT_ROOT_PREFIX/$COMMIT_RETAIN_RUN_ID
+readonly COMMIT_RETAIN_LEGACY_GPU45_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_gpu45_frozen_20260821/$COMMIT_RETAIN_RUN_ID
+readonly COMMIT_RETAIN_RUN_ID_REGISTRY=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_run_ids_frozen_20260821
+readonly COMMIT_RETAIN_RUN_ID_TOMBSTONE=$COMMIT_RETAIN_RUN_ID_REGISTRY/$COMMIT_RETAIN_RUN_ID.tombstone
+readonly COMMIT_RETAIN_RUN_ID_TOMBSTONE_RECEIPT=$COMMIT_RETAIN_RUN_ID_TOMBSTONE/receipt.json
 readonly COMMIT_RETAIN_PYTHON=$COMMIT_RETAIN_WORK_ROOT/.venv/bin/python
 readonly COMMIT_RETAIN_PROFILE=${COMMIT_RETAIN_CAPTURE_PROFILE:-gpu67}
 case $COMMIT_RETAIN_PROFILE in
   gpu67)
     readonly COMMIT_RETAIN_BRANCH=h20/qwen25-7b-commit-retain-capture-20260821
     readonly COMMIT_RETAIN_MANIFEST=$COMMIT_RETAIN_REPO_DIR/manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json
-    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_frozen_20260821/${COMMIT_RETAIN_RUN_ID}_${COMMIT_RETAIN_GPU_PAIR_SLUG}
+    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_CURRENT_ROOT_PREFIX/${COMMIT_RETAIN_RUN_ID}_${COMMIT_RETAIN_GPU_PAIR_SLUG}
     ;;
   gpu45)
     readonly COMMIT_RETAIN_BRANCH=h20/qwen25-7b-commit-retain-capture-gpu45-20260821
     readonly COMMIT_RETAIN_MANIFEST=$COMMIT_RETAIN_REPO_DIR/manifests/h20/qwen25_7b_commit_retain_capture_gpu45_seed2026.json
-    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_WORK_ROOT/logs/commit_retain_capture_frozen_20260821/${COMMIT_RETAIN_RUN_ID}_${COMMIT_RETAIN_GPU_PAIR_SLUG}
+    readonly COMMIT_RETAIN_LOG_ROOT=$COMMIT_RETAIN_CURRENT_ROOT_PREFIX/${COMMIT_RETAIN_RUN_ID}_${COMMIT_RETAIN_GPU_PAIR_SLUG}
     ;;
   *)
     echo "COMMIT_RETAIN_NO_GO:P0 unknown capture profile: $COMMIT_RETAIN_PROFILE" >&2; exit 60
@@ -105,6 +111,33 @@ commit_retain_acquire_lock() {
   flock -n 9 || {
     echo "COMMIT_RETAIN_NO_GO:P0 GPU$COMMIT_RETAIN_GPU_SECOND project lock is held" >&2; exit 62;
   }
+}
+
+commit_retain_claim_run_id() {
+  [[ ! -e $COMMIT_RETAIN_LEGACY_DEFAULT_ROOT ]] || {
+    echo 'COMMIT_RETAIN_NO_GO:P0 run ID already has a legacy default root' >&2; exit 55;
+  }
+  [[ ! -e $COMMIT_RETAIN_LEGACY_GPU45_ROOT ]] || {
+    echo 'COMMIT_RETAIN_NO_GO:P0 run ID already has a legacy GPU45 root' >&2; exit 55;
+  }
+  if compgen -G "$COMMIT_RETAIN_CURRENT_ROOT_PREFIX/${COMMIT_RETAIN_RUN_ID}_gpu*_*" >/dev/null; then
+    echo 'COMMIT_RETAIN_NO_GO:P0 run ID already has a GPU-pair root' >&2; exit 55
+  fi
+  [[ ! -e $COMMIT_RETAIN_RUN_ID_TOMBSTONE ]] || {
+    echo 'COMMIT_RETAIN_NO_GO:P0 run ID tombstone already exists' >&2; exit 55;
+  }
+  mkdir -p "$COMMIT_RETAIN_RUN_ID_REGISTRY"
+  mkdir "$COMMIT_RETAIN_RUN_ID_TOMBSTONE" || {
+    echo 'COMMIT_RETAIN_NO_GO:P0 run ID was claimed concurrently' >&2; exit 55;
+  }
+  printf '%s\n' \
+    '{' \
+    '  "schema": "memagent.commit-retain.run-id-tombstone.v1",' \
+    "  \"run_id\": \"$COMMIT_RETAIN_RUN_ID\"," \
+    "  \"gpu_pair\": \"$COMMIT_RETAIN_GPUS\"," \
+    "  \"gpu_pair_slug\": \"$COMMIT_RETAIN_GPU_PAIR_SLUG\"," \
+    "  \"git_commit\": \"$COMMIT_RETAIN_EXPECTED_COMMIT\"" \
+    '}' >"$COMMIT_RETAIN_RUN_ID_TOMBSTONE_RECEIPT"
 }
 
 commit_retain_validate_gpu_pair() {

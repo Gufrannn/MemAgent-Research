@@ -13,6 +13,8 @@
     "gpu_pair_environment": "MEMAGENT_COMMIT_RETAIN_GPU_PAIR",
     "canonical_ascending_distinct_pair_required": true,
     "per_gpu_locking": true,
+    "per_gpu_lock_namespace": "locks/memagent_h20_gpu_N.lock",
+    "global_one_time_run_id": true,
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "backend": "strict_vllm_0.8.2",
