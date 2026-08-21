@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/commit_retain_capture_common.sh"
 
 commit_retain_sanitize_environment
 commit_retain_require_checkout
+commit_retain_validate_gpu_pair
 commit_retain_acquire_lock
 commit_retain_require_idle
 

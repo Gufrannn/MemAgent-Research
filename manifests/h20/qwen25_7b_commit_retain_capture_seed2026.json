@@ -10,7 +10,8 @@
       "MEMAGENT_COMMIT_RETAIN_WORK_ROOT",
       "MEMAGENT_COMMIT_RETAIN_REPO_DIR",
       "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT",
-      "MEMAGENT_COMMIT_RETAIN_RUN_ID"
+      "MEMAGENT_COMMIT_RETAIN_RUN_ID",
+      "MEMAGENT_COMMIT_RETAIN_GPU_PAIR"
     ],
     "automatic_repository_selection": false,
     "run_id_pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"
@@ -80,8 +81,10 @@
     "execution_ledger_total_record_count": 6
   },
   "gpu": {
-    "physical_whitelist": [6, 7],
-    "visible_devices": "6,7",
+    "pair_environment": "MEMAGENT_COMMIT_RETAIN_GPU_PAIR",
+    "pair_slug": "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}",
+    "physical_whitelist": "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_AS_LIST}",
+    "visible_devices": "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR}",
     "cuda_device_order": "PCI_BUS_ID",
     "tensor_parallel_size": 2,
     "max_num_seqs": 1,
@@ -141,15 +144,22 @@
     "trainer_attached": false,
     "actor_updates": 0
   },
+  "execution_resources": {
+    "project_locks": [
+      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_gate_a_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_FIRST}.lock",
+      "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/locks/memagent_gate_a_gpu_${MEMAGENT_COMMIT_RETAIN_GPU_SECOND}.lock"
+    ],
+    "output_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}"
+  },
   "paths": {
-    "log_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}",
-    "certificate_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates",
-    "p0_certificate": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/p0_preflight.json",
-    "resolved_manifest": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/p0_resolved_manifest.json",
-    "execution_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/commit_retain_capture_execution_ledger.jsonl",
-    "capture_credential": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/credentials/capture_child.json",
-    "capture_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/captures/commit_retain_pairs.jsonl",
-    "capture_run_receipt": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/captures/run_receipt.json",
-    "final_report": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}/certificates/commit_retain_capture_final_report.json"
+    "log_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}",
+    "certificate_root": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/certificates",
+    "p0_certificate": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/certificates/p0_preflight.json",
+    "resolved_manifest": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/certificates/p0_resolved_manifest.json",
+    "execution_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/commit_retain_capture_execution_ledger.jsonl",
+    "capture_credential": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/credentials/capture_child.json",
+    "capture_ledger": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/captures/commit_retain_pairs.jsonl",
+    "capture_run_receipt": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/captures/run_receipt.json",
+    "final_report": "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}/logs/commit_retain_capture_frozen_20260821/${MEMAGENT_COMMIT_RETAIN_RUN_ID}_${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}/certificates/commit_retain_capture_final_report.json"
   }
 }

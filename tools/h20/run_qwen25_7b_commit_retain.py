@@ -395,6 +395,7 @@ def capture(manifest_path: Path, *, credential_path: Path) -> dict[str, Any]:
         "vllm_version": vllm.__version__,
         "strict_vllm": True,
         "tensor_parallel_size": int(manifest["gpu"]["tensor_parallel_size"]),
+        "gpu_pair_slug": profile["pair_slug"],
         "physical_gpu_whitelist": profile["physical_whitelist"],
         "physical_gpu_identity": physical_gpu_identity,
         "visible_devices": profile["visible_devices"],

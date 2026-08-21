@@ -4,7 +4,9 @@ This closure runs the next minimum evidence experiment only. It uses the same
 Qwen2.5-7B-Instruct base-I checkpoint, the certified stable-I S128 identity,
 the existing fixed HotpotQA S128 parquet, and the same four outcome-blind
 writer-turn-0 prompt-length strata. It runs strict vLLM 0.8.2 with TP=2 on
-physical H20 GPUs 6 and 7. It never attaches a trainer, restores an optimizer,
+the explicitly supplied pair of physical H20 GPUs. The pair may be
+non-contiguous (for example `2,4`) but must be written in canonical ascending
+`A,B` form. It never attaches a trainer, restores an optimizer,
 updates the actor, selects a method, or changes `sources/`.
 
 The Python coordinator imports the native recurrent utilities before it builds
@@ -80,6 +82,7 @@ export MEMAGENT_COMMIT_RETAIN_WORK_ROOT=/data/cw/memagent_work
 export MEMAGENT_COMMIT_RETAIN_REPO_DIR=/data/cw/memagent_work/code/MemAgent-Research
 export MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT=<FULL_40_CHAR_COMMIT>
 export MEMAGENT_COMMIT_RETAIN_RUN_ID=commitretain4_20260821r1
+export MEMAGENT_COMMIT_RETAIN_GPU_PAIR=2,4
 
 cd "$MEMAGENT_COMMIT_RETAIN_REPO_DIR"
 git fetch origin
@@ -108,6 +111,12 @@ exec bash
 
 screen -D -r xinman-commit-retain-0821
 ```
+
+P0 asks `nvidia-smi` to authenticate both requested indices, UUIDs, and H20
+names. The wrappers hold one lock per physical GPU, in ascending order, for the
+whole invocation. Thus runs on `4,5` and `5,6` cannot overlap. The immutable
+run root ends in `<run-id>_gpuA_B`; changing the pair requires a new P0 and a
+new root while leaving the scientific protocol unchanged.
 
 After screen exits, the metadata-only re-audit is:
 

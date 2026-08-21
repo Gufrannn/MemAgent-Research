@@ -1,20 +1,25 @@
-# COMMIT/RETAIN capture — physical GPU 4,5 profile
+# COMMIT/RETAIN capture — legacy GPU45 branch identity
 
 This profile is an execution-only clone of the frozen COMMIT/RETAIN capture
 contract. It changes no sample, model, prompt, seed, intervention, decoding,
-metric, or claim boundary. It binds the single two-way tensor-parallel vLLM
-engine to physical NVIDIA H20 devices 4 and 5.
+metric, or claim boundary. Despite the historical `gpu45` branch/profile name,
+the physical devices are now mandatory runtime input through
+`MEMAGENT_COMMIT_RETAIN_GPU_PAIR=A,B` and may be any two authenticated H20s,
+including a non-contiguous pair such as `2,4`.
 
-The GPU45 profile is independent from the original GPU67 profile:
+The profile remains independent in code identity only:
 
-- physical devices: `4,5`;
-- project lock: `locks/memagent_gate_a_gpu_4_5.lock`;
-- output root: `logs/commit_retain_capture_gpu45_frozen_20260821/<run-id>`;
+- physical devices: explicit canonical ascending `A,B`;
+- project locks: `locks/memagent_gate_a_gpu_A.lock` and
+  `locks/memagent_gate_a_gpu_B.lock`, simultaneously held in ascending order;
+- output root: `logs/commit_retain_capture_frozen_20260821/<run-id>_gpuA_B`;
 - branch: `h20/qwen25-7b-commit-retain-capture-gpu45-20260821`;
 - P0 and capture entrypoints carry the `_gpu45` suffix.
 
-The original GPU67 manifest, wrappers, lock, and output paths remain the
-default profile and are not redirected by this variant.
+The original GPU67 and historical GPU45 wrappers resolve the same explicit
+pair contract. Neither wrapper implies a physical pair. Pair slug, indices,
+UUIDs, and device names are frozen into P0, the parent credential, every pair,
+the run receipt, supervisor ledger, and final audit.
 
 The inherited backend contract freezes vLLM 0.8.2 tensor-parallel workers to
 the `spawn` start method. P0 verifies both the environment and the method seen

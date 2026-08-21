@@ -551,16 +551,19 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"execution.{field} differs from strict capture contract")
     physical_whitelist = value.get("physical_gpu_whitelist")
     visible_devices = value.get("visible_devices")
-    allowed_gpu_bindings = {
-        (4, 5): "4,5",
-        (6, 7): "6,7",
-    }
     if (
         not isinstance(physical_whitelist, list)
-        or tuple(physical_whitelist) not in allowed_gpu_bindings
-        or visible_devices != allowed_gpu_bindings[tuple(physical_whitelist)]
+        or len(physical_whitelist) != 2
+        or any(type(index) is not int or index < 0 for index in physical_whitelist)
+        or physical_whitelist[0] >= physical_whitelist[1]
+        or visible_devices != ",".join(str(index) for index in physical_whitelist)
     ):
-        raise ValueError("execution physical/visible GPU binding is not preregistered")
+        raise ValueError(
+            "execution physical/visible GPU binding must be one canonical ascending pair"
+        )
+    pair_slug = value.get("gpu_pair_slug")
+    if pair_slug != f"gpu{physical_whitelist[0]}_{physical_whitelist[1]}":
+        raise ValueError("execution.gpu_pair_slug differs from the physical GPU pair")
     parent_cuda_initialized = value.get("parent_cuda_initialized_before_engine")
     if type(parent_cuda_initialized) is not bool:
         raise ValueError("execution parent CUDA initialization observation is not boolean")
@@ -572,10 +575,20 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError("execution.physical_gpu_identity must bind two devices")
     try:
-        identity_indices = [int(item.split(",", 1)[0].strip()) for item in identities]
+        identity_fields = [
+            [field.strip() for field in item.split(",", 2)] for item in identities
+        ]
+        if any(
+            len(fields) != 3
+            or re.fullmatch(r"GPU-[0-9A-Fa-f-]+", fields[1]) is None
+            or fields[2] != "NVIDIA H20"
+            for fields in identity_fields
+        ):
+            raise ValueError
+        identity_indices = [int(fields[0]) for fields in identity_fields]
     except (ValueError, IndexError) as error:
         raise ValueError(
-            "execution.physical_gpu_identity has invalid physical indices"
+            "execution.physical_gpu_identity lacks index/UUID/H20 binding"
         ) from error
     if identity_indices != physical_whitelist:
         raise ValueError(
@@ -588,6 +601,7 @@ def _execution(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("execution.process_instance_uuid is invalid") from error
     result = {
         **fixed,
+        "gpu_pair_slug": pair_slug,
         "physical_gpu_whitelist": physical_whitelist,
         "visible_devices": visible_devices,
         "parent_cuda_initialized_before_engine": parent_cuda_initialized,
@@ -1093,7 +1107,7 @@ def validate_capture_ledger(
                 if canonical_json(pair["shared_contract"].get(field)) != canonical_json(expected):
                     raise ValueError(f"pair shared contract differs from P0 {field}")
             for field in (
-                "physical_gpu_whitelist", "visible_devices",
+                "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
                 "physical_gpu_identity", "engine_config_sha256",
                 "global_generate_call_count", "worker_multiproc_method",
                 "vllm_observed_worker_multiproc_method",
@@ -1212,7 +1226,8 @@ def validate_capture_ledger(
     executions = [pair["execution"] for pair in pairs]
     process_fields = (
         "engine_id", "cache_namespace", "process_instance_uuid", "process_pid",
-        "physical_gpu_whitelist", "visible_devices", "physical_gpu_identity",
+        "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+        "physical_gpu_identity",
         "global_generate_call_count", "parent_credential_id",
         "worker_multiproc_method", "vllm_observed_worker_multiproc_method",
         "multiprocessing_context_method", "parent_cuda_initialized_before_engine",

@@ -58,6 +58,7 @@ REQUIRED_ENV = (
     "MEMAGENT_COMMIT_RETAIN_REPO_DIR",
     "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT",
     "MEMAGENT_COMMIT_RETAIN_RUN_ID",
+    "MEMAGENT_COMMIT_RETAIN_GPU_PAIR",
 )
 CODE_OBJECTS = (
     "recurrent/impls/memory.py",
@@ -86,8 +87,6 @@ GPU_PROFILES = {
     "gpu67": {
         "branch": "h20/qwen25-7b-commit-retain-capture-20260821",
         "base_commit": "ded5e1c0c98267d8ea4a29e658685b9b832b9622",
-        "physical_whitelist": [6, 7],
-        "visible_devices": "6,7",
         "experiment_name": EXPERIMENT_NAME,
         "command_manifest": "manifests/h20/qwen25_7b_commit_retain_capture_commands.json",
         "entrypoints": {
@@ -101,8 +100,6 @@ GPU_PROFILES = {
     "gpu45": {
         "branch": "h20/qwen25-7b-commit-retain-capture-gpu45-20260821",
         "base_commit": "e019e7655046f34d368a82e7d5ea6d72c464ffc7",
-        "physical_whitelist": [4, 5],
-        "visible_devices": "4,5",
         "experiment_name": "qwen25_7b_commit_retain_capture_gpu45_seed2026",
         "command_manifest": "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_commands.json",
         "entrypoints": {
@@ -126,11 +123,70 @@ def _gpu_profile(manifest: Mapping[str, Any]) -> dict[str, Any]:
     name = manifest.get("execution_profile", "gpu67")
     if name not in GPU_PROFILES:
         raise ValueError(f"execution_profile is not preregistered: {name}")
-    return {"name": name, **GPU_PROFILES[name]}
+    gpu = manifest.get("gpu", {})
+    return {
+        "name": name,
+        **GPU_PROFILES[name],
+        "physical_whitelist": gpu.get("physical_whitelist"),
+        "visible_devices": gpu.get("visible_devices"),
+        "pair_slug": gpu.get("pair_slug"),
+    }
+
+
+def parse_gpu_pair(value: str) -> tuple[list[int], str]:
+    match = re.fullmatch(r"([0-9]+),([0-9]+)", value)
+    if match is None:
+        raise ValueError("MEMAGENT_COMMIT_RETAIN_GPU_PAIR must be A,B")
+    first, second = (int(match.group(1)), int(match.group(2)))
+    if value != f"{first},{second}" or first >= second:
+        raise ValueError("GPU pair must be canonical ascending distinct A,B")
+    return [first, second], f"gpu{first}_{second}"
 
 
 def experiment_name(manifest: Mapping[str, Any]) -> str:
     return str(_gpu_profile(manifest)["experiment_name"])
+
+
+def _pair_evidence(
+    manifest: Mapping[str, Any], resolved: Mapping[str, Any]
+) -> dict[str, Any]:
+    profile = _gpu_profile(manifest)
+    whitelist = profile["physical_whitelist"]
+    visible = profile["visible_devices"]
+    pair_slug = profile["pair_slug"]
+    identities = resolved["runtime_binding"]["physical_gpu_identity"]
+    if (
+        not isinstance(whitelist, list)
+        or len(whitelist) != 2
+        or any(type(index) is not int or index < 0 for index in whitelist)
+        or whitelist[0] >= whitelist[1]
+        or visible != ",".join(str(index) for index in whitelist)
+        or pair_slug != f"gpu{whitelist[0]}_{whitelist[1]}"
+    ):
+        raise ValueError("resolved physical GPU pair is not canonical")
+    if not isinstance(identities, list) or len(identities) != 2:
+        raise ValueError("resolved physical GPU identity must contain two devices")
+    parsed_indices: list[int] = []
+    for identity in identities:
+        fields = [field.strip() for field in str(identity).split(",", 2)]
+        if (
+            len(fields) != 3
+            or re.fullmatch(r"GPU-[0-9A-Fa-f-]+", fields[1]) is None
+            or fields[2] != "NVIDIA H20"
+        ):
+            raise ValueError("resolved physical GPU identity lacks index/UUID/H20 binding")
+        try:
+            parsed_indices.append(int(fields[0]))
+        except ValueError as error:
+            raise ValueError("resolved physical GPU identity index is invalid") from error
+    if parsed_indices != whitelist:
+        raise ValueError("resolved physical GPU UUID identities differ from GPU pair")
+    return {
+        "gpu_pair_slug": pair_slug,
+        "physical_gpu_whitelist": whitelist,
+        "visible_devices": visible,
+        "physical_gpu_identity": identities,
+    }
 
 
 def expected_git_commit() -> str:
@@ -165,11 +221,11 @@ def _load_raw_manifest(path: str | Path) -> dict[str, Any]:
         raise ValueError("only the frozen COMMIT/RETAIN base manifest may be extended")
     allowed_overlay_fields = {
         "schema_version", "frozen_at", "execution_profile", "branch", "base_commit",
-        "command_manifest", "gpu", "execution_resources", "paths",
+        "command_manifest",
     }
     if set(raw) != allowed_overlay_fields:
         raise ValueError(
-            "GPU execution overlay may change only identity, GPU, lock, and output paths"
+            "GPU execution overlay may change only branch/profile identity"
         )
     base_path = REPO_ROOT / base_rel
     if manifest_path.resolve() == base_path.resolve():
@@ -196,6 +252,7 @@ def resolve_manifest_environment(
     repo = Path(str(source[REQUIRED_ENV[1]]))
     expected_commit = str(source[REQUIRED_ENV[2]])
     run_id = str(source[REQUIRED_ENV[3]])
+    gpu_pair, gpu_pair_slug = parse_gpu_pair(str(source[REQUIRED_ENV[4]]))
     if not work_root.is_absolute() or not repo.is_absolute():
         raise ValueError("task-scoped runtime paths must be absolute")
     if re.fullmatch(r"[0-9a-f]{40}", expected_commit) is None:
@@ -206,6 +263,10 @@ def resolve_manifest_environment(
         "${MEMAGENT_COMMIT_RETAIN_WORK_ROOT}": str(work_root),
         "${MEMAGENT_COMMIT_RETAIN_REPO_DIR}": str(repo),
         "${MEMAGENT_COMMIT_RETAIN_RUN_ID}": run_id,
+        "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR}": f"{gpu_pair[0]},{gpu_pair[1]}",
+        "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_SLUG}": gpu_pair_slug,
+        "${MEMAGENT_COMMIT_RETAIN_GPU_FIRST}": str(gpu_pair[0]),
+        "${MEMAGENT_COMMIT_RETAIN_GPU_SECOND}": str(gpu_pair[1]),
     }
 
     def resolve(item: Any) -> Any:
@@ -214,6 +275,8 @@ def resolve_manifest_environment(
         if isinstance(item, list):
             return [resolve(child) for child in item]
         if isinstance(item, str):
+            if item == "${MEMAGENT_COMMIT_RETAIN_GPU_PAIR_AS_LIST}":
+                return list(gpu_pair)
             result = item
             for placeholder, replacement in replacements.items():
                 result = result.replace(placeholder, replacement)
@@ -262,9 +325,19 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     if manifest["data"]["pilot_selection"].get("sorted_positions") != [15, 47, 79, 111]:
         raise ValueError("four outcome-blind pilot strata drifted")
     gpu = manifest.get("gpu", {})
+    parsed_pair, parsed_slug = parse_gpu_pair(str(gpu.get("visible_devices", "")))
+    if gpu.get("pair_environment") != "MEMAGENT_COMMIT_RETAIN_GPU_PAIR":
+        raise ValueError("gpu.pair_environment drifted")
+    physical_whitelist = gpu.get("physical_whitelist")
+    if (
+        not isinstance(physical_whitelist, list)
+        or any(type(index) is not int for index in physical_whitelist)
+        or physical_whitelist != parsed_pair
+    ):
+        raise ValueError("gpu.physical_whitelist differs from explicit GPU pair")
+    if gpu.get("pair_slug") != parsed_slug:
+        raise ValueError("gpu.pair_slug differs from explicit GPU pair")
     for field, expected in {
-        "physical_whitelist": profile["physical_whitelist"],
-        "visible_devices": profile["visible_devices"],
         "cuda_device_order": "PCI_BUS_ID",
         "tensor_parallel_size": 2,
         "max_num_seqs": 1,
@@ -274,29 +347,33 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise ValueError(f"gpu.{field} drifted")
     if manifest.get("command_manifest") != profile["command_manifest"]:
         raise ValueError("command_manifest differs from the frozen GPU profile")
-    if profile["name"] == "gpu45":
-        work_root = str(manifest.get("work_root"))
-        run_id = str(manifest.get("run_id"))
-        log_root = f"{work_root}/logs/commit_retain_capture_gpu45_frozen_20260821/{run_id}"
-        expected_paths = {
-            "log_root": log_root,
-            "certificate_root": f"{log_root}/certificates",
-            "p0_certificate": f"{log_root}/certificates/p0_preflight.json",
-            "resolved_manifest": f"{log_root}/certificates/p0_resolved_manifest.json",
-            "execution_ledger": f"{log_root}/commit_retain_capture_execution_ledger.jsonl",
-            "capture_credential": f"{log_root}/credentials/capture_child.json",
-            "capture_ledger": f"{log_root}/captures/commit_retain_pairs.jsonl",
-            "capture_run_receipt": f"{log_root}/captures/run_receipt.json",
-            "final_report": f"{log_root}/certificates/commit_retain_capture_final_report.json",
-        }
-        if manifest.get("paths") != expected_paths:
-            raise ValueError("GPU45 output/certificate paths drifted")
-        expected_lock = f"{work_root}/locks/memagent_gate_a_gpu_4_5.lock"
-        if manifest.get("execution_resources") != {
-            "project_lock": expected_lock,
-            "output_root": log_root,
-        }:
-            raise ValueError("GPU45 lock/output resource binding drifted")
+    work_root = str(manifest.get("work_root"))
+    run_id = str(manifest.get("run_id"))
+    log_root = (
+        f"{work_root}/logs/commit_retain_capture_frozen_20260821/"
+        f"{run_id}_{parsed_slug}"
+    )
+    expected_paths = {
+        "log_root": log_root,
+        "certificate_root": f"{log_root}/certificates",
+        "p0_certificate": f"{log_root}/certificates/p0_preflight.json",
+        "resolved_manifest": f"{log_root}/certificates/p0_resolved_manifest.json",
+        "execution_ledger": f"{log_root}/commit_retain_capture_execution_ledger.jsonl",
+        "capture_credential": f"{log_root}/credentials/capture_child.json",
+        "capture_ledger": f"{log_root}/captures/commit_retain_pairs.jsonl",
+        "capture_run_receipt": f"{log_root}/captures/run_receipt.json",
+        "final_report": f"{log_root}/certificates/commit_retain_capture_final_report.json",
+    }
+    if manifest.get("paths") != expected_paths:
+        raise ValueError("GPU-pair output/certificate paths drifted")
+    expected_locks = [
+        f"{work_root}/locks/memagent_gate_a_gpu_{index}.lock" for index in parsed_pair
+    ]
+    if manifest.get("execution_resources") != {
+        "project_locks": expected_locks,
+        "output_root": log_root,
+    }:
+        raise ValueError("per-GPU lock/output resource binding drifted")
     backend = manifest.get("backend", {})
     for field, expected in {
         "name": "vllm",
@@ -558,6 +635,9 @@ def run_preflight(
         "frozen_manifest_sha256": sha256_file(manifest_path),
         "expected_git_commit": expected_commit,
         "run_id": manifest["run_id"],
+        "gpu_pair_slug": profile["pair_slug"],
+        "physical_gpu_whitelist": gpu_indices,
+        "visible_devices": visible_devices,
     }
     if os.environ.get("CUDA_VISIBLE_DEVICES") != visible_devices:
         failures.append(
@@ -617,8 +697,9 @@ def run_preflight(
             raise ValueError("command execution profile drifted")
         command_execution = commands.get("execution", {})
         for field, expected in {
-            "physical_gpus": gpu_indices,
-            "visible_devices": visible_devices,
+            "gpu_pair_environment": "MEMAGENT_COMMIT_RETAIN_GPU_PAIR",
+            "canonical_ascending_distinct_pair_required": True,
+            "per_gpu_locking": True,
             "cuda_device_order": "PCI_BUS_ID",
             "tensor_parallel_size": 2,
             "backend": "strict_vllm_0.8.2",
@@ -772,6 +853,9 @@ def run_preflight(
                 "runtime_versions": runtime_versions,
                 "worker_multiprocessing": worker_multiprocessing,
                 "physical_gpu_identity": gpu_identity,
+                "gpu_pair_slug": profile["pair_slug"],
+                "physical_gpu_whitelist": gpu_indices,
+                "visible_devices": visible_devices,
             }
             execution_binding = {
                 "git_commit": evidence["git_commit"],
@@ -807,6 +891,9 @@ def run_preflight(
                 "schema_version": 1,
                 "frozen_manifest_sha256": evidence["frozen_manifest_sha256"],
                 "run_id": manifest["run_id"],
+                "gpu_pair_slug": profile["pair_slug"],
+                "physical_gpu_whitelist": gpu_indices,
+                "visible_devices": visible_devices,
                 "eval_manifest_hash": stable_resolved["eval_manifest_hash"],
                 "stable_identity_resolved_manifest_sha256": sha256_file(
                     manifest["stable_identity_prerequisite"]["resolved_manifest"]
@@ -868,6 +955,7 @@ def write_preflight(manifest_path: Path, *, check_runtime: bool) -> dict[str, An
                 "experiment_name": experiment_name(manifest),
                 "git_commit": report["evidence"]["git_commit"],
                 "run_id": manifest["run_id"],
+                **_pair_evidence(manifest, resolved),
                 "recorded_at": utc_now(),
                 "eval_manifest_hash": resolved["eval_manifest_hash"],
                 "execution_binding_sha256": resolved["execution_binding_sha256"],
@@ -902,6 +990,8 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     head = records[0]
     head_allowed = {
         "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+        "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+        "physical_gpu_identity",
         "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
         "current_binding_sha256", "artifact", "artifact_sha256",
         "resolved_manifest", "resolved_manifest_sha256", "status", "decision",
@@ -911,6 +1001,7 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if set(head) != head_allowed:
         raise ValueError("P0 supervisor receipt has handcrafted fields")
     expected_commit = expected_git_commit()
+    pair = _pair_evidence(manifest, resolved)
     valid = all(
         (
             p0.get("status") == "PASS",
@@ -919,6 +1010,21 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             p0.get("evidence", {}).get("expected_git_commit") == expected_commit,
             p0.get("evidence", {}).get("frozen_manifest_sha256") == sha256_file(manifest_path),
             resolved.get("frozen_manifest_sha256") == sha256_file(manifest_path),
+            p0.get("evidence", {}).get("gpu_pair_slug") == pair["gpu_pair_slug"],
+            p0.get("evidence", {}).get("physical_gpu_whitelist")
+            == pair["physical_gpu_whitelist"],
+            p0.get("evidence", {}).get("visible_devices") == pair["visible_devices"],
+            p0.get("evidence", {}).get("physical_gpu_identity")
+            == pair["physical_gpu_identity"],
+            resolved.get("gpu_pair_slug") == pair["gpu_pair_slug"],
+            resolved.get("physical_gpu_whitelist") == pair["physical_gpu_whitelist"],
+            resolved.get("visible_devices") == pair["visible_devices"],
+            resolved.get("runtime_binding", {}).get("gpu_pair_slug")
+            == pair["gpu_pair_slug"],
+            resolved.get("runtime_binding", {}).get("physical_gpu_whitelist")
+            == pair["physical_gpu_whitelist"],
+            resolved.get("runtime_binding", {}).get("visible_devices")
+            == pair["visible_devices"],
             p0.get("evidence", {}).get("resolved_manifest_sha256") == sha256_file(resolved_path),
             canonical_sha256(resolved.get("runtime_binding")) == resolved.get("runtime_binding_sha256"),
             canonical_sha256(resolved.get("execution_binding")) == resolved.get("execution_binding_sha256"),
@@ -928,6 +1034,7 @@ def validate_p0(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             head.get("experiment_name") == experiment_name(manifest),
             head.get("git_commit") == expected_commit,
             head.get("run_id") == manifest["run_id"],
+            all(head.get(field) == value for field, value in pair.items()),
             head.get("eval_manifest_hash") == resolved.get("eval_manifest_hash"),
             head.get("artifact") == str(p0_path.resolve()),
             head.get("artifact_sha256") == sha256_file(p0_path),
@@ -972,6 +1079,7 @@ def issue_capture_credential(
     credential = {
         "schema": "memagent.commit-retain.parent-capture-credential.v1",
         "run_id": manifest["run_id"],
+        **_pair_evidence(manifest, resolved),
         "git_commit": expected_git_commit(),
         "child_kind": "single_engine_four_pair_capture",
         "child_identity": f"{manifest['run_id']}:four-frozen-stable-writes",
@@ -995,6 +1103,7 @@ def issue_capture_credential(
             "experiment_name": experiment_name(manifest),
             "git_commit": expected_git_commit(),
             "run_id": manifest["run_id"],
+            **_pair_evidence(manifest, resolved),
             "recorded_at": utc_now(),
             "eval_manifest_hash": resolved["eval_manifest_hash"],
             "execution_binding_sha256": resolved["execution_binding_sha256"],
@@ -1034,6 +1143,8 @@ def validate_capture_credential(
     credential = json.loads(credential_path.read_text(encoding="utf-8"))
     credential_allowed = {
         "schema", "run_id", "git_commit", "child_kind", "child_identity",
+        "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+        "physical_gpu_identity",
         "parent_issuer_pid", "issued_at", "nonce", "current_binding_sha256",
         "runtime_binding_sha256", "execution_binding_sha256",
         "child_full_model_sha_required", "single_use", "training_authorized",
@@ -1047,6 +1158,7 @@ def validate_capture_credential(
     if credential_id != canonical_sha256(unsigned):
         raise ValueError("capture credential self-digest failed")
     parent_pid = credential.get("parent_issuer_pid")
+    pair = _pair_evidence(manifest, resolved)
     if type(parent_pid) is not int or parent_pid < 1:
         raise ValueError("capture credential parent PID is invalid")
     try:
@@ -1067,6 +1179,7 @@ def validate_capture_credential(
             credential.get("child_kind") == "single_engine_four_pair_capture",
             credential.get("child_identity")
             == f"{manifest['run_id']}:four-frozen-stable-writes",
+            all(credential.get(field) == value for field, value in pair.items()),
             credential.get("current_binding_sha256") == current_binding_sha256,
             credential.get("runtime_binding_sha256") == resolved["runtime_binding_sha256"],
             credential.get("execution_binding_sha256") == resolved["execution_binding_sha256"],
@@ -1093,6 +1206,8 @@ def validate_capture_credential(
     authorization = ledger[1]
     authorization_allowed = {
         "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+        "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+        "physical_gpu_identity",
         "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
         "current_binding_sha256", "artifact", "artifact_sha256", "parent_credential_id",
         "parent_issuer_pid", "status", "decision", "training_authorized",
@@ -1115,6 +1230,7 @@ def validate_capture_credential(
             == resolved["execution_binding_sha256"],
             authorization.get("git_commit") == expected_git_commit(),
             authorization.get("run_id") == manifest["run_id"],
+            all(authorization.get(field) == value for field, value in pair.items()),
             authorization.get("eval_manifest_hash") == resolved["eval_manifest_hash"],
             authorization.get("status") == "PASS",
             authorization.get("decision") == "COMMIT_RETAIN_CAPTURE_CHILD_AUTHORIZED",
@@ -1124,6 +1240,7 @@ def validate_capture_credential(
     ):
         raise ValueError("capture authorization receipt differs from credential")
     return {
+        **pair,
         "parent_credential_id": credential_id,
         "parent_credential_sha256": sha256_file(credential_path),
         "parent_credential_path": str(credential_path.resolve()),
@@ -1153,6 +1270,7 @@ def expected_pair_binding(
         "reader_prompt_template_sha256": execution["reader_prompt_template_sha256"],
         "writer_decode": manifest["intervention"]["writer_decode"],
         "reader_decode": manifest["intervention"]["reader_decode"],
+        "gpu_pair_slug": _gpu_profile(manifest)["pair_slug"],
         "physical_gpu_whitelist": _gpu_profile(manifest)["physical_whitelist"],
         "visible_devices": _gpu_profile(manifest)["visible_devices"],
         "physical_gpu_identity": resolved["runtime_binding"]["physical_gpu_identity"],
@@ -1183,6 +1301,7 @@ def _expected_run_receipt(
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "current_binding_sha256": current_binding_sha256,
+        **_pair_evidence(manifest, resolved),
         "capture_ledger": str(capture_path.resolve()),
         "capture_ledger_sha256": sha256_file(capture_path),
         "pair_count": capture_report["pair_count"],
@@ -1269,6 +1388,8 @@ def validate_capture_artifacts(
         capture_receipt = records[2]
         capture_allowed = {
             "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+            "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+            "physical_gpu_identity",
             "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
             "current_binding_sha256", "artifact", "artifact_sha256", "training_authorized",
             "method_selected", "status", "decision", "pair_count", "pair_ids",
@@ -1290,6 +1411,10 @@ def validate_capture_artifacts(
                 capture_receipt.get("generate_call_count") == report["generate_call_count"],
                 capture_receipt.get("git_commit") == expected_git_commit(),
                 capture_receipt.get("run_id") == manifest["run_id"],
+                all(
+                    capture_receipt.get(field) == value
+                    for field, value in _pair_evidence(manifest, resolved).items()
+                ),
                 capture_receipt.get("eval_manifest_hash") == resolved["eval_manifest_hash"],
                 capture_receipt.get("execution_binding_sha256")
                 == resolved["execution_binding_sha256"],
@@ -1307,6 +1432,7 @@ def validate_capture_artifacts(
         **report,
         "git_commit": expected_git_commit(),
         "run_id": manifest["run_id"],
+        **_pair_evidence(manifest, resolved),
         "eval_manifest_hash": resolved["eval_manifest_hash"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
@@ -1331,6 +1457,8 @@ def build_final_audit_report(manifest_path: Path) -> dict[str, Any]:
         "decision": "COMMIT_RETAIN_CAPTURE_AUDIT_COMPLETE",
         **{key: capture[key] for key in (
             "git_commit", "run_id", "eval_manifest_hash", "execution_binding_sha256",
+            "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+            "physical_gpu_identity",
             "runtime_binding_sha256", "current_binding_sha256", "capture_ledger",
             "capture_ledger_sha256", "capture_run_receipt", "capture_run_receipt_sha256",
             "pair_count", "stable_write_ids", "pair_ids", "generate_call_count", "outcomes",
@@ -1353,6 +1481,8 @@ def build_final_audit_report(manifest_path: Path) -> dict[str, Any]:
         audit = supervisor[3]
         allowed = {
             "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+            "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+            "physical_gpu_identity",
             "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
             "current_binding_sha256", "artifact", "artifact_sha256",
             "training_authorized", "method_selected", "status", "decision", "pair_count",
@@ -1367,6 +1497,10 @@ def build_final_audit_report(manifest_path: Path) -> dict[str, Any]:
                 audit.get("experiment_name") == experiment_name(manifest),
                 audit.get("git_commit") == report["git_commit"],
                 audit.get("run_id") == report["run_id"],
+                all(audit.get(field) == report[field] for field in (
+                    "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+                    "physical_gpu_identity",
+                )),
                 audit.get("eval_manifest_hash") == report["eval_manifest_hash"],
                 audit.get("execution_binding_sha256") == report["execution_binding_sha256"],
                 audit.get("runtime_binding_sha256") == report["runtime_binding_sha256"],
@@ -1448,6 +1582,7 @@ def record_stage(
         "experiment_name": experiment_name(manifest),
         "git_commit": expected_git_commit(),
         "run_id": manifest["run_id"],
+        **_pair_evidence(manifest, resolved),
         "recorded_at": utc_now(),
         "eval_manifest_hash": resolved["eval_manifest_hash"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],

@@ -34,6 +34,7 @@ from tools.h20.preflight_qwen25_7b_commit_retain import (
     expected_pair_binding,
     experiment_name,
     load_manifest,
+    parse_gpu_pair,
     validate_capture_credential,
 )
 
@@ -50,6 +51,20 @@ GPU45_IDENTITIES = [
     "4, GPU-deadbeef-0004, NVIDIA H20",
     "5, GPU-deadbeef-0005, NVIDIA H20",
 ]
+GPU24_IDENTITIES = [
+    "2, GPU-deadbeef-0002, NVIDIA H20",
+    "4, GPU-deadbeef-0004, NVIDIA H20",
+]
+
+
+def manifest_environment(pair: str = "2,4") -> dict[str, str]:
+    return {
+        "MEMAGENT_COMMIT_RETAIN_WORK_ROOT": "/data/cw/memagent_work",
+        "MEMAGENT_COMMIT_RETAIN_REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research-gpu45",
+        "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40,
+        "MEMAGENT_COMMIT_RETAIN_RUN_ID": "commitretain45a",
+        "MEMAGENT_COMMIT_RETAIN_GPU_PAIR": pair,
+    }
 
 
 def decode(ids: list[int]) -> str:
@@ -310,9 +325,10 @@ def pair_payload(index: int = 7, call_offset: int = 0) -> dict:
             "vllm_version": "0.8.2",
             "strict_vllm": True,
             "tensor_parallel_size": 2,
-            "physical_gpu_whitelist": [6, 7],
-            "physical_gpu_identity": GPU_IDENTITIES,
-            "visible_devices": "6,7",
+            "gpu_pair_slug": "gpu2_4",
+            "physical_gpu_whitelist": [2, 4],
+            "physical_gpu_identity": GPU24_IDENTITIES,
+            "visible_devices": "2,4",
             "cuda_device_order": "PCI_BUS_ID",
             "worker_multiproc_method": "spawn",
             "vllm_observed_worker_multiproc_method": "spawn",
@@ -354,6 +370,33 @@ def test_state_blob_is_exact_u32le_and_fail_closed() -> None:
     corrupt["bytes_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="non-canonical"):
         validate_state_blob(corrupt)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ("4,2", "2,2", "02,4", "2, 4", "2", "2,4,6", "-1,4"),
+)
+def test_explicit_gpu_pair_rejects_noncanonical_or_ambiguous_values(value: str) -> None:
+    with pytest.raises(ValueError, match="GPU pair|must be A,B"):
+        parse_gpu_pair(value)
+
+
+def test_explicit_gpu_pair_accepts_noncontiguous_devices_and_freezes_slug() -> None:
+    assert parse_gpu_pair("2,4") == ([2, 4], "gpu2_4")
+
+
+def test_overlapping_pairs_share_one_physical_gpu_lock_but_not_output_root() -> None:
+    path = REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json"
+    pair45 = load_manifest(path, manifest_environment("4,5"))
+    pair56 = load_manifest(path, manifest_environment("5,6"))
+    locks45 = set(pair45["execution_resources"]["project_locks"])
+    locks56 = set(pair56["execution_resources"]["project_locks"])
+    assert locks45 & locks56 == {
+        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_5.lock"
+    }
+    assert pair45["paths"]["log_root"].endswith("_gpu4_5")
+    assert pair56["paths"]["log_root"].endswith("_gpu5_6")
+    assert pair45["paths"]["log_root"] != pair56["paths"]["log_root"]
 
 
 def test_pair_rebuilds_all_evidence_and_outcomes() -> None:
@@ -432,12 +475,13 @@ def test_candidate_count_and_handwritten_pass_are_not_trusted() -> None:
         validate_pair_record({"status": "PASS", "decision": "looks-good"})
 
 
-def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> None:
-    gpu67 = canonical_pair()
-    assert validate_pair_record(gpu67)["execution"]["visible_devices"] == "6,7"
+def test_execution_accepts_arbitrary_canonical_noncontiguous_gpu_pair() -> None:
+    gpu24 = canonical_pair()
+    assert validate_pair_record(gpu24)["execution"]["visible_devices"] == "2,4"
 
     gpu45_payload = pair_payload()
     gpu45_payload["execution"].update(
+        gpu_pair_slug="gpu4_5",
         physical_gpu_whitelist=[4, 5],
         visible_devices="4,5",
         physical_gpu_identity=GPU45_IDENTITIES,
@@ -450,17 +494,15 @@ def test_execution_accepts_only_self_consistent_preregistered_gpu_profiles() -> 
     with pytest.raises(ValueError, match="identity indices differ from physical whitelist"):
         validate_pair_record(mismatched_identity)
 
-    arbitrary = copy.deepcopy(gpu45)
-    arbitrary["execution"].update(
-        physical_gpu_whitelist=[0, 1],
-        visible_devices="0,1",
-        physical_gpu_identity=[
-            "0, GPU-deadbeef-0000, NVIDIA H20",
-            "1, GPU-deadbeef-0001, NVIDIA H20",
-        ],
+    descending = copy.deepcopy(gpu45)
+    descending["execution"].update(
+        gpu_pair_slug="gpu5_4",
+        physical_gpu_whitelist=[5, 4],
+        visible_devices="5,4",
+        physical_gpu_identity=list(reversed(GPU45_IDENTITIES)),
     )
-    with pytest.raises(ValueError, match="GPU binding is not preregistered"):
-        validate_pair_record(arbitrary)
+    with pytest.raises(ValueError, match="canonical ascending pair"):
+        validate_pair_record(descending)
 
 
 def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_path) -> None:
@@ -525,9 +567,10 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
             "reader_prompt_template_sha256": "5" * 64,
             "writer_decode": pairs[0]["shared_contract"]["writer_decode"],
             "reader_decode": pairs[0]["shared_contract"]["reader_decode"],
-            "physical_gpu_whitelist": [6, 7],
-            "visible_devices": "6,7",
-            "physical_gpu_identity": GPU_IDENTITIES,
+            "gpu_pair_slug": "gpu2_4",
+            "physical_gpu_whitelist": [2, 4],
+            "visible_devices": "2,4",
+            "physical_gpu_identity": GPU24_IDENTITIES,
             "engine_config_sha256": "e" * 64,
             "worker_multiproc_method": "spawn",
             "vllm_observed_worker_multiproc_method": "spawn",
@@ -545,6 +588,7 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
         "reader_prompt_template_sha256": "5" * 64,
         "writer_decode": pairs[0]["shared_contract"]["writer_decode"],
         "reader_decode": pairs[0]["shared_contract"]["reader_decode"],
+        "gpu_pair_slug": "gpu4_5",
         "physical_gpu_whitelist": [4, 5],
         "visible_devices": "4,5",
         "physical_gpu_identity": GPU45_IDENTITIES,
@@ -557,7 +601,7 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
         "eos_token_id": 999,
     }
     with pytest.raises(
-        ValueError, match="pair execution differs from P0 physical_gpu_whitelist"
+        ValueError, match="pair execution differs from P0 (gpu_pair_slug|physical_gpu_whitelist)"
     ):
         validate_capture_ledger(
             records,
@@ -623,8 +667,9 @@ def test_four_pair_capture_chain_rejects_attrition_and_handcrafted_fields(tmp_pa
 
 
 def test_frozen_manifest_and_shell_wire_parent_authorization_before_capture() -> None:
-    manifest = json.loads(
-        (REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json").read_text()
+    manifest = load_manifest(
+        REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
+        manifest_environment(),
     )
     commands = json.loads(
         (REPO / "manifests/h20/qwen25_7b_commit_retain_capture_commands.json").read_text()
@@ -633,7 +678,8 @@ def test_frozen_manifest_and_shell_wire_parent_authorization_before_capture() ->
     assert commands["required_sequence"] == [
         "p0", "capture_authorization", "single_engine_four_pair_capture", "readonly_audit"
     ]
-    assert commands["execution"]["physical_gpus"] == [6, 7]
+    assert commands["execution"]["gpu_pair_environment"] == "MEMAGENT_COMMIT_RETAIN_GPU_PAIR"
+    assert commands["execution"]["per_gpu_locking"] is True
     assert commands["execution"]["backend"] == "strict_vllm_0.8.2"
     assert commands["execution"]["worker_multiproc_method"] == "spawn"
     assert commands["execution"]["training_updates"] == 0
@@ -651,12 +697,7 @@ def test_frozen_manifest_and_shell_wire_parent_authorization_before_capture() ->
 
 
 def test_gpu45_overlay_is_fully_independent_and_keeps_gpu67_default() -> None:
-    environment = {
-        "MEMAGENT_COMMIT_RETAIN_WORK_ROOT": "/data/cw/memagent_work",
-        "MEMAGENT_COMMIT_RETAIN_REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research-gpu45",
-        "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40,
-        "MEMAGENT_COMMIT_RETAIN_RUN_ID": "commitretain45a",
-    }
+    environment = manifest_environment()
     base = load_manifest(
         REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
         environment,
@@ -667,17 +708,18 @@ def test_gpu45_overlay_is_fully_independent_and_keeps_gpu67_default() -> None:
     )
     _validate_manifest(base)
     _validate_manifest(gpu45)
-    assert _gpu_profile(base)["physical_whitelist"] == [6, 7]
-    assert _gpu_profile(base)["visible_devices"] == "6,7"
+    assert _gpu_profile(base)["physical_whitelist"] == [2, 4]
+    assert _gpu_profile(base)["visible_devices"] == "2,4"
     assert experiment_name(base) == "qwen25_7b_commit_retain_capture_seed2026"
-    assert _gpu_profile(gpu45)["physical_whitelist"] == [4, 5]
-    assert _gpu_profile(gpu45)["visible_devices"] == "4,5"
+    assert _gpu_profile(gpu45)["physical_whitelist"] == [2, 4]
+    assert _gpu_profile(gpu45)["visible_devices"] == "2,4"
     assert experiment_name(gpu45) == "qwen25_7b_commit_retain_capture_gpu45_seed2026"
-    assert "commit_retain_capture_gpu45_frozen_20260821" in gpu45["paths"]["log_root"]
-    assert gpu45["execution_resources"]["project_lock"].endswith(
-        "/locks/memagent_gate_a_gpu_4_5.lock"
-    )
-    assert gpu45["paths"]["log_root"] != base["paths"]["log_root"]
+    assert gpu45["paths"]["log_root"].endswith("commitretain45a_gpu2_4")
+    assert gpu45["execution_resources"]["project_locks"] == [
+        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_2.lock",
+        "/data/cw/memagent_work/locks/memagent_gate_a_gpu_4.lock",
+    ]
+    assert gpu45["paths"]["log_root"] == base["paths"]["log_root"]
     assert gpu45["command_manifest"] != base["command_manifest"]
     assert gpu45["branch"] != base["branch"]
     profile_objects = _code_objects(gpu45)
@@ -697,6 +739,11 @@ def test_expected_pair_binding_freezes_current_gpu_profile(
 ) -> None:
     manifest = {
         "execution_profile": profile,
+        "gpu": {
+            "pair_slug": f"gpu{whitelist[0]}_{whitelist[1]}",
+            "physical_whitelist": whitelist,
+            "visible_devices": visible,
+        },
         "intervention": {"writer_decode": {"temperature": 1.0}, "reader_decode": {"temperature": 0.0}},
     }
     resolved = {
@@ -715,28 +762,24 @@ def test_expected_pair_binding_freezes_current_gpu_profile(
     assert binding["physical_gpu_whitelist"] == whitelist
     assert binding["visible_devices"] == visible
     assert binding["physical_gpu_identity"] == identities
+    assert binding["gpu_pair_slug"] == f"gpu{whitelist[0]}_{whitelist[1]}"
 
 
 def test_gpu45_manifest_rejects_gpu_or_path_cross_wiring() -> None:
-    environment = {
-        "MEMAGENT_COMMIT_RETAIN_WORK_ROOT": "/data/cw/memagent_work",
-        "MEMAGENT_COMMIT_RETAIN_REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research-gpu45",
-        "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40,
-        "MEMAGENT_COMMIT_RETAIN_RUN_ID": "commitretain45a",
-    }
+    environment = manifest_environment()
     manifest = load_manifest(
         REPO / "manifests/h20/qwen25_7b_commit_retain_capture_gpu45_seed2026.json",
         environment,
     )
     wrong_gpu = copy.deepcopy(manifest)
-    wrong_gpu["gpu"]["visible_devices"] = "6,7"
-    with pytest.raises(ValueError, match="gpu.visible_devices drifted"):
+    wrong_gpu["gpu"]["visible_devices"] = "2,5"
+    with pytest.raises(ValueError, match="physical_whitelist differs"):
         _validate_manifest(wrong_gpu)
     wrong_path = copy.deepcopy(manifest)
     wrong_path["paths"]["log_root"] = manifest["paths"]["log_root"].replace(
-        "gpu45_", ""
+        "gpu2_4", "gpu2_5"
     )
-    with pytest.raises(ValueError, match="GPU45 output/certificate paths drifted"):
+    with pytest.raises(ValueError, match="GPU-pair output/certificate paths drifted"):
         _validate_manifest(wrong_path)
 
 
@@ -747,13 +790,8 @@ def test_gpu_overlay_cannot_override_scientific_contract(tmp_path: Path) -> None
     forged["intervention"] = {"examples": 8}
     path = tmp_path / "forged_gpu_overlay.json"
     path.write_text(json.dumps(forged), encoding="utf-8")
-    environment = {
-        "MEMAGENT_COMMIT_RETAIN_WORK_ROOT": "/data/cw/memagent_work",
-        "MEMAGENT_COMMIT_RETAIN_REPO_DIR": "/data/cw/memagent_work/code/MemAgent-Research-gpu45",
-        "MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40,
-        "MEMAGENT_COMMIT_RETAIN_RUN_ID": "commitretain45a",
-    }
-    with pytest.raises(ValueError, match="may change only identity, GPU, lock, and output"):
+    environment = manifest_environment()
+    with pytest.raises(ValueError, match="may change only branch/profile identity"):
         load_manifest(path, environment)
 
 
@@ -769,10 +807,11 @@ def test_gpu45_wrappers_select_profile_before_common_and_never_name_gpu67() -> N
         assert "6,7" not in shell
         assert "gpu_6_7" not in shell
     common = (REPO / "scripts/h20/commit_retain_capture_common.sh").read_text()
-    assert "memagent_gate_a_gpu_6_7.lock" in common
-    assert "memagent_gate_a_gpu_4_5.lock" in common
+    assert "memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_FIRST}.lock" in common
+    assert "memagent_gate_a_gpu_${COMMIT_RETAIN_GPU_SECOND}.lock" in common
+    assert "flock -n 8" in common and "flock -n 9" in common
     assert "commit_retain_capture_frozen_20260821" in common
-    assert "commit_retain_capture_gpu45_frozen_20260821" in common
+    assert "commit_retain_capture_gpu45_frozen_20260821" not in common
 
 
 def test_gpu45_runner_authenticates_only_physical_gpu45() -> None:
@@ -863,8 +902,9 @@ def test_spawn_contract_handles_cuda_initialized_parent_and_rejects_fork() -> No
 
 
 def test_manifest_and_gpu45_wrappers_fail_closed_on_worker_method_drift() -> None:
-    manifest = json.loads(
-        (REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json").read_text()
+    manifest = load_manifest(
+        REPO / "manifests/h20/qwen25_7b_commit_retain_capture_seed2026.json",
+        manifest_environment(),
     )
     assert manifest["backend"]["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
     drifted = copy.deepcopy(manifest)
@@ -892,6 +932,11 @@ def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(
     parent_pid = 4242
     manifest = {
         "run_id": "fixture1",
+        "gpu": {
+            "pair_slug": "gpu2_4",
+            "physical_whitelist": [2, 4],
+            "visible_devices": "2,4",
+        },
         "paths": {
             "capture_credential": str(credential_path),
             "execution_ledger": str(ledger_path),
@@ -899,6 +944,7 @@ def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(
     }
     resolved = {
         "eval_manifest_hash": "9" * 64,
+        "runtime_binding": {"physical_gpu_identity": GPU24_IDENTITIES},
         "runtime_binding_sha256": "5" * 64,
         "execution_binding_sha256": "6" * 64,
     }
@@ -906,6 +952,10 @@ def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(
     credential = {
         "schema": "memagent.commit-retain.parent-capture-credential.v1",
         "run_id": "fixture1",
+        "gpu_pair_slug": "gpu2_4",
+        "physical_gpu_whitelist": [2, 4],
+        "visible_devices": "2,4",
+        "physical_gpu_identity": GPU24_IDENTITIES,
         "git_commit": "f" * 40,
         "child_kind": "single_engine_four_pair_capture",
         "child_identity": "fixture1:four-frozen-stable-writes",
@@ -930,6 +980,10 @@ def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(
             "experiment_name": "qwen25_7b_commit_retain_capture_seed2026",
             "git_commit": "f" * 40,
             "run_id": "fixture1",
+            "gpu_pair_slug": "gpu2_4",
+            "physical_gpu_whitelist": [2, 4],
+            "visible_devices": "2,4",
+            "physical_gpu_identity": GPU24_IDENTITIES,
             "recorded_at": "2026-08-21T00:00:00+00:00",
             "eval_manifest_hash": "9" * 64,
             "execution_binding_sha256": resolved["execution_binding_sha256"],
@@ -962,6 +1016,34 @@ def test_capture_credential_is_single_use_direct_parent_and_supervisor_bound(
         )
     assert evidence["parent_credential_id"] == credential["parent_credential_id"]
     assert evidence["observed_parent_pid"] == parent_pid
+
+    cross_pair = dict(credential)
+    cross_pair.update(
+        gpu_pair_slug="gpu2_5",
+        physical_gpu_whitelist=[2, 5],
+        visible_devices="2,5",
+        physical_gpu_identity=[
+            GPU24_IDENTITIES[0], "5, GPU-deadbeef-0005, NVIDIA H20"
+        ],
+    )
+    cross_pair.pop("parent_credential_id")
+    cross_pair["parent_credential_id"] = canonical_sha256(cross_pair)
+    credential_path.write_text(json.dumps(cross_pair), encoding="utf-8")
+    with patch.dict(
+        os.environ,
+        {"MEMAGENT_COMMIT_RETAIN_EXPECTED_COMMIT": "f" * 40},
+        clear=False,
+    ), patch(
+        "tools.h20.preflight_qwen25_7b_commit_retain.os.getppid",
+        return_value=parent_pid,
+    ), pytest.raises(ValueError, match="credential binding differs from P0"):
+        validate_capture_credential(
+            credential_path,
+            manifest=manifest,
+            resolved=resolved,
+            current_binding_sha256=current_sha,
+            require_live_parent=True,
+        )
 
     forged = dict(credential)
     forged["handwritten_pass"] = True

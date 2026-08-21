@@ -6,14 +6,29 @@
   "required": [
     "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
     "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
+    "gpu_pair_slug", "physical_gpu_whitelist", "visible_devices",
+    "physical_gpu_identity",
     "current_binding_sha256", "record_index", "previous_record_sha256", "record_sha256",
     "training_authorized", "method_selected"
   ],
   "properties": {
     "record_type": {"enum": ["s0_preflight", "capture_authorization", "capture_complete", "audit_result"]},
-    "experiment_name": {"const": "qwen25_7b_commit_retain_capture_seed2026"},
+    "experiment_name": {"enum": [
+      "qwen25_7b_commit_retain_capture_seed2026",
+      "qwen25_7b_commit_retain_capture_gpu45_seed2026"
+    ]},
     "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"},
+    "gpu_pair_slug": {"type": "string", "pattern": "^gpu(?:0|[1-9][0-9]*)_(?:0|[1-9][0-9]*)$"},
+    "physical_gpu_whitelist": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "visible_devices": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*),(?:0|[1-9][0-9]*)$"},
+    "physical_gpu_identity": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"type": "string", "minLength": 1}
+    },
     "recorded_at": {"type": "string", "format": "date-time"},
     "eval_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "execution_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
