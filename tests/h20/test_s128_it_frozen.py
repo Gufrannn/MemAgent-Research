@@ -458,13 +458,73 @@ class FrozenContractTests(unittest.TestCase):
                 {"MEMAGENT_S128_IT_EXPECTED_COMMIT": EXPECTED_COMMIT},
             ):
                 self.assertEqual(_current_certificate(manifest)[0]["status"], "PASS")
+                append_jsonl(
+                    ledger_path,
+                    {
+                        "record_type": "interface_start",
+                        "experiment_name": "qwen25_7b_s128_i_base_seed2026_20260821",
+                        "git_commit": EXPECTED_COMMIT,
+                        "run_id": run_id,
+                        "eval_manifest_hash": resolved["eval_manifest_hash"],
+                        "execution_binding_sha256": canonical_sha256(
+                            resolved["execution_binding"]
+                        ),
+                        "runtime_binding_sha256": canonical_sha256(runtime_binding),
+                        "interface_id": "I",
+                        "status": "PASS",
+                        "artifacts": {},
+                    },
+                )
+                self.assertEqual(
+                    _current_certificate(manifest)[0]["status"], "PASS",
+                    "a completed I run must be able to append its finish event",
+                )
+                i_root = root / "interface_i_base"
+                manifest["paths"]["I"] = str(i_root)
+                i_artifacts = {}
+                for relative in (
+                    "terminal/0.jsonl", "trajectory_turns.jsonl",
+                    "execution_summary.json", "run.log",
+                ):
+                    artifact = i_root / relative
+                    artifact.parent.mkdir(parents=True, exist_ok=True)
+                    artifact.write_text(relative + "\n")
+                    i_artifacts[relative] = {
+                        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                        "size": artifact.stat().st_size,
+                    }
+                append_jsonl(
+                    ledger_path,
+                    {
+                        "record_type": "interface_finish",
+                        "experiment_name": "qwen25_7b_s128_i_base_seed2026_20260821",
+                        "git_commit": EXPECTED_COMMIT,
+                        "run_id": run_id,
+                        "eval_manifest_hash": resolved["eval_manifest_hash"],
+                        "execution_binding_sha256": canonical_sha256(
+                            resolved["execution_binding"]
+                        ),
+                        "runtime_binding_sha256": canonical_sha256(runtime_binding),
+                        "interface_id": "I",
+                        "status": "PASS",
+                        "artifacts": i_artifacts,
+                        "audit_code_commit": "b" * 40,
+                    },
+                )
+                with patch.dict(
+                    "os.environ", {"MEMAGENT_S128_IT_AUDIT_CODE_COMMIT": "b" * 40}
+                ), patch(
+                    "tools.h20.preflight_qwen25_7b_s128_it.audit_code_commit",
+                    return_value="b" * 40,
+                ):
+                    self.assertEqual(_current_certificate(manifest)[0]["status"], "PASS")
+                original_ledger = ledger_path.read_text()
                 tampered_p0 = json.loads(p0_path.read_text())
                 tampered_p0["decision"] = "WRONG"
                 p0_path.write_text(json.dumps(tampered_p0))
                 with self.assertRaisesRegex(ValueError, "exact S128_IT_P0_PASS"):
                     _current_certificate(manifest)
                 p0_path.write_text(json.dumps(p0))
-                original_ledger = ledger_path.read_text()
                 tampered_lines = original_ledger.splitlines()
                 tampered_record = json.loads(tampered_lines[0])
                 tampered_record["status"] = "FAIL"
@@ -472,6 +532,15 @@ class FrozenContractTests(unittest.TestCase):
                 ledger_path.write_text("\n".join(tampered_lines) + "\n")
                 with self.assertRaisesRegex(ValueError, "hash chain"):
                     _current_certificate(manifest)
+
+    def test_recovery_runner_reuses_i_and_launches_only_t25(self):
+        runner = (REPO / "scripts/h20/resume_qwen25_7b_s128_after_i.sh").read_text()
+        self.assertIn("Base-I will not be rerun", runner)
+        self.assertIn("--record-interface-event finish --interface I", runner)
+        self.assertIn("--emit-trainer-overrides --interface T25", runner)
+        self.assertEqual(runner.count("-m verl.trainer.main_ppo"), 1)
+        self.assertNotIn("--emit-trainer-overrides --interface I", runner)
+        self.assertIn("S128_IT_RECOVERY_PASS", runner)
 
     def test_manifest_is_existing_full_s128_n1_greedy_without_dense_claim(self):
         manifest = json.loads(MANIFEST.read_text())
@@ -715,16 +784,20 @@ class FrozenContractTests(unittest.TestCase):
                 "T25": "qwen25_7b_s128_t25_corrected_original_style_seed2026_20260821",
             }
             for interface in ("I", "T25"):
-                append_jsonl(ledger, {
+                start_record = {
                     **common, "record_type": "interface_start",
                     "interface_id": interface,
                     "experiment_name": experiments[interface], "artifacts": {},
-                })
+                }
+                if interface == "T25":
+                    start_record["audit_code_commit"] = "b" * 40
+                append_jsonl(ledger, start_record)
                 append_jsonl(ledger, {
                     **common, "record_type": "interface_finish",
                     "interface_id": interface,
                     "experiment_name": experiments[interface],
                     "artifacts": artifact_maps[interface],
+                    "audit_code_commit": "b" * 40,
                 })
             records = [json.loads(line) for line in ledger.read_text().splitlines()]
             self.assertEqual(
@@ -733,6 +806,20 @@ class FrozenContractTests(unittest.TestCase):
                 ),
                 [],
             )
+            self.assertEqual(
+                audit_qwen25_7b_s128_it._audit_ledger(
+                    records, manifest=manifest, resolved=resolved, p0=p0,
+                    expected_audit_code_commit="b" * 40,
+                ),
+                [],
+            )
+            tampered_audit_commit = [dict(row) for row in records]
+            tampered_audit_commit[2]["audit_code_commit"] = "c" * 40
+            failures = audit_qwen25_7b_s128_it._audit_ledger(
+                tampered_audit_commit, manifest=manifest, resolved=resolved, p0=p0,
+                expected_audit_code_commit="b" * 40,
+            )
+            self.assertTrue(any("audit-code commit differs" in item for item in failures))
             tampered = [dict(row) for row in records]
             tampered[1]["status"] = "FAIL"
             failures = audit_qwen25_7b_s128_it._audit_ledger(

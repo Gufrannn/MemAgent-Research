@@ -44,6 +44,7 @@ from tools.h20.preflight_qwen25_7b_s128_it import (
     _expected_step,
     _load_parquet_rows,
     _stable_canary_contract,
+    audit_code_commit,
     build_execution_binding,
     freeze_trainer_configuration,
     git,
@@ -517,6 +518,7 @@ def audit_interface(
 def _audit_ledger(
     records: list[dict[str, Any]], *, manifest: Mapping[str, Any],
     resolved: Mapping[str, Any], p0: Mapping[str, Any],
+    expected_audit_code_commit: str | None = None,
 ) -> list[str]:
     failures = validate_jsonl_chain(records)
     schema = json.loads(
@@ -558,6 +560,9 @@ def _audit_ledger(
             failures.append(f"ledger record {index} status is not PASS")
         if row.get("experiment_name") != expected_experiments.get(index):
             failures.append(f"ledger record {index} experiment name differs")
+        if index >= 2 and expected_audit_code_commit is not None:
+            if row.get("audit_code_commit") != expected_audit_code_commit:
+                failures.append(f"ledger record {index} audit-code commit differs")
     if records:
         p0_path = Path(manifest["paths"]["p0_certificate"])
         p0_record = records[0]
@@ -609,6 +614,12 @@ def run_audit(manifest_path: Path) -> dict[str, Any]:
     branch = git(repo, "branch", "--show-current")
     status = git(repo, "status", "--porcelain")
     expected_commit = os.environ["MEMAGENT_S128_IT_EXPECTED_COMMIT"]
+    try:
+        audit_commit = audit_code_commit()
+        evidence["audit_code_commit"] = audit_commit
+    except Exception as error:
+        failures.append(f"audit-code binding failed: {error}")
+        audit_commit = None
     if head != expected_commit or branch != EXPECTED_BRANCH or status:
         failures.append(
             f"Git binding differs: head={head}, expected={expected_commit}, branch={branch}, dirty={bool(status)}"
@@ -708,7 +719,10 @@ def run_audit(manifest_path: Path) -> dict[str, Any]:
         failures.append("append-only S128 I/T ledger is missing")
     else:
         records = read_jsonl(ledger)
-        failures.extend(_audit_ledger(records, manifest=manifest, resolved=resolved, p0=p0))
+        failures.extend(_audit_ledger(
+            records, manifest=manifest, resolved=resolved, p0=p0,
+            expected_audit_code_commit=audit_commit,
+        ))
         evidence["execution_ledger_sha256"] = sha256_file(ledger)
         evidence["execution_ledger_records"] = len(records)
     evidence.update(
@@ -790,6 +804,7 @@ def main() -> int:
             "artifact": str(report),
             "artifact_sha256": sha256_file(report),
             "row_count": 256,
+            "audit_code_commit": audit_code_commit(),
         })
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] == "PASS" else 1

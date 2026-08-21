@@ -52,6 +52,15 @@ EXPECTED_BRANCH = "h20/qwen25-7b-original-t25-s128-frozen-20260821"
 EXPECTED_DATA_SHA256 = "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6"
 COMMAND_MANIFEST = "manifests/h20/qwen25_7b_s128_it_commands.json"
 EXPECTED_INTERFACES = ("I", "T25")
+AUDIT_CODE_COMMIT_ENV = "MEMAGENT_S128_IT_AUDIT_CODE_COMMIT"
+LEDGER_SEQUENCE = (
+    ("s0_preflight", None),
+    ("interface_start", "I"),
+    ("interface_finish", "I"),
+    ("interface_start", "T25"),
+    ("interface_finish", "T25"),
+    ("audit_result", None),
+)
 REQUIRED_GIT_OBJECTS = (
     "manifests/h20/qwen25_7b_s128_it_seed2026.json",
     COMMAND_MANIFEST,
@@ -79,6 +88,20 @@ EXECUTION_CODE_OBJECTS = (
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+
+def audit_code_commit() -> str:
+    """Bind recovery/audit writes to this clean, explicitly selected checkout."""
+    expected = os.environ.get(AUDIT_CODE_COMMIT_ENV, "")
+    if re.fullmatch(r"[0-9a-f]{40}", expected) is None:
+        raise ValueError(f"{AUDIT_CODE_COMMIT_ENV} must be an explicit full Git SHA")
+    head = git(REPO_ROOT, "rev-parse", "HEAD")
+    dirty = git(REPO_ROOT, "status", "--porcelain")
+    if head != expected or dirty:
+        raise ValueError(
+            f"audit-code binding differs: head={head}, expected={expected}, dirty={bool(dirty)}"
+        )
+    return head
 
 
 def resolve_manifest_environment(
@@ -963,8 +986,13 @@ def _current_certificate(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], d
     chain_failures = validate_jsonl_chain(records)
     if chain_failures:
         raise ValueError(f"P0 ledger hash chain is invalid: {chain_failures}")
-    if len(records) != 1:
-        raise ValueError(f"P0 ledger must contain exactly one prefix record, got {len(records)}")
+    actual_sequence = tuple(
+        (row.get("record_type"), row.get("interface_id")) for row in records
+    )
+    if not records or actual_sequence != LEDGER_SEQUENCE[: len(records)]:
+        raise ValueError(
+            f"ledger is not an exact preregistered execution prefix: {actual_sequence}"
+        )
     record = records[0]
     expected_record = {
         "record_type": "s0_preflight",
@@ -985,6 +1013,54 @@ def _current_certificate(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], d
             raise ValueError(
                 f"P0 ledger field {field}={record.get(field)!r}, expected {value!r}"
             )
+    expected_experiments = {
+        1: "qwen25_7b_s128_i_base_seed2026_20260821",
+        2: "qwen25_7b_s128_i_base_seed2026_20260821",
+        3: "qwen25_7b_s128_t25_corrected_original_style_seed2026_20260821",
+        4: "qwen25_7b_s128_t25_corrected_original_style_seed2026_20260821",
+        5: "qwen25_7b_s128_it_audit_seed2026_20260821",
+    }
+    common = {
+        "git_commit": expected,
+        "run_id": evidence["run_id"],
+        "eval_manifest_hash": resolved["eval_manifest_hash"],
+        "execution_binding_sha256": execution_sha,
+        "runtime_binding_sha256": runtime_sha,
+        "status": "PASS",
+    }
+    for index, existing in enumerate(records[1:], start=1):
+        for field, value in common.items():
+            if existing.get(field) != value:
+                raise ValueError(
+                    f"ledger record {index} field {field}={existing.get(field)!r}, expected {value!r}"
+                )
+        if existing.get("experiment_name") != expected_experiments[index]:
+            raise ValueError(f"ledger record {index} experiment name differs")
+        if index >= 2 and os.environ.get(AUDIT_CODE_COMMIT_ENV):
+            if existing.get("audit_code_commit") != audit_code_commit():
+                raise ValueError(f"ledger record {index} audit-code commit differs")
+        if existing.get("record_type") == "interface_start" and existing.get("artifacts") != {}:
+            raise ValueError(f"ledger interface start record {index} artifacts are not empty")
+        if existing.get("record_type") == "interface_finish":
+            interface_id = str(existing["interface_id"])
+            root = Path(manifest["paths"][interface_id])
+            expected_artifacts = {
+                f"terminal/{_expected_step(interface_id)}.jsonl",
+                "trajectory_turns.jsonl",
+                "execution_summary.json",
+                "run.log",
+            }
+            artifacts = existing.get("artifacts")
+            if not isinstance(artifacts, Mapping) or set(artifacts) != expected_artifacts:
+                raise ValueError(f"ledger {interface_id} artifact inventory is not exact")
+            for relative, frozen in artifacts.items():
+                path = root / relative
+                if (
+                    not path.is_file()
+                    or path.stat().st_size != frozen.get("size")
+                    or sha256_file(path) != frozen.get("sha256")
+                ):
+                    raise ValueError(f"ledger-frozen {interface_id} artifact changed: {relative}")
     return p0, resolved
 
 
@@ -1046,11 +1122,7 @@ def record_interface_event(
     chain_failures = validate_jsonl_chain(records)
     if chain_failures:
         raise ValueError(f"ledger hash chain is invalid: {chain_failures}")
-    desired = [
-        ("s0_preflight", None),
-        ("interface_start", "I"), ("interface_finish", "I"),
-        ("interface_start", "T25"), ("interface_finish", "T25"),
-    ]
+    desired = list(LEDGER_SEQUENCE[:5])
     next_pair = ("interface_start" if event == "start" else "interface_finish", interface_id)
     candidate = [(row.get("record_type"), row.get("interface_id")) for row in records] + [next_pair]
     if candidate != desired[: len(candidate)]:
@@ -1071,6 +1143,7 @@ def record_interface_event(
         "interface_id": interface_id,
         "status": "PASS",
         "artifacts": artifacts,
+        "audit_code_commit": audit_code_commit(),
     }
     append_jsonl(ledger, record)
     return record
