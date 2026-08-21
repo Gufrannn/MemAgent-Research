@@ -107,13 +107,20 @@ def audit(paths, require_method=True):
                      for o, c in zip(old, cur)) for row in rows)
     if require_method and not active:
         raise ValueError("RWWPO_METHOD_INACTIVE")
+    step_summaries={}
+    for step in sorted({int(r["global_step"]) for r in rows}):
+        selected=[r for r in rows if int(r["global_step"])==step]
+        step_groups=[g for key,g in groups.items() if int(key[1])==step]
+        step_summaries[str(step)]={"accepted_fraction":sum(bool(g[0]["accepted"]) for g in step_groups)/len(step_groups),
+            "max_proposed_update":max(abs(p-c) for r in selected for post,cur in zip(r["proposed_post_log_prob"],r["current_log_prob"]) for p,c in zip(post,cur))}
     return {"status": "PASS", "decision": "RWWPO_ACTUAL_LOSS_LEDGER_PASS",
             "record_count": len(rows), "method_active": active,
             "modes": sorted({row["mode"] for row in rows}),
             "min_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["prefix_stats"]),
             "min_post_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["post_prefix_stats"]),
             "accepted_fraction": sum(bool(next(iter(g))["accepted"]) for g in groups.values())/len(groups),
-            "max_proposed_update": max(abs(p-c) for r in rows for post,cur in zip(r["proposed_post_log_prob"],r["current_log_prob"]) for p,c in zip(post,cur))}
+            "max_proposed_update": max(abs(p-c) for r in rows for post,cur in zip(r["proposed_post_log_prob"],r["current_log_prob"]) for p,c in zip(post,cur)),
+            "steps":step_summaries}
 
 
 def main():

@@ -50,15 +50,18 @@ def main():
     aperture=any(.01 < x["max_abs_prefix_log_ratio"] < 4.0 for x in observations)
     same_length_counterexample=any(a["mean_prefix_length"]==b["mean_prefix_length"] and abs(a["prefix_ess"]-b["prefix_ess"])>.02 for i,a in enumerate(observations) for b in observations[i+1:])
     loo_rmse=float("inf")
-    if len(observations)>=8:
+    heldout_steps=sorted({int(x["identity"][1]) for x in observations})
+    if len(observations)>=8 and len(heldout_steps)>=3:
         errors=[]
-        for held in range(len(observations)):
-            train=[x for i,x in enumerate(observations) if i!=held]
+        for held_step in heldout_steps:
+            train=[x for x in observations if int(x["identity"][1])!=held_step]
             design=np.asarray([[1,x["mean_prefix_length"],x["token_approx_kl"],x["token_clipfrac"],x["write_ess"]] for x in train],dtype=float)
             target=np.asarray([x["prefix_ess"] for x in train],dtype=float)
             beta=np.linalg.lstsq(design,target,rcond=None)[0]
-            x=observations[held]; prediction=np.asarray([1,x["mean_prefix_length"],x["token_approx_kl"],x["token_clipfrac"],x["write_ess"]])@beta
-            errors.append((prediction-x["prefix_ess"])**2)
+            for x in observations:
+                if int(x["identity"][1])==held_step:
+                    prediction=np.asarray([1,x["mean_prefix_length"],x["token_approx_kl"],x["token_clipfrac"],x["write_ess"]])@beta
+                    errors.append((prediction-x["prefix_ess"])**2)
         loo_rmse=math.sqrt(sum(errors)/len(errors))
     length_not_proxy=same_length_counterexample and loo_rmse>.01
     status="PASS" if len(observations)>=8 and collapse and length_not_proxy and local_not_sufficient and per_write_not_sufficient and aperture else "FAIL"
@@ -67,6 +70,7 @@ def main():
             "record_count":base["record_count"],"min_prefix_ess":base["min_prefix_ess"],"prefix_collapse_observed":collapse,
             "optimizer_turn_observations":len(observations),"distinct_prefix_lengths":len(lengths),"length_not_pure_proxy":length_not_proxy,
             "same_length_prefix_ess_counterexample":same_length_counterexample,"heldout_diagnostics_rmse":loo_rmse,"token_kl_computed":True,
+            "heldout_unit":"global_step","heldout_group_count":len(heldout_steps),
             "token_clip_does_not_exclude_prefix_collapse":local_not_sufficient,
             "per_write_ess_does_not_exclude_prefix_collapse":per_write_not_sufficient,
             "nonzero_feasible_aperture":aperture}

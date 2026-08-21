@@ -148,6 +148,7 @@ evaluation. These are planning estimates, not claims of a local H20 run.
 ```bash
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_five_anchor.py \
   --certificate-root "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates" \
+  --baseline-import "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/baseline_import.json" \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/final_five_anchor.json"
 ```
