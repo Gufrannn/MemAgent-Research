@@ -1286,6 +1286,19 @@ class RayPPOTrainer:
         dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
+        if hasattr(self, "_hdr_dro"):
+            from recurrent.research.hdr_memrl import write_json
+            write_json(os.path.join(local_global_step_folder, "hdr_dro_state.json"), self._hdr_dro.state_dict())
+            from recurrent.research.gate_a_execution import checkpoint_inventory, runtime_config_sha256
+            binding = {
+                "record_type": "hdr_checkpoint_binding", "global_step": int(self.global_steps),
+                "git_commit": os.environ.get("MEMAGENT_HDR_EXPECTED_COMMIT"),
+                "run_id": os.environ.get("HDR_RUN_ID"), "gpu_pair": os.environ.get("GPU_PAIR"),
+                "manifest_sha256": os.environ.get("HDR_MANIFEST_SHA256"),
+                "resolved_runtime_config_sha256": runtime_config_sha256(OmegaConf.to_container(self.config, resolve=True)),
+                "inventory": checkpoint_inventory(local_global_step_folder),
+            }
+            write_json(os.path.join(local_global_step_folder, "hdr_checkpoint_binding.json"), binding)
 
         # latest checkpointed iteration tracker (for atomic usage)
         local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
@@ -1808,8 +1821,23 @@ class RayPPOTrainer:
                         else:
                             if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                                 raise NotImplementedError("REMAX is not implemented for recurrent.")
-                            batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
-                                                                    dtype=object)
+                            hdr_cfg = self.config.algorithm.get("hdr_memrl", None)
+                            hdr_enabled = bool(hdr_cfg and hdr_cfg.get("enabled", False))
+                            if hdr_enabled:
+                                from recurrent.research.hdr_memrl import BalancedHorizonScheduler
+                                roots = [str(x) for x in gen_batch.non_tensor_batch.get("stable_root_id", [])]
+                                scheduler = BalancedHorizonScheduler(
+                                    hdr_cfg.horizons, len(gen_batch), int(hdr_cfg.scheduler_seed)
+                                )
+                                assignments = scheduler.assign(roots, int(self.global_steps))
+                                horizon_ids = np.asarray([x["horizon"] for x in assignments], dtype=np.int64)
+                                gen_batch.non_tensor_batch["horizon_id"] = horizon_ids
+                                batch.non_tensor_batch["stable_root_id"] = np.asarray(roots, dtype=object)
+                                batch.non_tensor_batch["horizon_id"] = horizon_ids
+                                batch.non_tensor_batch['uid'] = np.asarray(roots, dtype=object)
+                            else:
+                                batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
+                                                                        dtype=object)
                             # Note that we repeat outside the loop, since the generated responses are not aligned and we cannot
                             # simply union them.
                             # Also, just as what happened in validate, we will always set n=1 in generation_kwargs.
@@ -2065,6 +2093,47 @@ class RayPPOTrainer:
                             advantage_scalar = compute_1D_grpo_advantage(token_level_rewards=reward_tensor, 
                                                                          index=reward_batch.non_tensor_batch['uid'],
                                                                          use_adv=self.config.algorithm.grpo_use_adv)
+                            hdr_cfg = self.config.algorithm.get("hdr_memrl", None)
+                            if hdr_cfg and bool(hdr_cfg.get("enabled", False)):
+                                from recurrent.research.hdr_memrl import OnlineGroupDRO, write_json
+                                horizon_ids = [int(x) for x in batch.non_tensor_batch["horizon_id"]]
+                                reward_values = reward_tensor.sum(dim=-1).detach().cpu().tolist()
+                                if len(reward_values) != len(horizon_ids):
+                                    raise RuntimeError("HDR reward/horizon alignment failure")
+                                losses, counts = {}, {}
+                                for horizon in map(int, hdr_cfg.horizons):
+                                    values = [1.0 - float(r) for r, h in zip(reward_values, horizon_ids) if h == horizon]
+                                    counts[horizon] = len(values)
+                                    if not values:
+                                        raise RuntimeError(f"HDR actor batch missing horizon {horizon}")
+                                    losses[horizon] = sum(values) / len(values)
+                                if not hasattr(self, "_hdr_dro"):
+                                    self._hdr_dro = OnlineGroupDRO.create(
+                                        hdr_cfg.horizons, float(hdr_cfg.eta), float(hdr_cfg.rho)
+                                    )
+                                    resume = self.config.trainer.get("resume_from_path", None)
+                                    if resume:
+                                        state_path = os.path.join(str(resume), "hdr_dro_state.json")
+                                        if not os.path.isfile(state_path):
+                                            raise RuntimeError("HDR resume missing checkpointed dual state")
+                                        with open(state_path, encoding="utf-8") as stream:
+                                            self._hdr_dro = OnlineGroupDRO.from_state_dict(json.load(stream))
+                                state = self._hdr_dro.update(losses, counts)
+                                multipliers = torch.tensor(
+                                    self._hdr_dro.sample_multipliers(horizon_ids),
+                                    dtype=advantage_scalar.dtype, device=advantage_scalar.device,
+                                )
+                                advantage_scalar = advantage_scalar * multipliers
+                                for horizon, weight in zip(self._hdr_dro.horizons, self._hdr_dro.weights):
+                                    metrics[f"hdr/weight_h{horizon}"] = float(weight)
+                                    metrics[f"hdr/loss_h{horizon}"] = float(losses[horizon])
+                                ledger_path = os.path.join(
+                                    str(self.config.trainer.default_local_dir), "hdr_execution_ledger.jsonl"
+                                )
+                                record = {"record_type": "dro_update", "global_step": int(self.global_steps),
+                                          "losses": losses, "counts": counts, "state": state}
+                                from recurrent.research.gate_a_execution import append_jsonl
+                                append_jsonl(ledger_path, record)
                             advantage_scalar = advantage_scalar[sample_index]
 
                             # apply adv to non-mask tokens

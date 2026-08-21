@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HDR-MemRL append-only ledger record",
+  "type": "object",
+  "required": ["record_type"],
+  "properties": {
+    "record_type": {"enum": ["p0", "e0", "e1", "baseline_import", "launch", "dro_update", "checkpoint", "evaluation", "audit", "failure"]},
+    "global_step": {"type": "integer", "minimum": 0},
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  },
+  "additionalProperties": true
+}

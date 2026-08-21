@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 from uuid import uuid4
@@ -26,11 +27,20 @@ class MemoryConfig(RConfig):
     # max_input_length = max_prompt_length + chunk_size + max_memorization_length + template_length
     max_chunks: int  # max number of chunks to process
     max_final_response_length: int
+    # HDR is opt-in.  When enabled the trainer supplies a deterministic
+    # ``horizon_id`` per stable root and the agent partitions the *entire*
+    # effective evidence tensor into that many contiguous rewrites.
+    hdr_enable: bool = False
+    hdr_dataset_sha256: str = ""
+    hdr_min_horizon: int = 1
     # max_output_length = max_final_response_length if final else max_memorization_length
 
     @property
     def max_raw_input_length(self):
-        return self.max_prompt_length + self.chunk_size + self.max_memorization_length
+        max_chunk = self.chunk_size
+        if self.hdr_enable:
+            max_chunk = math.ceil(self.max_chunks * self.chunk_size / self.hdr_min_horizon)
+        return self.max_prompt_length + max_chunk + self.max_memorization_length
 
     # use property incase we want to adapt soft punishment to length.
     @property
@@ -57,6 +67,7 @@ class MemoryDataset(RDataset):
         data_config: DictConfig,
         processor: Optional[ProcessorMixin] = None,
     ):
+        self.recurrent_config = recurrent_config
         if data_config.truncation != 'center':
             raise ValueError('MemoryDataset only support center truncation')
         data_config.max_prompt_length=recurrent_config.max_chunks * recurrent_config.chunk_size
@@ -82,6 +93,7 @@ class MemoryDataset(RDataset):
             row_dict["source_order_index"] = int(item)
 
         chat = row_dict.pop(self.prompt_key)
+        query_text = chat[0]["content"]
         context = row_dict.pop(self.context_key)
 
         model_inputs = self.tokenizer(context, return_tensors="pt", add_special_tokens=False)
@@ -102,11 +114,19 @@ class MemoryDataset(RDataset):
         lengths = attention_mask.sum(dim=-1)
         row_dict["context_length"] = lengths[0]
         row_dict["prompt_ids"] = self.tokenizer.encode(
-            chat[0]["content"], add_special_tokens=False
+            query_text, add_special_tokens=False
         )
         index = row_dict.get("extra_info", {}).get("index", 0)
         row_dict["index"] = index
         row_dict["sample_uuid"] = str(uuid4())
+        if bool(getattr(self.recurrent_config, "hdr_enable", False)):
+            from recurrent.research.hdr_memrl import stable_root_id
+            row_dict["stable_root_id"] = stable_root_id(
+                dataset_sha256=str(self.recurrent_config.hdr_dataset_sha256),
+                source_index=int(index), query=query_text,
+            )
+            row_dict["horizon_id"] = int(row_dict.get("horizon_id", -1))
+            row_dict["sample_uuid"] = f'{row_dict["stable_root_id"]}:h{row_dict["horizon_id"]}'
 
         return row_dict
 
@@ -114,7 +134,10 @@ class MemoryDataset(RDataset):
     def get_bactch_keys(self) -> Tuple[List[str], List[str]]:
          # tensor can use 2-deminsional index for chunking.
          # while prompt_ids will not be indexed, so keep it as list.
-        return ["context_ids", "context_length"], ["prompt_ids"]
+        non_tensor = ["prompt_ids"]
+        if bool(getattr(self.recurrent_config, "hdr_enable", False)):
+            non_tensor.extend(["stable_root_id", "horizon_id"])
+        return ["context_ids", "context_length"], non_tensor
 
 TEMPLATE = """You are presented with a problem, a section of an article that may contain the answer to the problem, and a previous memory. Please read the provided section carefully and update the memory with the new information that helps to answer the problem. Be sure to retain all relevant details from the previous memory while adding any new, useful information.
 
@@ -175,6 +198,26 @@ class MemoryAgent(RAgent):
         self.bsz = len(self.ctx_length)
         self.memory = np.empty(self.bsz, dtype=object)
         self.is_final = False
+        self.hdr_horizons = None
+        self.hdr_bounds = None
+        if bool(getattr(self.config, "hdr_enable", False)):
+            if "horizon_id" not in gen_batch.non_tensor_batch:
+                raise RuntimeError("HDR enabled but scheduler did not supply horizon_id")
+            self.hdr_horizons = np.asarray(gen_batch.non_tensor_batch["horizon_id"], dtype=np.int64)
+            if len(self.hdr_horizons) != self.bsz or np.any(self.hdr_horizons <= 0):
+                raise RuntimeError("invalid row-aligned HDR horizons")
+            self.hdr_bounds = []
+            for length, horizon in zip(self.ctx_length.tolist(), self.hdr_horizons.tolist()):
+                if horizon > int(length):
+                    raise RuntimeError("horizon exceeds effective evidence token count")
+                q, r = divmod(int(length), int(horizon))
+                starts, cursor = [], 0
+                for turn in range(int(horizon)):
+                    width = q + (1 if turn < r else 0)
+                    starts.append((cursor, cursor + width)); cursor += width
+                if cursor != int(length):
+                    raise RuntimeError("HDR boundary closure failure")
+                self.hdr_bounds.append(starts)
     
     @override
     def action(self) -> Tuple[List[torch.Tensor], dict]:
@@ -189,7 +232,13 @@ class MemoryAgent(RAgent):
         # [1,2]  -format-> [t0,p1,p1,t1, m,t2, 1, 2,t3] -pad2Dlist2Tendors->   [ 0, 0,t0,p1,p1,t1, m,t2, 1, 2,t3]
         # [1,0]            [t0,p2,p2,p3,t1, m,t2, 1,t3]                        [ 0, 0,t0,p2,p2,p3,t1, m,t2, 1,t3]
         # get mask & positionids
-        active_mask = self.ctx_length > self.step * self.config.chunk_size
+        if self.hdr_bounds is None:
+            active_mask = self.ctx_length > self.step * self.config.chunk_size
+        else:
+            active_mask = torch.tensor(
+                [self.step < len(bounds) for bounds in self.hdr_bounds], dtype=torch.bool,
+                device=self.ctx_length.device,
+            )
         self.active_mask = active_mask
         gen_batch = self.gen_batch
         # if all context is used, and its not done, then it will be the final turn for this batch
@@ -216,7 +265,14 @@ class MemoryAgent(RAgent):
             # 2. context padded for 2D indexing, elegant engineering
             # 3. no need to pad memory
             prompt_i = gen_batch.non_tensor_batch['prompt_ids'][active_mask]
-            chunk_i = gen_batch.batch['context_ids'][active_mask, self.config.chunk_size * self.step: self.config.chunk_size * (self.step+1)] # bs * chunk_size
+            if self.hdr_bounds is None:
+                chunk_i = gen_batch.batch['context_ids'][active_mask, self.config.chunk_size * self.step: self.config.chunk_size * (self.step+1)]
+            else:
+                active_rows = torch.arange(self.bsz, dtype=torch.long)[active_mask.cpu()].tolist()
+                chunk_i = [
+                    gen_batch.batch['context_ids'][row, self.hdr_bounds[row][self.step][0]:self.hdr_bounds[row][self.step][1]]
+                    for row in active_rows
+                ]
             memory_i = self.memory[active_mask]
             
             # format: we use our token_template to avoid decoding & formatting with str function & encoding back.

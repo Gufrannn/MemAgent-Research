@@ -178,6 +178,27 @@ TRAINER_OVERRIDES=(
   "${RESUME_ARGS[@]}"
 )
 
+# Paper-V extension is explicit and fail-closed.  The default path remains
+# byte-for-byte equivalent to Gate A; HDR launchers must provide every field.
+if [[ ${HDR_ENABLE:-0} == 1 ]]; then
+  : "${HDR_DATASET_SHA256:?HDR_DATASET_SHA256 required}"
+  : "${HDR_HORIZONS:?HDR_HORIZONS required}"
+  : "${HDR_SCHEDULER_SEED:?HDR_SCHEDULER_SEED required}"
+  : "${HDR_ETA:?HDR_ETA required}"
+  : "${HDR_RHO:?HDR_RHO required}"
+  : "${HDR_MIN_HORIZON:?HDR_MIN_HORIZON required}"
+  TRAINER_OVERRIDES+=(
+    +recurrent.memory.config.hdr_enable=true
+    "+recurrent.memory.config.hdr_dataset_sha256=$HDR_DATASET_SHA256"
+    "+recurrent.memory.config.hdr_min_horizon=$HDR_MIN_HORIZON"
+    +algorithm.hdr_memrl.enabled=true
+    "+algorithm.hdr_memrl.horizons=$HDR_HORIZONS"
+    "+algorithm.hdr_memrl.scheduler_seed=$HDR_SCHEDULER_SEED"
+    "+algorithm.hdr_memrl.eta=$HDR_ETA"
+    "+algorithm.hdr_memrl.rho=$HDR_RHO"
+  )
+fi
+
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \
     "${TRAINER_OVERRIDES[@]}"
