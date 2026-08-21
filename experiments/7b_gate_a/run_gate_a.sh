@@ -175,8 +175,14 @@ TRAINER_OVERRIDES=(
   trainer.default_hdfs_dir=null
   "trainer.default_local_dir=$OUT"
   ray_init.num_cpus=64
-  "${RESUME_ARGS[@]}"
 )
+
+# Bash 3.2 treats expansion of an empty array as an unbound variable under
+# `set -u`.  Append the resume-only override explicitly so the fresh entry is
+# portable across the local audit host and the H20 Linux runtime.
+if [[ $PHASE == resume ]]; then
+  TRAINER_OVERRIDES+=("${RESUME_ARGS[@]}")
+fi
 
 if [[ ${EMIT_TRAINER_OVERRIDES:-0} == 1 ]]; then
   "$PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:], separators=(",", ":")))' \

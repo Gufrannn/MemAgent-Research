@@ -11,8 +11,13 @@ export MEMAGENT_COSI_EXPECTED_COMMIT=<EXACT_REMOTE_SHA>
 export MEMAGENT_COSI_GPU_PAIR=2,7
 export MEMAGENT_COSI_RUN_ID=coral_seed2026_primary_v1
 export MEMAGENT_COSI_BASELINE_INDEX=/data/cw/read_only_original_bundle/bundle_index.json
+export MEMAGENT_COSI_BASELINE_INDEX_SHA256=<EXTERNALLY_ISSUED_BASELINE_INDEX_64HEX>
 export MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST=/data/cw/read_only_original_training/p0_resolved_manifest.json
+export MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256=<EXTERNALLY_ISSUED_ORIGINAL_MANIFEST_64HEX>
+export MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE=/data/cw/read_only_original_training/p0_preflight.json
+export MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE_SHA256=<EXTERNALLY_ISSUED_ORIGINAL_P0_64HEX>
 export MEMAGENT_COSI_S128_RESOLVED_MANIFEST=/data/cw/read_only_original_s128/p0_resolved_manifest.json
+export MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256=<EXTERNALLY_ISSUED_S128_MANIFEST_64HEX>
 export MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3
 
 cd "$MEMAGENT_COSI_REPO_DIR"
@@ -24,7 +29,7 @@ test -z "$(git status --porcelain)"
 
 `MEMAGENT_COSI_GPU_PAIR` is any two distinct physical H20 indices in canonical ascending order; it may be non-contiguous. Every GPU entry acquires `locks/memagent_h20_gpu_N.lock` in ascending order, checks `nvidia-smi`, and exits without changing another process if either card is busy.
 
-The Original bundle must be mounted read-only. Its index authenticates every source file and the I/Original5/10/15/20/25 prediction JSONL. Import recomputes normalized exact match, token-F1, and format from terminal text and parquet ground truth; stored aggregates and training dense reward are never accepted as performance.
+The Original bundle must be mounted read-only. Its externally issued index SHA authenticates every source file and the I/Original5/10/15/20/25 prediction JSONL. The accepted Original training manifest, Original P0 certificate, and S128 resolved manifest additionally require SHA-256 values delivered through an independent trusted channel. P0 verifies the complete fresh-base model/tokenizer inventory, train/validation data, and reward source. It recomposes the accepted Original and real emitted Method Hydra configurations, performs an exhaustive resolved-tree comparison, and rejects every difference outside the named fresh-run/output/CORAL whitelist. Import binds the stable-ID order to the authenticated S128 manifest, joins ground truth from the authenticated validation parquet, and recomputes normalized exact match, token-F1, and format; stored aggregates and training dense reward are never accepted as performance.
 
 ## 2. Research gates (no long training)
 
@@ -95,7 +100,7 @@ done
 bash scripts/h20/audit_qwen25_7b_coral_final.sh
 ```
 
-Resume must load `global_step_5` model, optimizer, scheduler, RNG, and dataloader state. The final audit requires exactly one authenticated resume event, one role update per step 1–25, the frozen phase at every step, matching post-update vLLM digests, and checkpoint-bound S128 reports at 5/10/15/20/25. Existing run/evaluation paths are never overwritten.
+Continuation first authenticates the T5 preflight as its parent and rejects any Git commit, Method manifest, Original resolved manifest, or physical GPU-pair drift. Resume must then load `global_step_5` model, optimizer, scheduler, all four RNG states, and dataloader state on both ranks. The final audit requires exactly one rank-complete authenticated resume event, one role update per step 1–25, the frozen phase at every step, matching post-update vLLM digests, and checkpoint-bound S128 reports at 5/10/15/20/25. It also verifies the same eval-manifest and stable-ID inventory, then emits normalized EM, token-F1, and format for Method and authenticated Original plus Method-minus-Original deltas at every anchor and a five-anchor curve summary. These are descriptive comparisons, not an automatic positive-performance claim. Existing run/evaluation paths are never overwritten.
 
 Expected H20 time: approximately 2.5–5 hours for updates 6–25 plus 3–6 hours for four fixed-S128 evaluations. Retain the append-only run root on any failure; recovery starts only from an authenticated checkpoint and a new experiment variant/run ID.
 

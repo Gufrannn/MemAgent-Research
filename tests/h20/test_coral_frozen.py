@@ -1,6 +1,9 @@
+import copy
 import json
 import os
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -54,6 +57,84 @@ class CoralFrozenContractTests(unittest.TestCase):
             diagnostic["inference_unit"],
             "writer_proposal_mean_over_four_never_reused_roots",
         )
+
+    def test_original_protocol_leaf_copy_and_drift_rejection(self):
+        from tools.h20.preflight_qwen25_7b_cosi import validate_original_protocol
+        method=json.loads((ROOT/"manifests/h20/qwen25_7b_cosi_seed2026.json").read_text())
+        original=json.loads((ROOT/"manifests/h20/qwen25_7b_original_t25_seed2026.json").read_text())
+        receipt=validate_original_protocol(method, original)
+        self.assertGreaterEqual(len(receipt["compared_leaves"]), 25)
+        self.assertIn("tokenizer.json", receipt["original_model_file_inventory"])
+        mutations=[]
+        value=json.loads(json.dumps(original))
+        value["training"]["max_num_seqs"] += 1
+        mutations.append(value)
+        value=json.loads(json.dumps(original))
+        value["backend"]["reward_manager"]="forged"
+        mutations.append(value)
+        value=json.loads(json.dumps(original))
+        value["model"]["files"]=[
+            row for row in value["model"]["files"] if row["path"] != "tokenizer.json"
+        ]
+        mutations.append(value)
+        for value in mutations:
+            with self.subTest():
+                with self.assertRaisesRegex(ValueError,"COSI_NO_GO"):
+                    validate_original_protocol(method,value)
+
+    def test_real_runner_emits_frozen_coral_protocol(self):
+        runner=ROOT/"experiments/7b_gate_a/run_gate_a.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            work=Path(directory)
+            model=work/"model"; model.mkdir(); (model/"config.json").write_text("{}")
+            train=work/"train.parquet"; train.write_bytes(b"train")
+            validation=work/"validation.parquet"; validation.write_bytes(b"validation")
+            env={**os.environ,"WORK_ROOT":str(work),"CODE":str(ROOT),
+                 "MODEL":str(model),"TRAIN":str(train),"VAL":str(validation),
+                 "PYTHON":sys.executable,"EMIT_TRAINER_OVERRIDES":"1",
+                 "CUDA_VISIBLE_DEVICES":"2,7","TRAIN_BATCH_SIZE":"4",
+                 "ROLLOUT_N":"2","PPO_MINI_BATCH_SIZE":"4","N_GPUS":"2",
+                 "FSDP_SIZE":"2","RUN_SEED":"2026"}
+            coral_overrides = [
+                "+algorithm.coral.enabled=true",
+                "+algorithm.coral.active_from_update=1",
+                "+algorithm.coral.schedule=odd_writer_even_terminal_answer_v2",
+                "+algorithm.coral.role_partition=nonfinal_memory_writer_vs_final_answer",
+                "+algorithm.coral.require_recurrent=true",
+                "+algorithm.coral.require_grpo=true",
+                "+algorithm.coral.require_gate_a_sync=true",
+                "trainer.project_name=memagent_coral",
+            ]
+            reference=subprocess.run(
+                ["bash",str(runner)], env=env,text=True,capture_output=True
+            )
+            self.assertEqual(reference.returncode,0,reference.stderr)
+            reference_overrides=json.loads(reference.stdout.splitlines()[-1])
+            completed=subprocess.run(
+                ["bash",str(runner),*coral_overrides],env=env,text=True,capture_output=True
+            )
+            self.assertEqual(completed.returncode,0,completed.stderr)
+            overrides=json.loads(completed.stdout.splitlines()[-1])
+            # The real Method entry must be the accepted Original argv plus
+            # exactly the pre-registered CORAL whitelist, in the same order.
+            self.assertEqual(overrides[:len(reference_overrides)],reference_overrides)
+            self.assertEqual(overrides[len(reference_overrides):],coral_overrides)
+            required={
+                "algorithm.adv_estimator=grpo","algorithm.grpo_use_adv=False",
+                "actor_rollout_ref.rollout.n=2","+actor_rollout_ref.rollout.seed=2026",
+                "+actor_rollout_ref.rollout.trajectory_seed_mode=independent",
+                "data.train_batch_size=4","actor_rollout_ref.actor.ppo_mini_batch_size=4",
+                "actor_rollout_ref.actor.optim.lr=1e-6",
+                "actor_rollout_ref.actor.kl_loss_coef=0.001",
+                "reward_model.reward_manager=naive",
+                "+custom_reward_function.reward_kwargs.f1_weight=0.95",
+                "+custom_reward_function.reward_kwargs.grounded_box_bonus=0.05",
+                "+algorithm.coral.enabled=true","trainer.project_name=memagent_coral",
+            }
+            self.assertTrue(required.issubset(set(overrides)),required-set(overrides))
+            config=(ROOT/"verl/trainer/config/ppo_trainer.yaml").read_text()
+            self.assertIn("ppo_epochs: 1",config)
+            self.assertIn('loss_agg_mode: "token-mean"',config)
 
     def test_launchers_use_dynamic_per_gpu_locks_and_never_kill(self):
         common=(ROOT/"scripts/h20/cosi_common.sh").read_text()
@@ -112,11 +193,92 @@ class CoralFrozenContractTests(unittest.TestCase):
             "MEMAGENT_COSI_E0_REPORT_SHA256",
             "MEMAGENT_COSI_E1_REPORT_SHA256",
             "MEMAGENT_COSI_BASELINE_REPORT_SHA256",
+            "MEMAGENT_COSI_BASELINE_INDEX_SHA256",
+            "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256",
+            "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE_SHA256",
+            "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256",
         ):
             self.assertIn(variable, preflight)
             self.assertIn(f"export {variable}=<EXTERNALLY_ISSUED_", runbook)
             self.assertNotIn(f"export {variable}=$(shasum", runbook)
         self.assertIn("must arrive through a trusted channel independent", runbook)
+
+    def test_exhaustive_resolved_original_diff_allows_only_explicit_whitelist(self):
+        from tools.h20.preflight_qwen25_7b_cosi import exhaustive_resolved_config_diff
+        original = {
+            "algorithm": {"adv_estimator": "grpo"},
+            "custom_reward_function": {"path": "/original/reward.py"},
+            "actor_rollout_ref": {"actor": {"optim": {"lr": 1e-6}}},
+            "trainer": {
+                "project_name": "original", "experiment_name": "original-run",
+                "default_local_dir": "/original", "total_training_steps": 25,
+                "save_freq": 5, "max_actor_ckpt_to_keep": 5,
+                "resume_mode": "resume_path", "resume_from_path": "/step3",
+            },
+        }
+        method = copy.deepcopy(original)
+        method["algorithm"]["coral"] = {
+            "enabled": True, "active_from_update": 1,
+        }
+        method["custom_reward_function"]["path"] = "/coral/reward.py"
+        method["trainer"].update({
+            "project_name": "coral", "experiment_name": "coral-run",
+            "default_local_dir": "/coral", "total_training_steps": 5,
+            "save_freq": 1, "max_actor_ckpt_to_keep": 30,
+            "resume_mode": "disable", "resume_from_path": None,
+        })
+        observed = exhaustive_resolved_config_diff(original, method)
+        self.assertIn("algorithm.coral", observed)
+        drift = copy.deepcopy(method)
+        drift["actor_rollout_ref"]["actor"]["optim"]["lr"] = 2e-6
+        with self.assertRaisesRegex(ValueError, "outside explicit whitelist"):
+            exhaustive_resolved_config_diff(original, drift)
+
+    def test_continuation_rejects_gpu_commit_and_manifest_drift(self):
+        from tools.h20.preflight_qwen25_7b_cosi import validate_continuation_binding
+        value = {
+            "stage": "t5",
+            "git_commit": "a" * 40,
+            "manifest_sha256": "b" * 64,
+            "original_resolved_manifest_sha256": "c" * 64,
+            "original_p0_certificate_sha256": "6" * 64,
+            "s128_resolved_manifest_sha256": "d" * 64,
+            "fresh_base_model_tokenizer_inventory_sha256": "e" * 64,
+            "original_protocol_comparison_sha256": "f" * 64,
+            "method_nonwhitelist_config_sha256": "2" * 64,
+            "baseline_index_sha256": "1" * 64,
+            "gpu_pair": [2, 7],
+        }
+        arguments = {
+            "expected_commit": "a" * 40,
+            "manifest_sha256": "b" * 64,
+            "original_manifest_sha256": "c" * 64,
+            "original_p0_certificate_sha256": "6" * 64,
+            "s128_manifest_sha256": "d" * 64,
+            "model_inventory_sha256": "e" * 64,
+            "protocol_comparison_sha256": "f" * 64,
+            "method_nonwhitelist_config_sha256": "2" * 64,
+            "baseline_index_sha256": "1" * 64,
+            "gpu_pair": [2, 7],
+        }
+        validate_continuation_binding(value, **arguments)
+        for field, replacement in (
+            ("git_commit", "d" * 40),
+            ("manifest_sha256", "e" * 64),
+            ("original_resolved_manifest_sha256", "f" * 64),
+            ("original_p0_certificate_sha256", "7" * 64),
+            ("s128_resolved_manifest_sha256", "1" * 64),
+            ("fresh_base_model_tokenizer_inventory_sha256", "2" * 64),
+            ("original_protocol_comparison_sha256", "3" * 64),
+            ("method_nonwhitelist_config_sha256", "5" * 64),
+            ("baseline_index_sha256", "4" * 64),
+            ("gpu_pair", [3, 7]),
+        ):
+            tampered = dict(value)
+            tampered[field] = replacement
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "COSI_NO_GO"):
+                    validate_continuation_binding(tampered, **arguments)
 
     def test_source_firewall(self):
         paths=[ROOT/"recurrent/research/coral.py",ROOT/"docs/papers/coral_paper_draft.md"]

@@ -87,6 +87,7 @@ def main():
     required = (
         "MEMAGENT_COSI_WORK_ROOT", "MEMAGENT_COSI_REPO_DIR",
         "MEMAGENT_COSI_EXPECTED_COMMIT", "MEMAGENT_COSI_S128_RESOLVED_MANIFEST",
+        "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256",
     )
     if any(not env.get(key) for key in required):
         raise ValueError("CORAL_S128_NO_GO: explicit environment binding missing")
@@ -106,7 +107,12 @@ def main():
     validation = Path(env["MEMAGENT_COSI_WORK_ROOT"]) / "datasets/hotpotqa/hotpotqa_dev.parquet"
     if sha256_file(validation) != DATA_SHA256:
         raise ValueError("CORAL_S128_NO_GO: fixed-S128 parquet drift")
-    source_resolved = json.loads(Path(env["MEMAGENT_COSI_S128_RESOLVED_MANIFEST"]).read_text())
+    source_resolved_path = Path(env["MEMAGENT_COSI_S128_RESOLVED_MANIFEST"]).resolve()
+    expected_source_sha = env["MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256"]
+    if re.fullmatch(r"[0-9a-f]{64}", expected_source_sha) is None \
+            or sha256_file(source_resolved_path) != expected_source_sha:
+        raise ValueError("CORAL_S128_NO_GO: external S128 resolved-manifest SHA")
+    source_resolved = json.loads(source_resolved_path.read_text())
     validate_resolved_manifest(source_resolved)
     inventory, shards = actor_shards(checkpoint)
     interface = f"CORAL_T{args.step}"
