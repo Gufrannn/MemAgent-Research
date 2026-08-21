@@ -210,6 +210,9 @@ def health_gate(a):
         if "prediction" in row: row.update(prediction_metrics(str(row["prediction"]),str(row["gold"])))
     heval=evaluate_horizons(hrows,a.nominal,a.unseen)
     oeval=load(a.original_horizons)
+    imported_by_path={str(Path(x["path"]).resolve()):x["sha256"] for x in baseline.get("files",[])}
+    original_path=str(Path(a.original_horizons).resolve())
+    if imported_by_path.get(original_path)!=digest(a.original_horizons): raise HDRContractError("Original horizon evaluation is not baseline-authority imported")
     if oeval.get("status")!="PASS": raise HDRContractError("Original horizon authority absent")
     failures=[]
     if float(method["token_f1"]) < float(original["token_f1"])-.02: failures.append("nominal_s128_noninferiority")
