@@ -93,7 +93,8 @@ serial_credit_record --record-type tetrad_adjudication --artifact "$SERIAL_CREDI
 "$SERIAL_CREDIT_PYTHON" \
   "$SERIAL_CREDIT_REPO_DIR/tools/h20/audit_qwen25_7b_serialization_credit.py" \
   --manifest "$SERIAL_CREDIT_MANIFEST" \
-  >"$SERIAL_CREDIT_READONLY_REAUDIT" 2>>"$TETRAD_LOG"
+  --output "$SERIAL_CREDIT_READONLY_REAUDIT" \
+  >>"$TETRAD_LOG" 2>&1
 
 "$SERIAL_CREDIT_PYTHON" - "$SERIAL_CREDIT_READONLY_REAUDIT" <<'PY'
 import json, sys

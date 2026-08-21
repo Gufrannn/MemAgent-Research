@@ -1309,20 +1309,50 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
     return report
 
 
+def _write_readonly_audit_output(
+    manifest_path: Path, output: Path, report: dict[str, Any]
+) -> None:
+    """Write the read-only result through JSON I/O, never captured stdout."""
+    manifest = load_manifest(manifest_path)
+    expected = Path(manifest["paths"]["readonly_reaudit"]).resolve()
+    if output.resolve() != expected:
+        raise ValueError(
+            f"read-only audit output differs from frozen path: {output} != {expected}"
+        )
+    write_json_exclusive(output, report)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=REPO_ROOT / MANIFEST_REL)
     parser.add_argument("--write-report", action="store_true")
     parser.add_argument("--smsb-gate-only", action="store_true")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.smsb_gate_only and args.write_report:
         parser.error("--smsb-gate-only cannot be combined with --write-report")
+    if args.output is not None and (args.smsb_gate_only or args.write_report):
+        parser.error("--output is only valid for the final read-only re-audit")
     report = (
         authenticate_smsb_gate(args.manifest)
         if args.smsb_gate_only
         else audit(args.manifest, write=args.write_report)
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    if args.output is not None:
+        _write_readonly_audit_output(args.manifest, args.output, report)
+        print(
+            json.dumps(
+                {
+                    "status": report["status"],
+                    "decision": report["decision"],
+                    "output": str(args.output.resolve()),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["status"] == "PASS" else 1
 
 

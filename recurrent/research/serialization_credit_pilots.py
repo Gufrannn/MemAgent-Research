@@ -481,7 +481,7 @@ def build_capture_record(payload: Mapping[str, Any]) -> dict[str, Any]:
         input_memory_ids = token_ids(
             raw.get("input_memory_token_ids"),
             f"memory_ledger[{turn}].input_memory_token_ids",
-            allow_empty=False,
+            allow_empty=True,
         )
         if chunk_end <= chunk_start or chunk_end - chunk_start != len(chunk_ids):
             raise ValueError(f"memory ledger turn {turn} chunk span differs from IDs")
@@ -509,7 +509,9 @@ def build_capture_record(payload: Mapping[str, Any]) -> dict[str, Any]:
                 require_sha256(supplied, f"memory_ledger[{turn}].{field}")
             else:
                 require_int(
-                    supplied, f"memory_ledger[{turn}].{field}", minimum=1
+                    supplied,
+                    f"memory_ledger[{turn}].{field}",
+                    minimum=(0 if field == "input_memory_token_length" else 1),
                 )
             if supplied != expected:
                 raise ValueError(

@@ -45,6 +45,7 @@ from tools.h20.audit_qwen25_7b_serialization_credit import (
     _rebuild_authoring_from_s128,
     _schema_failures,
 )
+from tools.h20 import audit_qwen25_7b_serialization_credit as audit_module
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -717,6 +718,57 @@ def test_capture_numeric_evidence_is_strict(path: tuple, bad_value: object) -> N
     target[path[-1]] = bad_value
     with pytest.raises(ValueError):
         validate_capture_record(item)
+
+
+def test_two_turn_capture_allows_empty_memory_after_immediate_eos() -> None:
+    raw = copy.deepcopy(capture(0, 1, process_generate_count=4))
+    raw.pop("capture_id")
+    first = raw["memory_ledger"][0]
+    first.update(text="", token_ids=[])
+    second_seed = derive_turn_request_seeds([raw["trajectory_seed"]], [0], 1)[0]
+    second_prompt = [10, 20, 11, 12, 36, 13]
+    second_chunk = [36]
+    raw["memory_ledger"].append(
+        {
+            "turn": 1,
+            "writer_prompt_token_ids": second_prompt,
+            "writer_prompt_token_ids_sha256": canonical_sha256(second_prompt),
+            "writer_prompt_token_length": len(second_prompt),
+            "chunk_start": 1,
+            "chunk_end": 2,
+            "chunk_token_ids": second_chunk,
+            "chunk_token_ids_sha256": canonical_sha256(second_chunk),
+            "chunk_token_length": len(second_chunk),
+            "input_memory_token_ids": [],
+            "input_memory_token_ids_sha256": canonical_sha256([]),
+            "input_memory_token_length": 0,
+            "text": "second-memory",
+            "token_ids": [41],
+            "request_seed": second_seed,
+            "configured_request_seed": second_seed,
+            "actual_request_seed": second_seed,
+            "generate_call_index": 2,
+        }
+    )
+    final_seed = derive_turn_request_seeds([raw["trajectory_seed"]], [0], 2)[0]
+    raw.update(
+        updater_calls=2,
+        final_memory_token_ids=[41],
+        final_prompt_token_ids=final_prompt(0, [41]),
+        request_seed=final_seed,
+        final_stochastic_request_seed=final_seed,
+        final_control_request_seed=final_seed,
+        final_stochastic_configured_request_seed=final_seed,
+        final_stochastic_actual_request_seed=final_seed,
+        final_control_configured_request_seed=final_seed,
+        final_control_actual_request_seed=final_seed,
+        final_stochastic_generate_call_index=3,
+        final_control_generate_call_index=4,
+    )
+    rebuilt = build_capture_record(raw)
+    assert rebuilt["memory_ledger"][0]["token_ids"] == []
+    assert rebuilt["memory_ledger"][1]["input_memory_token_ids"] == []
+    assert rebuilt["memory_ledger"][1]["input_memory_token_length"] == 0
 
 
 def test_replay_actual_prompt_hash_and_strict_counts_are_audited() -> None:
@@ -1581,6 +1633,8 @@ def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> 
     assert "full_model_sha=True" in launcher_source
     assert "post_child_gpu_identity = _physical_gpu_identity" in launcher_source
     assert "SERIAL_CREDIT_READONLY_REAUDIT" in tetrad_shell
+    assert '--output "$SERIAL_CREDIT_READONLY_REAUDIT"' in tetrad_shell
+    assert '>"$SERIAL_CREDIT_READONLY_REAUDIT"' not in tetrad_shell
     assert tetrad_shell.index("--write-report") < tetrad_shell.index(
         'assert report["ledger_prefix_record_count"] == 37'
     )
@@ -1592,6 +1646,52 @@ def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> 
     assert "len(records) not in (37, 38)" in audit_source
     assert "authoring_artifact_sha256" in audit_source
     assert "full_model_sha=True" in audit_source
+
+
+def test_readonly_audit_output_is_not_stdout_capture(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    output = tmp_path / "readonly_reaudit.json"
+    report = {
+        "status": "PASS",
+        "decision": "SERIALIZATION_CREDIT_PILOT4_PASS",
+        "failures": [],
+    }
+
+    def noisy_audit(manifest: Path, *, write: bool) -> dict:
+        assert manifest == manifest_path
+        assert write is False
+        print("INFO vLLM imported on CUDA platform")
+        return report
+
+    with patch.object(
+        audit_module, "audit", side_effect=noisy_audit
+    ), patch.object(
+        audit_module,
+        "load_manifest",
+        return_value={"paths": {"readonly_reaudit": str(output)}},
+    ), patch.object(
+        sys,
+        "argv",
+        [
+            "audit_qwen25_7b_serialization_credit.py",
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output),
+        ],
+    ):
+        assert audit_module.main() == 0
+    assert "INFO vLLM imported" in capsys.readouterr().out
+    assert json.loads(output.read_text(encoding="utf-8")) == report
+    with patch.object(
+        audit_module, "load_manifest",
+        return_value={"paths": {"readonly_reaudit": str(output)}},
+    ), pytest.raises(FileExistsError):
+        audit_module._write_readonly_audit_output(
+            manifest_path, output, report
+        )
 
 
 def test_no_shared_core_or_sources_are_part_of_pilot_code_objects() -> None:
