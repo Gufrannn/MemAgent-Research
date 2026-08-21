@@ -86,6 +86,24 @@ serial_credit_record --record-type tetrad_adjudication --artifact "$SERIAL_CREDI
   "$SERIAL_CREDIT_REPO_DIR/tools/h20/audit_qwen25_7b_serialization_credit.py" \
   --manifest "$SERIAL_CREDIT_MANIFEST" --write-report >>"$TETRAD_LOG" 2>&1
 
+[[ ! -e $SERIAL_CREDIT_READONLY_REAUDIT ]] || {
+  echo 'SERIAL_CREDIT_NO_GO:AUDIT read-only re-audit artifact already exists' >&2
+  exit 85
+}
+"$SERIAL_CREDIT_PYTHON" \
+  "$SERIAL_CREDIT_REPO_DIR/tools/h20/audit_qwen25_7b_serialization_credit.py" \
+  --manifest "$SERIAL_CREDIT_MANIFEST" \
+  >"$SERIAL_CREDIT_READONLY_REAUDIT" 2>>"$TETRAD_LOG"
+
+"$SERIAL_CREDIT_PYTHON" - "$SERIAL_CREDIT_READONLY_REAUDIT" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+assert report["status"] == "PASS"
+assert report["decision"] == "SERIALIZATION_CREDIT_PILOT4_PASS"
+assert report["ledger_prefix_record_count"] == 37
+assert report["failures"] == []
+PY
+
 "$SERIAL_CREDIT_PYTHON" - "$SERIAL_CREDIT_FINAL_REPORT" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))

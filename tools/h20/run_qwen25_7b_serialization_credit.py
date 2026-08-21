@@ -33,6 +33,7 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     summarize_smsb_pilot,
     validate_replay,
     validate_capture_record,
+    validate_single_request_token_budget,
     validate_tetrad_manifest,
     write_json_exclusive,
     write_jsonl_exclusive,
@@ -131,13 +132,25 @@ def _engine(manifest: Mapping[str, Any]):
     )
 
 
-def _generate_one(llm: Any, prompt_ids: list[int], sampling: dict[str, Any]):
+def _generate_one(
+    llm: Any,
+    prompt_ids: list[int],
+    sampling: dict[str, Any],
+    *,
+    manifest: Mapping[str, Any],
+):
     global _GENERATE_CALL_COUNT
     from vllm import SamplingParams
 
-    _GENERATE_CALL_COUNT += 1
     params = dict(sampling)
     params.pop("do_sample", None)
+    validate_single_request_token_budget(
+        prompt_ids,
+        params.get("max_tokens"),
+        max_model_len=manifest["backend"]["max_model_len"],
+        max_num_batched_tokens=manifest["backend"]["max_num_batched_tokens"],
+    )
+    _GENERATE_CALL_COUNT += 1
     outputs = llm.generate(
         prompt_token_ids=[prompt_ids],
         sampling_params=[SamplingParams(**params)],
@@ -184,12 +197,16 @@ def _engine_evidence(
         "max_num_seqs": 1,
         "one_prompt_per_generate_call": True,
         "engine_config_sha256": resolved["execution_binding"]["engine_config_sha256"],
+        "model_manifest_sha256": resolved["execution_binding"][
+            "model_manifest_sha256"
+        ],
         "required_vllm_version": manifest["backend"]["required_version"],
         "process_instance_uuid": PROCESS_INSTANCE_UUID,
         "process_pid": PROCESS_PID,
         "engine_construction_count": 1,
         "generate_call_count": expected_generate_call_count,
         "full_model_sha_verified_at_capture_start": True,
+        "full_model_sha_verified_at_child_start": True,
     }
 
 
@@ -288,10 +305,14 @@ def capture_smsb(
         for turn, offset in enumerate(range(0, len(context_ids), chunk_size)):
             if turn >= int(recurrent["max_chunks"]):
                 raise RuntimeError("context exceeded the frozen maximum chunk count")
+            input_memory_ids = (
+                list(memory_ids) if memory_ids is not None else list(no_memory)
+            )
+            chunk_ids = list(context_ids[offset : offset + chunk_size])
             prompt_ids = writer_template.format(
                 prompt=question_ids,
-                memory=memory_ids if memory_ids is not None else no_memory,
-                chunk=context_ids[offset : offset + chunk_size],
+                memory=input_memory_ids,
+                chunk=chunk_ids,
             ).tolist()
             if turn == 0 and canonical_sha256(prompt_ids) != pilot["writer_turn0_prompt_token_sha256"]:
                 raise RuntimeError("writer turn0 prompt differs from P0")
@@ -304,6 +325,7 @@ def capture_smsb(
                     "seed": request_seed,
                     "max_tokens": int(recurrent["max_memory_tokens"]),
                 },
+                manifest=manifest,
             )
             memory_ids = list(completion.token_ids)
             generate_call_index = _GENERATE_CALL_COUNT
@@ -312,6 +334,19 @@ def capture_smsb(
             memory_ledger.append(
                 {
                     "turn": turn,
+                    "writer_prompt_token_ids": prompt_ids,
+                    "writer_prompt_token_ids_sha256": canonical_sha256(prompt_ids),
+                    "writer_prompt_token_length": len(prompt_ids),
+                    "chunk_start": offset,
+                    "chunk_end": offset + len(chunk_ids),
+                    "chunk_token_ids": chunk_ids,
+                    "chunk_token_ids_sha256": canonical_sha256(chunk_ids),
+                    "chunk_token_length": len(chunk_ids),
+                    "input_memory_token_ids": input_memory_ids,
+                    "input_memory_token_ids_sha256": canonical_sha256(
+                        input_memory_ids
+                    ),
+                    "input_memory_token_length": len(input_memory_ids),
                     "text": tokenizer.decode(memory_ids, skip_special_tokens=False),
                     "token_ids": memory_ids,
                     "request_seed": request_seed,
@@ -335,6 +370,7 @@ def capture_smsb(
                 "seed": final_seed,
                 "max_tokens": int(recurrent["max_final_tokens"]),
             },
+            manifest=manifest,
         )
         stochastic_call_index = _GENERATE_CALL_COUNT
         deterministic = _generate_one(
@@ -345,6 +381,7 @@ def capture_smsb(
                 "seed": final_seed,
                 "max_tokens": int(recurrent["max_final_tokens"]),
             },
+            manifest=manifest,
         )
         deterministic_call_index = _GENERATE_CALL_COUNT
         records.append(
@@ -471,7 +508,7 @@ def replay_smsb(
     params = dict(request["sampling_params"])
     params["seed"] = request["request_seed"]
     llm = _engine(manifest)
-    completion = _generate_one(llm, prompt_ids, params)
+    completion = _generate_one(llm, prompt_ids, params, manifest=manifest)
     if _ENGINE_CONSTRUCTION_COUNT != 1 or _GENERATE_CALL_COUNT != 1:
         raise RuntimeError("SMSB replay must construct one engine and call generate once")
     answer_ids = list(completion.token_ids)
@@ -492,6 +529,9 @@ def replay_smsb(
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "engine_config_sha256": resolved["execution_binding"]["engine_config_sha256"],
+        "model_manifest_sha256": resolved["execution_binding"][
+            "model_manifest_sha256"
+        ],
         "prompt_token_ids": prompt_ids,
         "answer_token_ids": list(completion.token_ids),
         "finish_reason": completion.finish_reason,
@@ -879,6 +919,7 @@ def run_tetrad_request(
             "top_k": -1, "min_p": 0.0, "seed": int(request["request_seed"]),
             "max_tokens": int(manifest["recurrent"]["max_final_tokens"]),
         },
+        manifest=manifest,
     )
     if _ENGINE_CONSTRUCTION_COUNT != 1 or _GENERATE_CALL_COUNT != 1:
         raise RuntimeError("Tetrad child must construct one engine and call generate once")
@@ -929,6 +970,9 @@ def run_tetrad_request(
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],
         "engine_config_sha256": resolved["execution_binding"]["engine_config_sha256"],
+        "model_manifest_sha256": resolved["execution_binding"][
+            "model_manifest_sha256"
+        ],
         "current_binding_sha256": current_binding_sha,
         "full_model_sha_verified_at_child_start": True,
         **credential_evidence,

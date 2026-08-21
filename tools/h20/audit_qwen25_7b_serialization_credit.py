@@ -23,6 +23,7 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     build_tetrad_requests,
     canonical_json,
     canonical_sha256,
+    center_truncate_token_ids,
     content_words,
     read_jsonl,
     sha256_file,
@@ -32,6 +33,7 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     validate_capture_record,
     validate_tetrad_manifest,
     validate_parent_launch_receipt,
+    validate_single_request_token_budget,
     write_json_exclusive,
 )
 from tools.h20.preflight_qwen25_7b_serialization_credit import (  # noqa: E402
@@ -79,6 +81,146 @@ def _artifact(record: dict[str, Any], expected: Path) -> None:
         )
     if not expected.is_file() or record.get("artifact_sha256") != sha256_file(expected):
         raise ValueError(f"ledger artifact digest differs: {expected}")
+
+
+def _authenticate_capture_chain_from_s128(
+    *,
+    manifest: dict[str, Any],
+    resolved: dict[str, Any],
+    captures: list[dict[str, Any]],
+    tokenizer: Any,
+) -> None:
+    """Rebuild every writer input and final prompt from S128 and prior output IDs."""
+    import pyarrow.parquet as parquet
+    from recurrent.impls.memory import TEMPLATE, TEMPLATE_FINAL_BOXED
+    from recurrent.utils import TokenTemplate, chat_template
+
+    rows = parquet.read_table(
+        manifest["data"]["validation"],
+        columns=["prompt", "context", "reward_model", "extra_info"],
+    ).to_pylist()
+    if len(rows) != 128:
+        raise ValueError("independent SMSB capture rebuild requires exact S128")
+    writer_template_text = chat_template(tokenizer).format(message=TEMPLATE)
+    final_template_text = chat_template(tokenizer).format(message=TEMPLATE_FINAL_BOXED)
+    if (
+        hashlib.sha256(writer_template_text.encode("utf-8")).hexdigest()
+        != resolved["execution_binding"]["writer_prompt_template_sha256"]
+        or hashlib.sha256(final_template_text.encode("utf-8")).hexdigest()
+        != resolved["execution_binding"]["final_prompt_template_sha256"]
+    ):
+        raise ValueError("SMSB capture rebuild template hash differs from P0")
+    writer_template = TokenTemplate(writer_template_text, tokenizer)
+    final_template = TokenTemplate(final_template_text, tokenizer)
+    recurrent = manifest["recurrent"]
+    backend = manifest["backend"]
+    no_memory_ids = list(
+        tokenizer.encode(
+            recurrent["no_memory_text"], add_special_tokens=False
+        )
+    )
+    for capture in captures:
+        validate_capture_record(capture)
+        raw_position = capture["raw_row_position"]
+        if type(raw_position) is not int or not 0 <= raw_position < 128:
+            raise ValueError("SMSB capture raw S128 position is invalid")
+        source = rows[raw_position]
+        prompt = source.get("prompt")
+        if (
+            not isinstance(prompt, list)
+            or len(prompt) != 1
+            or prompt[0].get("role") != "user"
+            or not isinstance(prompt[0].get("content"), str)
+        ):
+            raise ValueError("SMSB capture source prompt drifted")
+        question = prompt[0]["content"]
+        context = source.get("context")
+        ground_truth = source.get("reward_model", {}).get("ground_truth")
+        if not isinstance(context, str) or not isinstance(ground_truth, list):
+            raise ValueError("SMSB capture source context/ground truth drifted")
+        if (
+            hashlib.sha256(question.encode("utf-8")).hexdigest()
+            != capture["source_question_hash"]
+            or hashlib.sha256(context.encode("utf-8")).hexdigest()
+            != capture["source_context_hash"]
+            or canonical_sha256(ground_truth) != capture["ground_truth_hash"]
+            or list(ground_truth) != capture["ground_truth"]
+        ):
+            raise ValueError("SMSB capture source identity differs from S128")
+        question_ids = list(
+            tokenizer.encode(question, add_special_tokens=False)
+        )
+        context_ids = center_truncate_token_ids(
+            list(tokenizer.encode(context, add_special_tokens=False)),
+            recurrent["max_context_tokens"],
+        )
+        if question_ids != capture["question_token_ids"]:
+            raise ValueError("SMSB capture question token IDs differ from S128")
+        chunk_size = recurrent["chunk_size"]
+        expected_spans = [
+            (offset, min(offset + chunk_size, len(context_ids)))
+            for offset in range(0, len(context_ids), chunk_size)
+        ]
+        if len(expected_spans) != len(capture["memory_ledger"]):
+            raise ValueError("SMSB writer turn count differs from S128 chunks")
+        input_memory_ids = no_memory_ids
+        for turn, ((start, end), ledger) in enumerate(
+            zip(expected_spans, capture["memory_ledger"], strict=True)
+        ):
+            chunk_ids = context_ids[start:end]
+            writer_prompt_ids = writer_template.format(
+                prompt=question_ids,
+                memory=input_memory_ids,
+                chunk=chunk_ids,
+            ).tolist()
+            expected = {
+                "turn": turn,
+                "chunk_start": start,
+                "chunk_end": end,
+                "chunk_token_ids": chunk_ids,
+                "chunk_token_ids_sha256": canonical_sha256(chunk_ids),
+                "chunk_token_length": len(chunk_ids),
+                "input_memory_token_ids": input_memory_ids,
+                "input_memory_token_ids_sha256": canonical_sha256(
+                    input_memory_ids
+                ),
+                "input_memory_token_length": len(input_memory_ids),
+                "writer_prompt_token_ids": writer_prompt_ids,
+                "writer_prompt_token_ids_sha256": canonical_sha256(
+                    writer_prompt_ids
+                ),
+                "writer_prompt_token_length": len(writer_prompt_ids),
+            }
+            if any(ledger.get(field) != value for field, value in expected.items()):
+                raise ValueError(
+                    f"SMSB writer turn {turn} differs from independent S128 rebuild"
+                )
+            if tokenizer.decode(
+                ledger["token_ids"], skip_special_tokens=False
+            ) != ledger["text"]:
+                raise ValueError(f"SMSB writer turn {turn} output text/token drift")
+            validate_single_request_token_budget(
+                writer_prompt_ids,
+                recurrent["max_memory_tokens"],
+                max_model_len=backend["max_model_len"],
+                max_num_batched_tokens=backend["max_num_batched_tokens"],
+            )
+            input_memory_ids = list(ledger["token_ids"])
+        expected_final_prompt = final_template.format(
+            prompt=question_ids, memory=input_memory_ids
+        ).tolist()
+        if (
+            expected_final_prompt != capture["final_prompt_token_ids"]
+            or canonical_sha256(expected_final_prompt)
+            != capture["final_prompt_token_ids_sha256"]
+        ):
+            raise ValueError("SMSB final prompt differs from independent rebuild")
+        validate_single_request_token_budget(
+            expected_final_prompt,
+            recurrent["max_final_tokens"],
+            max_model_len=backend["max_model_len"],
+            max_num_batched_tokens=backend["max_num_batched_tokens"],
+        )
 
 
 def _rebuild_authoring_from_s128(
@@ -374,9 +516,46 @@ def _verify_parent_credential_record(
         "child_stdout_artifact_sha256": validated_receipt[
             "stdout_artifact_sha256"
         ],
+        "pre_child_model_manifest_sha256": validated_receipt[
+            "pre_child_model_manifest_sha256"
+        ],
+        "post_child_model_manifest_sha256": validated_receipt[
+            "post_child_model_manifest_sha256"
+        ],
+        "post_child_current_binding_sha256": validated_receipt[
+            "post_child_current_binding_sha256"
+        ],
+        "pre_child_physical_gpu_identity_sha256": validated_receipt[
+            "pre_child_physical_gpu_identity_sha256"
+        ],
+        "post_child_physical_gpu_identity_sha256": validated_receipt[
+            "post_child_physical_gpu_identity_sha256"
+        ],
+        "post_child_full_model_sha_verified": True,
     }
     if any(record.get(key) != value for key, value in expected_record.items()):
         raise ValueError("ledger differs from authenticated parent launch receipt")
+    expected_model_manifest = resolved["execution_binding"][
+        "model_manifest_sha256"
+    ]
+    expected_gpu_identity = resolved["runtime_binding"]["physical_gpu_identity"]
+    if (
+        validated_receipt.get("pre_child_full_model_sha_verified") is not True
+        or validated_receipt.get("post_child_full_model_sha_verified") is not True
+        or validated_receipt.get("pre_child_model_manifest_sha256")
+        != expected_model_manifest
+        or validated_receipt.get("post_child_model_manifest_sha256")
+        != expected_model_manifest
+        or validated_receipt.get("post_child_current_binding_sha256")
+        != current_binding_sha
+        or validated_receipt.get("pre_child_physical_gpu_identity")
+        != expected_gpu_identity
+        or validated_receipt.get("post_child_physical_gpu_identity")
+        != expected_gpu_identity
+        or validated_receipt.get("post_child_cuda_device_order")
+        != manifest["gpu"]["cuda_device_order"]
+    ):
+        raise ValueError("parent receipt pre/post model or GPU binding differs")
     if (
         Path(validated_receipt["artifact"]).resolve()
         != Path(str(record.get("artifact"))).resolve()
@@ -450,6 +629,19 @@ def authenticate_smsb_gate(manifest_path: Path) -> dict[str, Any]:
             raise ValueError("SMSB capture count is not four")
         for capture in captures:
             validate_capture_record(capture)
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            manifest["model"]["path"],
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+        _authenticate_capture_chain_from_s128(
+            manifest=manifest,
+            resolved=resolved,
+            captures=captures,
+            tokenizer=tokenizer,
+        )
         capture_receipt_id = _verify_parent_credential_record(
             record=records[1],
             result=captures[0]["execution"],
@@ -676,6 +868,19 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                         failures.append(f"SMSB capture {capture.get('example_id')} P0 field differs: {field}")
                 if capture.get("current_binding_sha256") != current_binding_sha:
                     failures.append("SMSB capture current binding differs")
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                manifest["model"]["path"],
+                trust_remote_code=True,
+                local_files_only=True,
+            )
+            _authenticate_capture_chain_from_s128(
+                manifest=manifest,
+                resolved=resolved,
+                captures=captures,
+                tokenizer=tokenizer,
+            )
             _verify_parent_credential_record(
                 record=records[1],
                 result=captures[0]["execution"],
@@ -803,13 +1008,8 @@ def audit(manifest_path: Path, *, write: bool) -> dict[str, Any]:
                 failures.append("Tetrad authoring is not bound by the construct ledger record")
             tetrad_rows = read_jsonl(paths["tetrad_manifest"])
             validate_tetrad_manifest(tetrad_rows)
-            from transformers import AutoTokenizer
             from recurrent.impls.memory import TEMPLATE_FINAL_BOXED
             from recurrent.utils import TokenTemplate, chat_template
-
-            tokenizer = AutoTokenizer.from_pretrained(
-                manifest["model"]["path"], trust_remote_code=True, local_files_only=True
-            )
             independently_rebuilt_authoring, expected_matching = (
                 _authenticate_authoring_from_s128(
                     authoring_rows,

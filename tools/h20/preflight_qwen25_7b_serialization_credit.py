@@ -34,6 +34,7 @@ from recurrent.research.serialization_credit_pilots import (  # noqa: E402
     require_finite_number,
     require_int,
     require_sha256,
+    validate_single_request_token_budget,
     validate_sampling_params,
     write_json_exclusive,
 )
@@ -267,6 +268,101 @@ def select_pilot_rows(
     if len({row["example_id"] for row in selected}) != 4:
         raise ValueError("pilot selection did not produce four unique examples")
     return selected
+
+
+def build_generation_capacity_audit(
+    *,
+    selected: list[dict[str, Any]],
+    parquet_rows: list[dict[str, Any]],
+    tokenizer: Any,
+    writer_template: Any,
+    final_template: Any,
+    manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Prove at P0 that every possible frozen writer/final call fits vLLM."""
+    recurrent = manifest["recurrent"]
+    backend = manifest["backend"]
+    no_memory = list(
+        tokenizer.encode(
+            recurrent["no_memory_text"], add_special_tokens=False
+        )
+    )
+    maximum_memory = [0] * require_int(
+        recurrent["max_memory_tokens"],
+        "recurrent.max_memory_tokens",
+        minimum=1,
+    )
+    chunk_size = require_int(
+        recurrent["chunk_size"], "recurrent.chunk_size", minimum=1
+    )
+    audit_rows: list[dict[str, Any]] = []
+    for pilot in selected:
+        raw_position = require_int(
+            pilot["raw_row_position"], "pilot.raw_row_position", minimum=0
+        )
+        source = parquet_rows[raw_position]
+        question_ids = list(
+            tokenizer.encode(_question(source), add_special_tokens=False)
+        )
+        context_ids = center_truncate_token_ids(
+            list(
+                tokenizer.encode(
+                    str(source["context"]), add_special_tokens=False
+                )
+            ),
+            recurrent["max_context_tokens"],
+        )
+        writer_turns: list[dict[str, Any]] = []
+        for turn, offset in enumerate(range(0, len(context_ids), chunk_size)):
+            chunk_ids = context_ids[offset : offset + chunk_size]
+            memory_upper_bound = no_memory if turn == 0 else maximum_memory
+            prompt_ids = writer_template.format(
+                prompt=question_ids,
+                memory=memory_upper_bound,
+                chunk=chunk_ids,
+            ).tolist()
+            budget = validate_single_request_token_budget(
+                prompt_ids,
+                recurrent["max_memory_tokens"],
+                max_model_len=backend["max_model_len"],
+                max_num_batched_tokens=backend["max_num_batched_tokens"],
+            )
+            if (
+                turn == 0
+                and canonical_sha256(prompt_ids)
+                != pilot["writer_turn0_prompt_token_sha256"]
+            ):
+                raise ValueError("P0 writer turn0 capacity prompt differs from selection")
+            writer_turns.append(
+                {
+                    "turn": turn,
+                    "chunk_start": offset,
+                    "chunk_end": offset + len(chunk_ids),
+                    "input_memory_token_upper_bound": len(memory_upper_bound),
+                    **budget,
+                }
+            )
+        if not writer_turns or len(writer_turns) > recurrent["max_chunks"]:
+            raise ValueError("P0 capacity audit writer turn count is invalid")
+        final_prompt_ids = final_template.format(
+            prompt=question_ids, memory=maximum_memory
+        ).tolist()
+        final_budget = validate_single_request_token_budget(
+            final_prompt_ids,
+            recurrent["max_final_tokens"],
+            max_model_len=backend["max_model_len"],
+            max_num_batched_tokens=backend["max_num_batched_tokens"],
+        )
+        audit_rows.append(
+            {
+                "example_id": str(pilot["example_id"]),
+                "writer_turns": writer_turns,
+                "final_reader_upper_bound": final_budget,
+            }
+        )
+    if len(audit_rows) != 4:
+        raise ValueError("P0 capacity audit requires exactly four pilot examples")
+    return audit_rows
 
 
 def _model_loading_paths(model_root: Path) -> list[str]:
@@ -610,6 +706,11 @@ def run_preflight(
             "parent_issued_single_use_credential_per_child",
             "parent_hmac_authenticated_receipt_per_child",
             "parent_observed_child_pid_ppid_exit_and_stdout_sha",
+            "post_child_full_model_sha_per_child",
+            "post_child_gpu_identity_query_per_child",
+            "p0_and_per_call_token_capacity_gate",
+            "writer_turn_token_chain_independently_rebuilt",
+            "automatic_post_write_readonly_reaudit",
             "unique_parent_supervisor_pid_required",
             "unique_child_pid_required",
         ):
@@ -725,6 +826,7 @@ def run_preflight(
             writer_template_text = chat_template(tokenizer).format(message=TEMPLATE)
             writer_template = TokenTemplate(writer_template_text, tokenizer)
             final_template_text = chat_template(tokenizer).format(message=TEMPLATE_FINAL_BOXED)
+            final_template = TokenTemplate(final_template_text, tokenizer)
 
             def writer_builder(question_ids: list[int], memory_ids: list[int], chunk_ids: list[int]) -> list[int]:
                 return writer_template.format(
@@ -742,6 +844,14 @@ def run_preflight(
                 eval_manifest_hash=stable_resolved["eval_manifest_hash"],
                 base_seed=int(manifest["backend"]["engine_seed"]),
                 chunk_size=int(manifest["recurrent"]["chunk_size"]),
+            )
+            generation_capacity_audit = build_generation_capacity_audit(
+                selected=selected,
+                parquet_rows=parquet_rows,
+                tokenizer=tokenizer,
+                writer_template=writer_template,
+                final_template=final_template,
+                manifest=manifest,
             )
             engine_config = {
                 **dict(manifest["backend"]),
@@ -775,6 +885,10 @@ def run_preflight(
                 ).hexdigest(),
                 "engine_config": engine_config,
                 "engine_config_sha256": canonical_sha256(engine_config),
+                "generation_capacity_audit": generation_capacity_audit,
+                "generation_capacity_audit_sha256": canonical_sha256(
+                    generation_capacity_audit
+                ),
                 "recurrent": manifest["recurrent"],
                 "smsb": manifest["smsb"],
                 "tetrad": manifest["tetrad"],
@@ -805,6 +919,9 @@ def run_preflight(
                 pilot_source_order_indices=[row["source_order_index"] for row in selected],
                 runtime_binding_sha256=resolved["runtime_binding_sha256"],
                 execution_binding_sha256=resolved["execution_binding_sha256"],
+                generation_capacity_audit_sha256=execution_binding[
+                    "generation_capacity_audit_sha256"
+                ],
             )
         except Exception as error:
             failures.append(f"cannot freeze pilot execution binding: {error}")
@@ -1287,6 +1404,24 @@ def record_stage(
             child_stdout_artifact=validated_receipt["stdout_artifact"],
             child_stdout_artifact_sha256=validated_receipt[
                 "stdout_artifact_sha256"
+            ],
+            pre_child_model_manifest_sha256=validated_receipt[
+                "pre_child_model_manifest_sha256"
+            ],
+            post_child_model_manifest_sha256=validated_receipt[
+                "post_child_model_manifest_sha256"
+            ],
+            post_child_current_binding_sha256=validated_receipt[
+                "post_child_current_binding_sha256"
+            ],
+            pre_child_physical_gpu_identity_sha256=validated_receipt[
+                "pre_child_physical_gpu_identity_sha256"
+            ],
+            post_child_physical_gpu_identity_sha256=validated_receipt[
+                "post_child_physical_gpu_identity_sha256"
+            ],
+            post_child_full_model_sha_verified=validated_receipt[
+                "post_child_full_model_sha_verified"
             ],
         )
     append_jsonl(ledger_path, record)

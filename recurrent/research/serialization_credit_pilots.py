@@ -103,6 +103,11 @@ def build_parent_launch_receipt(
         "current_binding_sha256",
         "runtime_binding_sha256",
         "execution_binding_sha256",
+        "pre_child_model_manifest_sha256",
+        "post_child_model_manifest_sha256",
+        "post_child_current_binding_sha256",
+        "pre_child_physical_gpu_identity_sha256",
+        "post_child_physical_gpu_identity_sha256",
         "authority_secret_sha256",
     ):
         require_sha256(receipt.get(field), f"receipt.{field}")
@@ -114,6 +119,34 @@ def build_parent_launch_receipt(
         raise ValueError("parent receipt child exit code is not zero")
     if receipt.get("parent_observed_launch") is not True:
         raise ValueError("parent receipt lacks parent-observed launch evidence")
+    if receipt.get("pre_child_full_model_sha_verified") is not True:
+        raise ValueError("parent receipt lacks child-start full model SHA evidence")
+    if receipt.get("post_child_full_model_sha_verified") is not True:
+        raise ValueError("parent receipt lacks parent post-child full model SHA evidence")
+    for field in (
+        "pre_child_physical_gpu_identity",
+        "post_child_physical_gpu_identity",
+    ):
+        identities = receipt.get(field)
+        if (
+            not isinstance(identities, list)
+            or len(identities) != 2
+            or any(not isinstance(value, str) or not value for value in identities)
+        ):
+            raise ValueError(f"parent receipt {field} must contain two devices")
+        if receipt.get(f"{field}_sha256") != canonical_sha256(identities):
+            raise ValueError(f"parent receipt {field} digest differs")
+    if receipt.get("post_child_cuda_device_order") != "PCI_BUS_ID":
+        raise ValueError("parent receipt post-child CUDA_DEVICE_ORDER differs")
+    if (
+        receipt.get("post_child_model_manifest_sha256")
+        != receipt.get("pre_child_model_manifest_sha256")
+        or receipt.get("post_child_current_binding_sha256")
+        != receipt.get("current_binding_sha256")
+        or receipt.get("post_child_physical_gpu_identity")
+        != receipt.get("pre_child_physical_gpu_identity")
+    ):
+        raise ValueError("parent receipt post-child model/GPU differs from pre-child")
     if receipt.get("training_authorized") is not False:
         raise ValueError("parent receipt improperly authorizes training")
     unsigned = dict(receipt)
@@ -167,6 +200,18 @@ def validate_parent_launch_receipt(
         "execution_binding_sha256": child_evidence.get(
             "execution_binding_sha256",
             child_evidence.get("engine_config_sha256"),
+        ),
+        "pre_child_model_manifest_sha256": child_evidence.get(
+            "model_manifest_sha256"
+        ),
+        "pre_child_full_model_sha_verified": child_evidence.get(
+            "full_model_sha_verified_at_child_start"
+        ),
+        "pre_child_physical_gpu_identity": child_evidence.get(
+            "physical_gpu_identity"
+        ),
+        "pre_child_physical_gpu_identity_sha256": canonical_sha256(
+            child_evidence.get("physical_gpu_identity")
         ),
     }
     for field, value in expected_cross_binding.items():
@@ -281,6 +326,41 @@ def center_truncate_token_ids(value: list[int], maximum: Any) -> list[int]:
     return ids[:half] + ids[-half:]
 
 
+def validate_single_request_token_budget(
+    prompt_token_ids: list[int],
+    max_tokens: Any,
+    *,
+    max_model_len: Any,
+    max_num_batched_tokens: Any,
+) -> dict[str, int]:
+    """Fail before vLLM when one prompt plus its output budget exceeds capacity."""
+    prompt = token_ids(
+        prompt_token_ids, "generation.prompt_token_ids", allow_empty=False
+    )
+    output_limit = require_int(max_tokens, "generation.max_tokens", minimum=1)
+    model_limit = require_int(max_model_len, "backend.max_model_len", minimum=1)
+    batched_limit = require_int(
+        max_num_batched_tokens,
+        "backend.max_num_batched_tokens",
+        minimum=1,
+    )
+    capacity = min(model_limit, batched_limit)
+    total = len(prompt) + output_limit
+    if total > capacity:
+        raise ValueError(
+            "single-request token budget exceeds frozen vLLM capacity: "
+            f"prompt_tokens={len(prompt)}, max_tokens={output_limit}, "
+            f"total={total}, max_model_len={model_limit}, "
+            f"max_num_batched_tokens={batched_limit}, capacity={capacity}"
+        )
+    return {
+        "prompt_tokens": len(prompt),
+        "max_tokens": output_limit,
+        "total_tokens": total,
+        "capacity_tokens": capacity,
+    }
+
+
 def _stable_identity(payload: Mapping[str, Any]) -> dict[str, Any]:
     missing = [field for field in STABLE_FIELDS if field not in payload]
     if missing:
@@ -378,11 +458,85 @@ def build_capture_record(payload: Mapping[str, Any]) -> dict[str, Any]:
             f"memory_ledger[{turn}].generate_call_index",
             minimum=1,
         )
+        writer_prompt_ids = token_ids(
+            raw.get("writer_prompt_token_ids"),
+            f"memory_ledger[{turn}].writer_prompt_token_ids",
+            allow_empty=False,
+        )
+        chunk_start = require_int(
+            raw.get("chunk_start"),
+            f"memory_ledger[{turn}].chunk_start",
+            minimum=0,
+        )
+        chunk_end = require_int(
+            raw.get("chunk_end"),
+            f"memory_ledger[{turn}].chunk_end",
+            minimum=1,
+        )
+        chunk_ids = token_ids(
+            raw.get("chunk_token_ids"),
+            f"memory_ledger[{turn}].chunk_token_ids",
+            allow_empty=False,
+        )
+        input_memory_ids = token_ids(
+            raw.get("input_memory_token_ids"),
+            f"memory_ledger[{turn}].input_memory_token_ids",
+            allow_empty=False,
+        )
+        if chunk_end <= chunk_start or chunk_end - chunk_start != len(chunk_ids):
+            raise ValueError(f"memory ledger turn {turn} chunk span differs from IDs")
+        if turn == 0:
+            if chunk_start != 0:
+                raise ValueError("memory ledger first chunk must start at zero")
+        else:
+            if chunk_start != ledger[-1]["chunk_end"]:
+                raise ValueError("memory ledger chunk spans must be contiguous")
+            if input_memory_ids != ledger[-1]["token_ids"]:
+                raise ValueError(
+                    f"memory ledger turn {turn} input memory differs from prior output"
+                )
+        derived_fields = {
+            "writer_prompt_token_ids_sha256": canonical_sha256(writer_prompt_ids),
+            "writer_prompt_token_length": len(writer_prompt_ids),
+            "chunk_token_ids_sha256": canonical_sha256(chunk_ids),
+            "chunk_token_length": len(chunk_ids),
+            "input_memory_token_ids_sha256": canonical_sha256(input_memory_ids),
+            "input_memory_token_length": len(input_memory_ids),
+        }
+        for field, expected in derived_fields.items():
+            supplied = raw.get(field)
+            if field.endswith("_sha256"):
+                require_sha256(supplied, f"memory_ledger[{turn}].{field}")
+            else:
+                require_int(
+                    supplied, f"memory_ledger[{turn}].{field}", minimum=1
+                )
+            if supplied != expected:
+                raise ValueError(
+                    f"memory ledger turn {turn} {field} differs from token IDs"
+                )
         text = str(raw["text"])
         ids = token_ids(raw["token_ids"], f"memory_ledger[{turn}].token_ids")
         ledger.append(
             {
                 "turn": turn,
+                "writer_prompt_token_ids": writer_prompt_ids,
+                "writer_prompt_token_ids_sha256": derived_fields[
+                    "writer_prompt_token_ids_sha256"
+                ],
+                "writer_prompt_token_length": len(writer_prompt_ids),
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
+                "chunk_token_ids": chunk_ids,
+                "chunk_token_ids_sha256": derived_fields[
+                    "chunk_token_ids_sha256"
+                ],
+                "chunk_token_length": len(chunk_ids),
+                "input_memory_token_ids": input_memory_ids,
+                "input_memory_token_ids_sha256": derived_fields[
+                    "input_memory_token_ids_sha256"
+                ],
+                "input_memory_token_length": len(input_memory_ids),
                 "text": text,
                 "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 "token_ids": ids,
@@ -465,6 +619,13 @@ def build_capture_record(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("capture prefix cache must be disabled")
     if execution.get("full_model_sha_verified_at_capture_start") is not True:
         raise ValueError("capture start did not certify a full model SHA verification")
+    if execution.get("full_model_sha_verified_at_child_start") is not True:
+        raise ValueError("capture child start did not certify a full model SHA verification")
+    if require_sha256(
+        execution.get("model_manifest_sha256"),
+        "execution.model_manifest_sha256",
+    ) != hashes["model"]:
+        raise ValueError("capture execution model manifest differs from provenance")
     if not isinstance(execution.get("process_instance_uuid"), str) or not execution[
         "process_instance_uuid"
     ]:
@@ -733,6 +894,8 @@ def validate_replay(
         errors.append("execution_gpu_identity_mismatch")
     if result.get("full_model_sha_verified_at_child_start") is not True:
         errors.append("child_full_model_sha_not_verified")
+    if result.get("model_manifest_sha256") != capture.get("hashes", {}).get("model"):
+        errors.append("child_model_manifest_mismatch")
     l1 = (
         bool(l0 and replay_answer == capture.get("temperature_zero_control_answer_token_ids"))
         if regime == "temperature_zero"
@@ -1589,6 +1752,7 @@ def adjudicate_tetrad_pilot(
                 result.get("physical_gpu_identity") == request["physical_gpu_identity"],
                 result.get("cuda_device_order") == request["cuda_device_order"],
                 result.get("full_model_sha_verified_at_child_start") is True,
+                result.get("model_manifest_sha256") == request["hashes"]["model"],
                 prompt_ids == request["expected_prompt_token_ids"],
                 canonical_sha256(prompt_ids)
                 == request["expected_prompt_token_sha256"],

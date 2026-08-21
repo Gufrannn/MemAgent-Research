@@ -27,18 +27,21 @@ from recurrent.research.serialization_credit_pilots import (
     parent_authority_mac,
     validate_capture_record,
     validate_replay,
+    validate_single_request_token_budget,
     validate_tetrad_manifest,
 )
 from recurrent.research.s128_hotpot_metrics import score_terminal_output
 from recurrent.research.trajectory_seeding import derive_turn_request_seeds
 from tools.h20.preflight_qwen25_7b_serialization_credit import (
     _validate_numeric_contract,
+    build_generation_capacity_audit,
     select_pilot_rows,
     validate_child_credential,
     verify_current_binding,
 )
 from tools.h20.audit_qwen25_7b_serialization_credit import (
     _authenticate_authoring_from_s128,
+    _authenticate_capture_chain_from_s128,
     _rebuild_authoring_from_s128,
     _schema_failures,
 )
@@ -83,6 +86,9 @@ def capture(index: int, call_start: int, *, process_generate_count: int = 12) ->
     writer_seed = derive_turn_request_seeds([trajectory_seed], [0], 0)[0]
     final_seed = derive_turn_request_seeds([trajectory_seed], [0], 1)[0]
     memory = [40 + index]
+    input_memory = [30 + index]
+    chunk = [35 + index]
+    writer_prompt = [10, 20 + index, 11, *input_memory, 12, *chunk, 13]
     return build_capture_record(
         {
             **identity(index),
@@ -92,6 +98,21 @@ def capture(index: int, call_start: int, *, process_generate_count: int = 12) ->
             "memory_ledger": [
                 {
                     "turn": 0,
+                    "writer_prompt_token_ids": writer_prompt,
+                    "writer_prompt_token_ids_sha256": canonical_sha256(
+                        writer_prompt
+                    ),
+                    "writer_prompt_token_length": len(writer_prompt),
+                    "chunk_start": 0,
+                    "chunk_end": len(chunk),
+                    "chunk_token_ids": chunk,
+                    "chunk_token_ids_sha256": canonical_sha256(chunk),
+                    "chunk_token_length": len(chunk),
+                    "input_memory_token_ids": input_memory,
+                    "input_memory_token_ids_sha256": canonical_sha256(
+                        input_memory
+                    ),
+                    "input_memory_token_length": len(input_memory),
                     "text": f"memory-{index}",
                     "token_ids": memory,
                     "request_seed": writer_seed,
@@ -145,6 +166,8 @@ def capture(index: int, call_start: int, *, process_generate_count: int = 12) ->
                 "engine_construction_count": 1,
                 "generate_call_count": process_generate_count,
                 "full_model_sha_verified_at_capture_start": True,
+                "full_model_sha_verified_at_child_start": True,
+                "model_manifest_sha256": HEX,
                 "parent_credential_id": "a" * 64,
                 "parent_credential_mac": "b" * 64,
                 "parent_credential_sha256": "c" * 64,
@@ -190,6 +213,7 @@ def replay_payload(item: dict, regime: str, ordinal: int) -> dict:
         "engine_config_sha256": item["engine_config_sha256"],
         "current_binding_sha256": item["current_binding_sha256"],
         "execution_binding_sha256": "d" * 64,
+        "model_manifest_sha256": item["hashes"]["model"],
         "prompt_token_ids": item["final_prompt_token_ids"],
         "prompt_token_ids_sha256": canonical_sha256(item["final_prompt_token_ids"]),
         "answer_token_ids": answer,
@@ -258,6 +282,32 @@ def parent_receipt(
             "current_binding_sha256": evidence["current_binding_sha256"],
             "runtime_binding_sha256": evidence["runtime_binding_sha256"],
             "execution_binding_sha256": evidence["execution_binding_sha256"],
+            "pre_child_full_model_sha_verified": evidence[
+                "full_model_sha_verified_at_child_start"
+            ],
+            "pre_child_model_manifest_sha256": evidence[
+                "model_manifest_sha256"
+            ],
+            "pre_child_physical_gpu_identity": evidence[
+                "physical_gpu_identity"
+            ],
+            "pre_child_physical_gpu_identity_sha256": canonical_sha256(
+                evidence["physical_gpu_identity"]
+            ),
+            "post_child_full_model_sha_verified": True,
+            "post_child_model_manifest_sha256": evidence[
+                "model_manifest_sha256"
+            ],
+            "post_child_current_binding_sha256": evidence[
+                "current_binding_sha256"
+            ],
+            "post_child_physical_gpu_identity": evidence[
+                "physical_gpu_identity"
+            ],
+            "post_child_physical_gpu_identity_sha256": canonical_sha256(
+                evidence["physical_gpu_identity"]
+            ),
+            "post_child_cuda_device_order": "PCI_BUS_ID",
             "authority_secret_sha256": hashlib.sha256(
                 AUTHORITY_SECRET
             ).hexdigest(),
@@ -434,6 +484,7 @@ def tetrad_fixture() -> tuple[list[dict], list[dict], list[dict]]:
                 "engine_config_sha256": request["engine_config_sha256"],
                 "current_binding_sha256": request["current_binding_sha256"],
                 "execution_binding_sha256": "d" * 64,
+                "model_manifest_sha256": request["hashes"]["model"],
             }
         )
     return authoring, requests, results
@@ -528,6 +579,28 @@ def test_parent_receipt_mac_and_unique_supervisor_pid_are_gate_critical() -> Non
     )
     assert report["status"] == "FAIL"
     assert "parent_launcher_pid_not_unique" in report["errors"]
+
+    post_model_tamper = {
+        key: value
+        for key, value in replay_receipts[0].items()
+        if key not in {"receipt_id", "receipt_mac"}
+    }
+    post_model_tamper["post_child_model_manifest_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="post-child model/GPU"):
+        build_parent_launch_receipt(post_model_tamper, AUTHORITY_SECRET)
+    post_gpu_tamper = {
+        key: value
+        for key, value in replay_receipts[0].items()
+        if key not in {"receipt_id", "receipt_mac"}
+    }
+    post_gpu_tamper["post_child_physical_gpu_identity"] = list(
+        reversed(GPU_IDENTITIES)
+    )
+    post_gpu_tamper["post_child_physical_gpu_identity_sha256"] = canonical_sha256(
+        post_gpu_tamper["post_child_physical_gpu_identity"]
+    )
+    with pytest.raises(ValueError, match="post-child model/GPU"):
+        build_parent_launch_receipt(post_gpu_tamper, AUTHORITY_SECRET)
 
 
 def test_smsb_duplicate_process_or_broken_call_schedule_fails_closed() -> None:
@@ -827,6 +900,132 @@ def test_derangement_caliper_and_center_truncation() -> None:
         best_length_derangement({"a": 1, "b": 100, "c": 200, "d": 300}, maximum_caliper=10)
     assert center_truncate_token_ids(list(range(10)), 6) == [0, 1, 2, 7, 8, 9]
     assert center_truncate_token_ids(list(range(10)), 5) == [0, 1, 8, 9]
+
+
+def test_single_request_token_capacity_fails_before_vllm_generate() -> None:
+    assert validate_single_request_token_budget(
+        [1, 2, 3], 2, max_model_len=8, max_num_batched_tokens=5
+    ) == {
+        "prompt_tokens": 3,
+        "max_tokens": 2,
+        "total_tokens": 5,
+        "capacity_tokens": 5,
+    }
+    with pytest.raises(ValueError, match="prompt_tokens=4.*max_tokens=2"):
+        validate_single_request_token_budget(
+            [1, 2, 3, 4],
+            2,
+            max_model_len=8,
+            max_num_batched_tokens=5,
+        )
+    with pytest.raises(ValueError, match="not bool/float/string"):
+        validate_single_request_token_budget(
+            [1], True, max_model_len=8, max_num_batched_tokens=8
+        )
+
+    class NeverGenerate:
+        def generate(self, **kwargs):
+            del kwargs
+            raise AssertionError("vLLM generate must not be reached")
+
+    class SamplingParams:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_vllm = types.ModuleType("vllm")
+    fake_vllm.SamplingParams = SamplingParams
+    from tools.h20 import run_qwen25_7b_serialization_credit as runner
+
+    before = runner._GENERATE_CALL_COUNT
+    with patch.dict(sys.modules, {"vllm": fake_vllm}), pytest.raises(
+        ValueError, match="exceeds frozen vLLM capacity"
+    ):
+        runner._generate_one(
+            NeverGenerate(),
+            [1, 2, 3, 4],
+            {"max_tokens": 2},
+            manifest={
+                "backend": {
+                    "max_model_len": 5,
+                    "max_num_batched_tokens": 5,
+                }
+            },
+        )
+    assert runner._GENERATE_CALL_COUNT == before
+
+
+def test_p0_capacity_audit_covers_every_writer_turn_and_final_call() -> None:
+    class TokenVector(list):
+        def tolist(self) -> list[int]:
+            return list(self)
+
+    class WriterTemplate:
+        def format(self, *, prompt, memory, chunk):
+            return TokenVector([1, *prompt, 2, *memory, 3, *chunk, 4])
+
+    class FinalTemplate:
+        def format(self, *, prompt, memory):
+            return TokenVector([5, *prompt, 6, *memory, 7])
+
+    tokenizer = FakeTokenizer()
+    rows = [
+        {
+            "prompt": [{"role": "user", "content": f"q{index}"}],
+            "context": "abcd",
+        }
+        for index in range(4)
+    ]
+    writer = WriterTemplate()
+    selected = []
+    no_memory = tokenizer.encode("No previous memory")
+    for index, row in enumerate(rows):
+        question = tokenizer.encode(row["prompt"][0]["content"])
+        first_chunk = tokenizer.encode(row["context"])[:2]
+        prompt_ids = writer.format(
+            prompt=question, memory=no_memory, chunk=first_chunk
+        ).tolist()
+        selected.append(
+            {
+                "example_id": str(index),
+                "raw_row_position": index,
+                "writer_turn0_prompt_token_sha256": canonical_sha256(
+                    prompt_ids
+                ),
+            }
+        )
+    manifest = {
+        "recurrent": {
+            "no_memory_text": "No previous memory",
+            "max_context_tokens": 4,
+            "chunk_size": 2,
+            "max_chunks": 2,
+            "max_memory_tokens": 2,
+            "max_final_tokens": 2,
+        },
+        "backend": {"max_model_len": 64, "max_num_batched_tokens": 64},
+    }
+    audit = build_generation_capacity_audit(
+        selected=selected,
+        parquet_rows=rows,
+        tokenizer=tokenizer,
+        writer_template=writer,
+        final_template=FinalTemplate(),
+        manifest=manifest,
+    )
+    assert len(audit) == 4
+    assert all(len(row["writer_turns"]) == 2 for row in audit)
+    assert all(row["final_reader_upper_bound"] for row in audit)
+    overflow = copy.deepcopy(manifest)
+    overflow["backend"]["max_num_batched_tokens"] = 5
+    with pytest.raises(ValueError, match="exceeds frozen vLLM capacity"):
+        build_generation_capacity_audit(
+            selected=selected,
+            parquet_rows=rows,
+            tokenizer=tokenizer,
+            writer_template=writer,
+            final_template=FinalTemplate(),
+            manifest=overflow,
+        )
 
 
 class FakeTokenizer:
@@ -1134,6 +1333,142 @@ def test_authoring_is_independently_rebuilt_from_s128_and_flags_are_not_trusted(
             _authenticate_authoring_from_s128(ground_truth_tamper, **kwargs)
 
 
+def test_smsb_writer_chain_is_independently_rebuilt_from_s128() -> None:
+    class TokenVector(list):
+        def tolist(self) -> list[int]:
+            return list(self)
+
+    class FakeTokenTemplate:
+        def __init__(self, template_text: str, tokenizer: FakeTokenizer):
+            del tokenizer
+            self.template_text = template_text
+
+        def format(self, *, prompt, memory, chunk=None):
+            if self.template_text == "WRITER":
+                return TokenVector([1, *prompt, 2, *memory, 3, *chunk, 4])
+            return TokenVector([5, *prompt, 6, *memory, 7])
+
+    tokenizer = FakeTokenizer()
+    parquet_rows: list[dict] = []
+    captures: list[dict] = []
+    for index in range(128):
+        question = f"q{index}"
+        context = f"context-{index}"
+        answer = f"answer-{index}"
+        parquet_rows.append(
+            {
+                "prompt": [{"role": "user", "content": question}],
+                "context": context,
+                "reward_model": {"ground_truth": [answer]},
+                "extra_info": {"index": index},
+            }
+        )
+        if index >= 4:
+            continue
+        raw = copy.deepcopy(capture(index, index * 3 + 1))
+        raw.pop("capture_id")
+        question_ids = tokenizer.encode(question)
+        chunk_ids = tokenizer.encode(context)
+        input_memory_ids = tokenizer.encode("No previous memory")
+        memory_ids = tokenizer.encode(f"M{index}")
+        writer_ids = FakeTokenTemplate("WRITER", tokenizer).format(
+            prompt=question_ids,
+            memory=input_memory_ids,
+            chunk=chunk_ids,
+        ).tolist()
+        ledger = raw["memory_ledger"][0]
+        ledger.update(
+            writer_prompt_token_ids=writer_ids,
+            writer_prompt_token_ids_sha256=canonical_sha256(writer_ids),
+            writer_prompt_token_length=len(writer_ids),
+            chunk_start=0,
+            chunk_end=len(chunk_ids),
+            chunk_token_ids=chunk_ids,
+            chunk_token_ids_sha256=canonical_sha256(chunk_ids),
+            chunk_token_length=len(chunk_ids),
+            input_memory_token_ids=input_memory_ids,
+            input_memory_token_ids_sha256=canonical_sha256(input_memory_ids),
+            input_memory_token_length=len(input_memory_ids),
+            text=tokenizer.decode(memory_ids),
+            token_ids=memory_ids,
+        )
+        final_ids = FakeTokenTemplate("FINAL", tokenizer).format(
+            prompt=question_ids, memory=memory_ids
+        ).tolist()
+        raw.update(
+            question_token_ids=question_ids,
+            final_memory_token_ids=memory_ids,
+            final_prompt_token_ids=final_ids,
+            prompt_template_sha256=hashlib.sha256(b"FINAL").hexdigest(),
+            source_question_hash=hashlib.sha256(question.encode()).hexdigest(),
+            source_context_hash=hashlib.sha256(context.encode()).hexdigest(),
+            ground_truth_hash=canonical_sha256([answer]),
+            ground_truth=[answer],
+        )
+        captures.append(build_capture_record(raw))
+
+    class FakeTable:
+        def to_pylist(self) -> list[dict]:
+            return copy.deepcopy(parquet_rows)
+
+    parquet_module = types.ModuleType("pyarrow.parquet")
+    parquet_module.read_table = lambda *args, **kwargs: FakeTable()
+    pyarrow_module = types.ModuleType("pyarrow")
+    pyarrow_module.parquet = parquet_module
+    memory_module = types.ModuleType("recurrent.impls.memory")
+    memory_module.TEMPLATE = "WRITER"
+    memory_module.TEMPLATE_FINAL_BOXED = "FINAL"
+    utils_module = types.ModuleType("recurrent.utils")
+    utils_module.TokenTemplate = FakeTokenTemplate
+    utils_module.chat_template = lambda tokenizer: "{message}"
+    fake_modules = {
+        "pyarrow": pyarrow_module,
+        "pyarrow.parquet": parquet_module,
+        "recurrent.impls.memory": memory_module,
+        "recurrent.utils": utils_module,
+    }
+    manifest = {
+        "data": {"validation": "/fixture/fixed-s128.parquet"},
+        "recurrent": {
+            "no_memory_text": "No previous memory",
+            "max_context_tokens": 100,
+            "chunk_size": 100,
+            "max_memory_tokens": 16,
+            "max_final_tokens": 16,
+        },
+        "backend": {"max_model_len": 512, "max_num_batched_tokens": 512},
+    }
+    resolved = {
+        "execution_binding": {
+            "writer_prompt_template_sha256": hashlib.sha256(b"WRITER").hexdigest(),
+            "final_prompt_template_sha256": hashlib.sha256(b"FINAL").hexdigest(),
+        }
+    }
+    with patch.dict(sys.modules, fake_modules):
+        _authenticate_capture_chain_from_s128(
+            manifest=manifest,
+            resolved=resolved,
+            captures=captures,
+            tokenizer=tokenizer,
+        )
+        tampered = copy.deepcopy(captures)
+        tampered_raw = copy.deepcopy(tampered[0])
+        tampered_raw["memory_ledger"][0]["writer_prompt_token_ids"][0] = 99
+        tampered_raw["memory_ledger"][0][
+            "writer_prompt_token_ids_sha256"
+        ] = canonical_sha256(
+            tampered_raw["memory_ledger"][0]["writer_prompt_token_ids"]
+        )
+        tampered[0] = build_capture_record(tampered_raw)
+        with pytest.raises(ValueError, match="independent S128 rebuild"):
+            _authenticate_capture_chain_from_s128(
+                manifest=manifest,
+                resolved=resolved,
+                captures=tampered,
+                tokenizer=tokenizer,
+            )
+
+
 def test_ledger_schema_rejects_numeric_strings_and_bool_indices(tmp_path: Path) -> None:
     schema = REPO / "serialization_credit_pilot_execution_ledger.schema.json"
     record = {
@@ -1162,6 +1497,38 @@ def test_ledger_schema_rejects_numeric_strings_and_bool_indices(tmp_path: Path) 
     bad["record_index"] = False
     assert _schema_failures(schema, [bad])
 
+    supervised = {
+        **record,
+        "record_type": "smsb_capture",
+        "parent_credential_id": "7" * 64,
+        "parent_credential_mac": "8" * 64,
+        "parent_credential_sha256": "9" * 64,
+        "parent_credential_path": "/fixture/credential.json",
+        "process_pid": 123,
+        "parent_receipt_path": "/fixture/receipt.json",
+        "parent_receipt_sha256": "a" * 64,
+        "parent_receipt_id": "b" * 64,
+        "parent_receipt_mac": "c" * 64,
+        "parent_launcher_pid": 122,
+        "observed_child_ppid": 122,
+        "child_exit_code": 0,
+        "child_stdout_artifact": "/fixture/child.log",
+        "child_stdout_artifact_sha256": "d" * 64,
+        "pre_child_model_manifest_sha256": "e" * 64,
+        "post_child_model_manifest_sha256": "e" * 64,
+        "post_child_current_binding_sha256": "4" * 64,
+        "pre_child_physical_gpu_identity_sha256": "f" * 64,
+        "post_child_physical_gpu_identity_sha256": "f" * 64,
+        "post_child_full_model_sha_verified": True,
+    }
+    assert _schema_failures(schema, [supervised]) == []
+    missing_post = copy.deepcopy(supervised)
+    missing_post.pop("post_child_model_manifest_sha256")
+    assert _schema_failures(schema, [missing_post])
+    false_post = copy.deepcopy(supervised)
+    false_post["post_child_full_model_sha_verified"] = False
+    assert _schema_failures(schema, [false_post])
+
 
 def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -1181,6 +1548,11 @@ def test_static_freeze_is_strict_vllm_no_training_and_conditionally_ordered() ->
     assert commands["execution"]["parent_issued_single_use_credential_per_child"] is True
     assert commands["execution"]["parent_hmac_authenticated_receipt_per_child"] is True
     assert commands["execution"]["parent_observed_child_pid_ppid_exit_and_stdout_sha"] is True
+    assert commands["execution"]["post_child_full_model_sha_per_child"] is True
+    assert commands["execution"]["post_child_gpu_identity_query_per_child"] is True
+    assert commands["execution"]["p0_and_per_call_token_capacity_gate"] is True
+    assert commands["execution"]["writer_turn_token_chain_independently_rebuilt"] is True
+    assert commands["execution"]["automatic_post_write_readonly_reaudit"] is True
     assert commands["execution"]["unique_parent_supervisor_pid_required"] is True
     assert commands["execution"]["unique_child_pid_required"] is True
 
@@ -1193,6 +1565,9 @@ def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> 
     preflight_source = (
         REPO / "tools/h20/preflight_qwen25_7b_serialization_credit.py"
     ).read_text()
+    launcher_source = (
+        REPO / "tools/h20/launch_qwen25_7b_serialization_credit_child.py"
+    ).read_text()
     launcher = "launch_qwen25_7b_serialization_credit_child.py"
     assert "list-tetrad-requests" in tetrad_shell
     assert "chr(9).join" not in tetrad_shell
@@ -1200,6 +1575,16 @@ def test_shell_and_audit_sources_encode_fresh_process_and_readonly_reaudit() -> 
     assert launcher in tetrad_shell
     assert launcher in smsb_shell
     assert "--issue-child-credential" not in preflight_source
+    assert launcher_source.index("exit_code = process.wait()") < launcher_source.index(
+        "post_child_current_binding_sha = verify_current_binding"
+    )
+    assert "full_model_sha=True" in launcher_source
+    assert "post_child_gpu_identity = _physical_gpu_identity" in launcher_source
+    assert "SERIAL_CREDIT_READONLY_REAUDIT" in tetrad_shell
+    assert tetrad_shell.index("--write-report") < tetrad_shell.index(
+        'assert report["ledger_prefix_record_count"] == 37'
+    )
+    assert 'assert report["failures"] == []' in tetrad_shell
     assert "serial_credit_wait_idle" in tetrad_shell
     assert "serial_credit_sanitize_inherited_environment" in common_shell
     assert "summarize_smsb_pilot" in audit_source

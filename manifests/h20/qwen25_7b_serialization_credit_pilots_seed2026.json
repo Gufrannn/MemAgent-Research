@@ -147,6 +147,7 @@
     "p0_certificate": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/p0_preflight.json",
     "resolved_manifest": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/p0_resolved_manifest.json",
     "parent_authority_secret": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/parent_receipt_authority.secret",
+    "readonly_reaudit": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/certificates/serialization_credit_pilot_readonly_reaudit.json",
     "execution_ledger": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/serialization_credit_pilot_execution_ledger.jsonl",
     "smsb_root": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb",
     "smsb_captures": "${MEMAGENT_SERIAL_CREDIT_WORK_ROOT}/logs/serialization_credit_pilots_frozen_20260821/${MEMAGENT_SERIAL_CREDIT_RUN_ID}/smsb/captures.jsonl",

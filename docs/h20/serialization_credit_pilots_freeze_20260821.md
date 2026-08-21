@@ -26,8 +26,13 @@ issues one HMAC-authenticated, single-use credential, observes the actual child 
 PPID and exit code, captures child stdout in an append-only file, and writes an
 HMAC-authenticated receipt binding the result and stdout digests. The audit requires
 unique supervisor PIDs, child PIDs, credential IDs and receipt IDs; result fields alone
-cannot satisfy either gate. Evidence also binds actual
-prompt/output token IDs and hashes, trajectory and per-turn seeds, generate-call indices,
+cannot satisfy either gate. After every child exits, its supervisor re-hashes the full
+model inventory and re-queries both GPU UUID/name identities; the receipt and final audit
+bind the pre/post observations. P0 proves every possible writer/final call fits both the
+model and batched-token limits, and each runtime generate call repeats that check before
+vLLM is invoked. Evidence also binds actual prompt/output token IDs and hashes,
+trajectory and per-turn seeds, each writer prompt/chunk/input-memory token chain,
+generate-call indices,
 one engine construction, and one generate call for each fresh replay. Tetrad scores are
 recomputed from decoded answer tokens and the S128 ground truth, while Tetrad authoring
 is independently rebuilt from the immutable parquet instead of trusting persisted pass
@@ -54,8 +59,10 @@ bash scripts/h20/run_qwen25_7b_smsb4.sh
 bash scripts/h20/run_qwen25_7b_tetrad4.sh
 ```
 
-The last script writes and authenticates the final report, then a read-only re-audit can
-be run without starting a GPU engine:
+The last script writes and authenticates the final report and then automatically runs a
+second read-only audit, requiring the 38-record ledger (37-record certified prefix plus
+audit tail) to pass. The same read-only command can be repeated without starting a GPU
+engine:
 
 ```bash
 /data/cw/memagent_work/.venv/bin/python \

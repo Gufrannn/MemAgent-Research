@@ -63,6 +63,12 @@
     "child_exit_code": {"const": 0},
     "child_stdout_artifact": {"type": "string"},
     "child_stdout_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pre_child_model_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "post_child_model_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "post_child_current_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pre_child_physical_gpu_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "post_child_physical_gpu_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "post_child_full_model_sha_verified": {"const": true},
     "status": {"enum": ["PASS", "FAIL"]},
     "decision": {"type": "string"},
     "example_id": {"type": "string"},
@@ -105,7 +111,13 @@
           "observed_child_ppid",
           "child_exit_code",
           "child_stdout_artifact",
-          "child_stdout_artifact_sha256"
+          "child_stdout_artifact_sha256",
+          "pre_child_model_manifest_sha256",
+          "post_child_model_manifest_sha256",
+          "post_child_current_binding_sha256",
+          "pre_child_physical_gpu_identity_sha256",
+          "post_child_physical_gpu_identity_sha256",
+          "post_child_full_model_sha_verified"
         ]
       }
     }

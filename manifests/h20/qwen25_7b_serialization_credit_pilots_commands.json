@@ -35,6 +35,11 @@
     "parent_issued_single_use_credential_per_child": true,
     "parent_hmac_authenticated_receipt_per_child": true,
     "parent_observed_child_pid_ppid_exit_and_stdout_sha": true,
+    "post_child_full_model_sha_per_child": true,
+    "post_child_gpu_identity_query_per_child": true,
+    "p0_and_per_call_token_capacity_gate": true,
+    "writer_turn_token_chain_independently_rebuilt": true,
+    "automatic_post_write_readonly_reaudit": true,
     "unique_parent_supervisor_pid_required": true,
     "unique_child_pid_required": true
   },

@@ -54,6 +54,27 @@ def _observed_ppid(child_pid: int) -> int:
     return int(value)
 
 
+def _physical_gpu_identity(manifest: dict[str, Any]) -> list[str]:
+    completed = subprocess.run(
+        [
+            "nvidia-smi",
+            "-i",
+            manifest["gpu"]["visible_devices"],
+            "--query-gpu=index,uuid,name",
+            "--format=csv,noheader,nounits",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            "parent supervisor could not re-query physical GPUs after child exit: "
+            f"{completed.stderr.strip()}"
+        )
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
 def _artifact_payload(path: Path, child_kind: str) -> Any:
     if child_kind == "smsb_capture":
         return read_jsonl(path)
@@ -153,6 +174,19 @@ def launch(
     if not artifact.is_file():
         raise RuntimeError("supervised child exited zero without its result artifact")
 
+    post_child_current_binding_sha = verify_current_binding(
+        manifest, resolved, full_model_sha=True
+    )
+    post_child_gpu_identity = _physical_gpu_identity(manifest)
+    if post_child_current_binding_sha != current_binding_sha:
+        raise RuntimeError("post-child current/model binding differs from child start")
+    if post_child_gpu_identity != resolved["runtime_binding"][
+        "physical_gpu_identity"
+    ]:
+        raise RuntimeError("post-child physical GPU identity differs from P0")
+    if os.environ.get("CUDA_DEVICE_ORDER") != manifest["gpu"]["cuda_device_order"]:
+        raise RuntimeError("post-child CUDA_DEVICE_ORDER differs from P0")
+
     payload = _artifact_payload(artifact, child_kind)
     evidence = _child_evidence(payload, child_kind)
     if evidence.get("process_pid") != process.pid:
@@ -197,6 +231,24 @@ def launch(
         "current_binding_sha256": current_binding_sha,
         "runtime_binding_sha256": resolved["runtime_binding_sha256"],
         "execution_binding_sha256": resolved["execution_binding_sha256"],
+        "pre_child_full_model_sha_verified": evidence[
+            "full_model_sha_verified_at_child_start"
+        ],
+        "pre_child_model_manifest_sha256": evidence["model_manifest_sha256"],
+        "pre_child_physical_gpu_identity": evidence["physical_gpu_identity"],
+        "pre_child_physical_gpu_identity_sha256": canonical_sha256(
+            evidence["physical_gpu_identity"]
+        ),
+        "post_child_full_model_sha_verified": True,
+        "post_child_model_manifest_sha256": resolved["execution_binding"][
+            "model_manifest_sha256"
+        ],
+        "post_child_current_binding_sha256": post_child_current_binding_sha,
+        "post_child_physical_gpu_identity": post_child_gpu_identity,
+        "post_child_physical_gpu_identity_sha256": canonical_sha256(
+            post_child_gpu_identity
+        ),
+        "post_child_cuda_device_order": os.environ["CUDA_DEVICE_ORDER"],
         "authority_secret_sha256": resolved["parent_receipt_authority"][
             "secret_sha256"
         ],
