@@ -64,7 +64,7 @@ def main():
                     errors.append((prediction-x["prefix_ess"])**2)
         loo_rmse=math.sqrt(sum(errors)/len(errors))
     length_not_proxy=same_length_counterexample and loo_rmse>.01
-    status="PASS" if len(observations)>=8 and collapse and length_not_proxy and local_not_sufficient and per_write_not_sufficient and aperture else "FAIL"
+    status="PASS" if len(observations)>=8 and len(heldout_steps)>=3 and collapse and length_not_proxy and local_not_sufficient and per_write_not_sufficient and aperture else "FAIL"
     report={"status":status,"decision":"RWWPO_E1_PASS" if status=="PASS" else "RWWPO_E1_NO_GO",
             "git_commit":head,"source_ledgers":[{"path":str(Path(x).resolve()),"sha256":hashlib.sha256(Path(x).read_bytes()).hexdigest()} for x in a.original_ledger],
             "record_count":base["record_count"],"min_prefix_ess":base["min_prefix_ess"],"prefix_collapse_observed":collapse,

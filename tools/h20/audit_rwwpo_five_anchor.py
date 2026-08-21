@@ -16,7 +16,9 @@ def main():
   health,hsha=verified(root/f"t{step}_health.json",a.expected_commit); method,msha=verified(root/f"t{step}_s128.json",a.expected_commit); compare,csha=verified(root/f"t{step}_compare.json",a.expected_commit)
   if health.get("decision")!=f"RWWPO_T{step}_HEALTH_PASS" or method.get("decision")!=f"RWWPO_T{step}_S128_PASS" or compare.get("decision")!=f"RWWPO_T{step}_COMPARE_PASS": raise SystemExit(f"RWWPO_FINAL_NO_GO:wrong decision T{step}")
   if compare.get("method_sha256")!=hashlib.sha256((root/f"t{step}_s128.json").read_bytes()).hexdigest() or compare.get("baseline_import_sha256")!=baseline_file_sha: raise SystemExit(f"RWWPO_FINAL_NO_GO:comparison binding T{step}")
-  anchors.append({"step":step,"token_f1":method["metrics"]["token_f1"],"delta":compare["token_f1_delta"],"health_sha256":hsha,"method_sha256":msha,"compare_sha256":csha})
+  delta=float(method["metrics"]["token_f1"])-float(baseline["aggregates"][f"Original{step}"]["token_f1"])
+  if abs(delta-float(compare.get("token_f1_delta",float("nan"))))>1e-12: raise SystemExit(f"RWWPO_FINAL_NO_GO:comparison delta mismatch T{step}")
+  anchors.append({"step":step,"token_f1":method["metrics"]["token_f1"],"delta":delta,"health_sha256":hsha,"method_sha256":msha,"compare_sha256":csha})
  mean_delta=sum(x["delta"] for x in anchors)/5; passed=anchors[-1]["delta"]>=.02 and mean_delta>=.01 and min(x["delta"] for x in anchors)>=-.02
  report={"status":"PASS" if passed else "FAIL","decision":"RWWPO_FIVE_ANCHOR_PASS" if passed else "RWWPO_FIVE_ANCHOR_NO_GO","git_commit":a.expected_commit,"anchors":anchors,"mean_token_f1_delta":mean_delta}; report["report_sha256"]=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(",",":")).encode()).hexdigest(); out=Path(a.output); out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(report,sort_keys=True,indent=2)+"\n"); raise SystemExit(0 if passed else 1)
 if __name__=="__main__": main()
