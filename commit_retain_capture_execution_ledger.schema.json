@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "commit_retain_capture_execution_ledger.schema.json",
+  "title": "MemAgent 7B COMMIT versus RETAIN append-only supervisor receipt",
+  "type": "object",
+  "required": [
+    "record_type", "experiment_name", "git_commit", "run_id", "recorded_at",
+    "eval_manifest_hash", "execution_binding_sha256", "runtime_binding_sha256",
+    "current_binding_sha256", "record_index", "previous_record_sha256", "record_sha256",
+    "training_authorized", "method_selected"
+  ],
+  "properties": {
+    "record_type": {"enum": ["s0_preflight", "capture_authorization", "capture_complete", "audit_result"]},
+    "experiment_name": {"const": "qwen25_7b_commit_retain_capture_seed2026"},
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "eval_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "execution_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtime_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "current_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record_index": {"type": "integer", "minimum": 0},
+    "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact": {"type": "string"},
+    "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "decision": {"type": "string"},
+    "pair_count": {"type": "integer", "minimum": 0},
+    "pair_ids": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "parent_credential_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parent_issuer_pid": {"type": "integer", "minimum": 1},
+    "training_authorized": {"const": false},
+    "method_selected": {"const": false}
+  },
+  "additionalProperties": true
+}

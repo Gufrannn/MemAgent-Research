@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "branch": "h20/qwen25-7b-commit-retain-capture-20260821",
+  "required_sequence": ["p0", "capture_authorization", "single_engine_four_pair_capture", "readonly_audit"],
+  "entrypoints": {
+    "p0": "scripts/h20/preflight_qwen25_7b_commit_retain.sh",
+    "capture": "scripts/h20/run_qwen25_7b_commit_retain.sh",
+    "gpu_runner": "tools/h20/run_qwen25_7b_commit_retain.py",
+    "audit": "tools/h20/audit_qwen25_7b_commit_retain.py"
+  },
+  "execution": {
+    "physical_gpus": [6, 7],
+    "visible_devices": "6,7",
+    "cuda_device_order": "PCI_BUS_ID",
+    "tensor_parallel_size": 2,
+    "backend": "strict_vllm_0.8.2",
+    "huggingface_generation_fallback": false,
+    "single_coordinator_invocation_single_engine": true,
+    "one_prompt_per_generate_call": true,
+    "max_num_seqs": 1,
+    "prefix_cache_enabled": false,
+    "candidate_generated_once_before_arms": true,
+    "arm_order": ["COMMIT", "RETAIN"],
+    "training_updates": 0
+  },
+  "supervision": {
+    "append_only_hash_chained_p0_capture_audit_receipts": true,
+    "parent_issued_single_use_capture_credential": true,
+    "capture_pairs_hash_chained_as_generated": true,
+    "persisted_pass_flags_are_not_evidence": true,
+    "readonly_audit_recomputes_outputs_and_outcomes": true
+  },
+  "claim_firewall": {
+    "capture_and_audit_only": true,
+    "method_selected": false,
+    "training_authorized": false,
+    "paper_performance_result": false,
+    "causal_effect_claim": false
+  },
+  "gpu_execution_authorized_by_this_manifest": false,
+  "external_authorization_required": true
+}
