@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,hashlib,json
+import argparse,hashlib,json,subprocess
 from pathlib import Path
 def verified(path,commit):
  row=json.loads(Path(path).read_text()); declared=row.pop("report_sha256",None)
@@ -8,6 +8,7 @@ def verified(path,commit):
  row["report_sha256"]=declared; return row
 def main():
  p=argparse.ArgumentParser(); p.add_argument("--method",required=True); p.add_argument("--baseline-import",required=True); p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True); a=p.parse_args()
+ if subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()!=a.expected_commit: raise SystemExit("RWWPO_COMPARE_NO_GO:checkout commit")
  method=verified(a.method,a.expected_commit); base=verified(a.baseline_import,a.expected_commit); key=f"Original{a.step}"
  if method.get("decision")!=f"RWWPO_T{a.step}_S128_PASS" or key not in base.get("aggregates",{}): raise SystemExit("RWWPO_COMPARE_NO_GO:missing certified inputs")
  delta=method["metrics"]["token_f1"]-base["aggregates"][key]["token_f1"]; passed=delta>=-.02

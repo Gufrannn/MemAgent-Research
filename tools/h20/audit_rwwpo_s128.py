@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,hashlib,json,sys
+import argparse,hashlib,json,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT))
 from recurrent.research.s128_hotpot_metrics import score_terminal_output,summarize_fixed_s128
@@ -8,6 +8,7 @@ from tools.h20.audit_qwen25_7b_s128_it import _ground_truth_by_source_order
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--eval-root",required=True); p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); p.add_argument("--validation",required=True); p.add_argument("--resolved-manifest",required=True); p.add_argument("--expected-manifest-sha256",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True); a=p.parse_args()
+    if subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()!=a.expected_commit: raise SystemExit("RWWPO_S128_AUDIT_NO_GO:checkout commit")
     resolved_path=Path(a.resolved_manifest)
     if hashlib.sha256(resolved_path.read_bytes()).hexdigest()!=a.expected_manifest_sha256: raise SystemExit("RWWPO_S128_AUDIT_NO_GO:identity manifest SHA")
     resolved=validate_resolved_manifest(json.loads(resolved_path.read_text()))
