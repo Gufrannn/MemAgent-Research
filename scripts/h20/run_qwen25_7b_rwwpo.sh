@@ -11,8 +11,10 @@ if [[ $RWWPO_PHASE == continue ]]; then
   PREFLIGHT+=(--resume-step "$RWWPO_RESUME_STEP")
   PRIOR_HEALTH=$RWWPO_CERT_ROOT/t${RWWPO_RESUME_STEP}_health.json
   PRIOR_COMPARE=$RWWPO_CERT_ROOT/t${RWWPO_RESUME_STEP}_compare.json
-  "$RWWPO_PYTHON" -c 'import json,sys
-h=json.load(open(sys.argv[1])); c=json.load(open(sys.argv[2])); step=int(sys.argv[3]); commit=sys.argv[4]
+  "$RWWPO_PYTHON" -c 'import hashlib,json,sys
+def verified(path):
+ r=json.load(open(path)); d=r.pop("report_sha256",None); a=hashlib.sha256(json.dumps(r,sort_keys=True,separators=(",",":")).encode()).hexdigest(); return r if d==a else {}
+h=verified(sys.argv[1]); c=verified(sys.argv[2]); step=int(sys.argv[3]); commit=sys.argv[4]
 ok=(h.get("status")=="PASS" and h.get("decision")==f"RWWPO_T{step}_HEALTH_PASS" and h.get("git_commit")==commit and c.get("status")=="PASS" and c.get("decision")==f"RWWPO_T{step}_COMPARE_PASS" and c.get("git_commit")==commit)
 raise SystemExit(0 if ok else 1)' "$PRIOR_HEALTH" "$PRIOR_COMPARE" "$RWWPO_RESUME_STEP" "$RWWPO_EXPECTED_COMMIT" || { echo 'RWWPO_NO_GO:prior anchor health/comparison gate missing or invalid' >&2; exit 84; }
 fi

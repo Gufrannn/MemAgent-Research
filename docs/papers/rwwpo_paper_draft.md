@@ -1,13 +1,13 @@
 # Paper I working draft — RWWPO
 
-**Scientific status (2026-08-22): REFRAME, not yet GO.** Sequence-level and
+**Scientific status (2026-08-22): PAPER-FRAMING GO; empirical GO remains conditional on E1.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
 GSsPO. “Use a joint ratio for a writer response” is therefore not a sufficient
 novelty claim. The viable residual is narrower and harder: a free-text writer
 action becomes the next observation, so the relevant change of measure is the
 *trajectory prefix of materialized state rewrites*, while the terminal answer is
 not a state transition and should retain the accepted Original token objective.
-The paper is GO only if E1 shows a recurrent-prefix collapse phenomenon that
+The empirical program is GO only if E1 shows a recurrent-prefix collapse phenomenon that
 single-response GSPO/GSsPO and token diagnostics do not explain.
 
 ## Tentative title

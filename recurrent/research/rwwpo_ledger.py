@@ -17,7 +17,8 @@ def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step
                               proposed_post_log_prob,
                               writer_mask, answer_mask, trajectory_turn,
                               sample_index, advantages, denominator, prefix_stats,
-                              prefix_rows, post_prefix_rows, post_prefix_stats, q_min, constraint_pass, accepted):
+                              prefix_rows, post_prefix_rows, post_prefix_stats, q_min,
+                              writer_log_ratio_cap, constraint_pass, accepted):
     if not ledger_dir:
         raise ValueError("RWWPO enabled without required ledger_dir")
     root = Path(ledger_dir).resolve()
@@ -36,6 +37,7 @@ def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step
         "advantages": _tolist(advantages), "denominator": int(denominator),
         "prefix_rows": prefix_rows, "prefix_stats": prefix_stats,
         "post_prefix_rows": post_prefix_rows, "post_prefix_stats": post_prefix_stats, "q_min": float(q_min),
+        "writer_log_ratio_cap": float(writer_log_ratio_cap),
         "constraint_pass": bool(constraint_pass), "accepted": bool(accepted),
     }
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"))

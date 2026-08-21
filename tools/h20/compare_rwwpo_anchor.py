@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import argparse,hashlib,json
 from pathlib import Path
+def verified(path,commit):
+ row=json.loads(Path(path).read_text()); declared=row.pop("report_sha256",None)
+ actual=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+ if declared!=actual or row.get("git_commit")!=commit or row.get("status")!="PASS": raise SystemExit("RWWPO_COMPARE_NO_GO:invalid receipt hash/commit/status")
+ row["report_sha256"]=declared; return row
 def main():
  p=argparse.ArgumentParser(); p.add_argument("--method",required=True); p.add_argument("--baseline-import",required=True); p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True); a=p.parse_args()
- method=json.loads(Path(a.method).read_text()); base=json.loads(Path(a.baseline_import).read_text()); key=f"Original{a.step}"
+ method=verified(a.method,a.expected_commit); base=verified(a.baseline_import,a.expected_commit); key=f"Original{a.step}"
  if method.get("decision")!=f"RWWPO_T{a.step}_S128_PASS" or key not in base.get("aggregates",{}): raise SystemExit("RWWPO_COMPARE_NO_GO:missing certified inputs")
  delta=method["metrics"]["token_f1"]-base["aggregates"][key]["token_f1"]; passed=delta>=-.02
  report={"status":"PASS" if passed else "FAIL","decision":f"RWWPO_T{a.step}_COMPARE_PASS" if passed else f"RWWPO_T{a.step}_COMPARE_NO_GO","git_commit":a.expected_commit,"step":a.step,"token_f1_delta":delta,"method_sha256":hashlib.sha256(Path(a.method).read_bytes()).hexdigest(),"baseline_import_sha256":hashlib.sha256(Path(a.baseline_import).read_bytes()).hexdigest()}

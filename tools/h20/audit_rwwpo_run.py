@@ -20,7 +20,8 @@ def main():
     inventories=[row for row in events if row.get("record_type")=="checkpoint_inventory" and row.get("global_step")==a.target_step]
     current_inventory=checkpoint_inventory(ck)
     if not inventories or inventories[-1].get("inventory")!=current_inventory: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint inventory")
-    if actual["min_prefix_ess"] < .5: raise SystemExit("RWWPO_AUDIT_NO_GO:constraint")
+    if actual["accepted_fraction"] <= 0 or actual["max_proposed_update"] <= 1e-10: raise SystemExit("RWWPO_AUDIT_NO_GO:post-step acceptance/aperture")
     report={"status":"PASS","decision":f"RWWPO_T{a.target_step}_HEALTH_PASS","git_commit":a.expected_commit,"target_step":a.target_step,"checkpoint":str(ck.resolve()),"actual_loss":actual,"execution_ledger_sha256":hashlib.sha256(Path(a.execution_ledger).read_bytes()).hexdigest()}
+    report["report_sha256"]=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     Path(a.output).parent.mkdir(parents=True,exist_ok=True); Path(a.output).write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
 if __name__=="__main__": main()

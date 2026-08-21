@@ -7,7 +7,7 @@ from recurrent.research.stable_eval_identity import validate_attempt_identity_ro
 from tools.h20.audit_qwen25_7b_s128_it import _ground_truth_by_source_order
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--eval-root",required=True); p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); p.add_argument("--validation",required=True); p.add_argument("--resolved-manifest",required=True); p.add_argument("--expected-manifest-sha256",required=True); p.add_argument("--output",required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--eval-root",required=True); p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); p.add_argument("--validation",required=True); p.add_argument("--resolved-manifest",required=True); p.add_argument("--expected-manifest-sha256",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True); a=p.parse_args()
     resolved_path=Path(a.resolved_manifest)
     if hashlib.sha256(resolved_path.read_bytes()).hexdigest()!=a.expected_manifest_sha256: raise SystemExit("RWWPO_S128_AUDIT_NO_GO:identity manifest SHA")
     resolved=validate_resolved_manifest(json.loads(resolved_path.read_text()))
@@ -22,6 +22,7 @@ def main():
     truth=_ground_truth_by_source_order({"data":{"validation":a.validation}},resolved)
     metrics=[score_terminal_output(row["output"],truth[int(row["source_order_index"])]) for row in rows]
     aggregate=summarize_fixed_s128(metrics)
-    report={"status":"PASS","decision":f"RWWPO_T{a.step}_S128_PASS","step":a.step,"metrics":aggregate,"terminal_sha256":hashlib.sha256(terminal_path.read_bytes()).hexdigest(),"resolved_manifest_sha256":a.expected_manifest_sha256}
+    report={"status":"PASS","decision":f"RWWPO_T{a.step}_S128_PASS","git_commit":a.expected_commit,"step":a.step,"metrics":aggregate,"terminal_sha256":hashlib.sha256(terminal_path.read_bytes()).hexdigest(),"resolved_manifest_sha256":a.expected_manifest_sha256}
+    report["report_sha256"]=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     Path(a.output).parent.mkdir(parents=True,exist_ok=True); Path(a.output).write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
 if __name__=="__main__": main()

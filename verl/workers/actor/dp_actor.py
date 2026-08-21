@@ -503,6 +503,7 @@ class DataParallelPPOActor(BasePPOActor):
                         advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
                         prefix_rows=rwwpo_metrics["prefix_log_ratios"], prefix_stats=global_prefix_stats,
                         post_prefix_rows=post_prefix_rows, post_prefix_stats=post_prefix_stats, q_min=q_min,
+                        writer_log_ratio_cap=ratio_cap,
                         constraint_pass=constraint_pass, accepted=accepted)
                     append_to_dict(metrics, {
                         "actor/pg_loss": policy_loss.detach().item(),

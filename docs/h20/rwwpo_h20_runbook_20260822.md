@@ -92,6 +92,7 @@ export RWWPO_EVAL_RESOLVED_SHA256=<SHA256>
 export RWWPO_EVAL_MANIFEST_HASH=<EVAL_MANIFEST_HASH>
 RWWPO_EVAL_STEP=5 bash scripts/h20/run_rwwpo_s128_anchor.sh
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_s128.py \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --eval-root "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/s128_t5" --step 5 \
   --validation "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
   --resolved-manifest "$RWWPO_EVAL_RESOLVED_MANIFEST" \
@@ -141,3 +142,12 @@ Expected wall time is hardware- and queue-dependent. Based on the accepted
 two-H20 configuration, reserve roughly 1–2 hours for preflight/E0/E1 and T5
 health, then several hours per five-update continuation plus fixed-S128
 evaluation. These are planning estimates, not claims of a local H20 run.
+
+## Final five-anchor audit
+
+```bash
+"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_five_anchor.py \
+  --certificate-root "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/final_five_anchor.json"
+```

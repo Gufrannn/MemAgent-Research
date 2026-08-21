@@ -5,7 +5,7 @@
   "required": ["schema_version", "attempt_id", "mode", "global_step", "rank", "epoch", "minibatch",
     "old_log_prob", "current_log_prob", "proposed_post_log_prob", "response_mask", "writer_mask",
     "answer_mask", "trajectory_turn", "sample_index", "advantages",
-    "denominator", "prefix_rows", "prefix_stats", "post_prefix_rows", "post_prefix_stats", "q_min", "constraint_pass", "accepted", "record_sha256"],
+    "denominator", "prefix_rows", "prefix_stats", "post_prefix_rows", "post_prefix_stats", "q_min", "writer_log_ratio_cap", "constraint_pass", "accepted", "record_sha256"],
   "properties": {
     "schema_version": {"const": "rwwpo-actual-loss-v1"},
     "attempt_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"},
@@ -25,6 +25,7 @@
     "post_prefix_rows": {"type": "array"},
     "post_prefix_stats": {"type": "array"},
     "q_min": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "writer_log_ratio_cap": {"type": "number", "exclusiveMinimum": 0},
     "constraint_pass": {"type": "boolean"},
     "accepted": {"type": "boolean"},
     "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}

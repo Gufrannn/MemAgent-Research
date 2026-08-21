@@ -82,17 +82,27 @@ def audit(paths, require_method=True):
         key=(row["attempt_id"],row["global_step"],row["epoch"],row["minibatch"])
         groups.setdefault(key,[]).append(row)
     for key,group in groups.items():
-        combined=[item for row in group for item in row["prefix_rows"]]
-        expected=[]
-        for turn in sorted({item["turn"] for item in combined}):
-            values=[item["log_ratio"] for item in combined if item["turn"]==turn]
-            peak=max(values); raw=[math.exp(value-peak) for value in values]; total=sum(raw)
-            weights=[value/total for value in raw]; chi2=len(values)*sum(value*value for value in weights)-1
-            expected.append((turn,1/(1+chi2),chi2,max(abs(value) for value in values)))
-        for row in group:
-            declared=row["prefix_stats"]
+        def reconstruct(field):
+            combined=[item for row in group for item in row[field]]; result=[]
+            for turn in sorted({item["turn"] for item in combined}):
+                values=[item["log_ratio"] for item in combined if item["turn"]==turn]
+                peak=max(values); raw=[math.exp(value-peak) for value in values]; total=sum(raw)
+                weights=[value/total for value in raw]; chi2=len(values)*sum(value*value for value in weights)-1
+                result.append((turn,1/(1+chi2),chi2,max(abs(value) for value in values)))
+            return result
+        for rows_field, stats_field in (("prefix_rows","prefix_stats"),("post_prefix_rows","post_prefix_stats")):
+          expected=reconstruct(rows_field)
+          for row in group:
+            declared=row[stats_field]
             if len(declared)!=len(expected) or any(item["turn"]!=value[0] or not math.isclose(item["ess_fraction"],value[1],rel_tol=1e-9,abs_tol=1e-10) or not math.isclose(item["chi2"],value[2],rel_tol=1e-9,abs_tol=1e-10) or not math.isclose(item["max_abs_log_ratio"],value[3],rel_tol=1e-9,abs_tol=1e-10) for item,value in zip(declared,expected)):
-                raise ValueError(f"global prefix statistics do not reconstruct for {key}")
+                raise ValueError(f"global {stats_field} do not reconstruct for {key}")
+        q_values={float(row["q_min"]) for row in group}; caps={float(row["writer_log_ratio_cap"]) for row in group}
+        decisions={bool(row["accepted"]) for row in group}
+        if len(q_values)!=1 or len(caps)!=1 or len(decisions)!=1: raise ValueError(f"distributed decision disagreement for {key}")
+        expected_accept=all(s[1]>=next(iter(q_values)) and s[3]<=next(iter(caps)) for s in reconstruct("post_prefix_rows"))
+        if next(iter(decisions)) != expected_accept: raise ValueError(f"accepted decision is not certified by post statistics for {key}")
+        pre_pass=all(s[1]>=next(iter(q_values)) and s[3]<=next(iter(caps)) for s in reconstruct("prefix_rows"))
+        if any(bool(row["constraint_pass"])!=pre_pass for row in group): raise ValueError(f"pre-step constraint decision mismatch for {key}")
     active = any(any(abs(c-o) > 1e-10 for old, cur in zip(row["old_log_prob"], row["current_log_prob"])
                      for o, c in zip(old, cur)) for row in rows)
     if require_method and not active:
@@ -100,7 +110,10 @@ def audit(paths, require_method=True):
     return {"status": "PASS", "decision": "RWWPO_ACTUAL_LOSS_LEDGER_PASS",
             "record_count": len(rows), "method_active": active,
             "modes": sorted({row["mode"] for row in rows}),
-            "min_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["prefix_stats"])}
+            "min_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["prefix_stats"]),
+            "min_post_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["post_prefix_stats"]),
+            "accepted_fraction": sum(bool(next(iter(g))["accepted"]) for g in groups.values())/len(groups),
+            "max_proposed_update": max(abs(p-c) for r in rows for post,cur in zip(r["proposed_post_log_prob"],r["current_log_prob"]) for p,c in zip(post,cur))}
 
 
 def main():
