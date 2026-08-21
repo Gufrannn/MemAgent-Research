@@ -31,7 +31,8 @@ the exact joint likelihood ratio of the writer prefix while leaving terminal
 answer tokens under the accepted tokenwise PPO objective. Its normalization is
 chosen so that, at the behavior policy, the writer gradient is exactly equal—not
 merely proportional—to Original PPO; only higher-order update geometry changes.
-RWWPO pairs this surrogate with per-turn prefix ESS and chi-square certificates
+RWWPO pairs this surrogate with per-turn prefix ESS, an absolute prefix-log-ratio
+cap, and chi-square certificates
 computed from the actual loss tensors. The empirical claim is deliberately
 conditional: on a frozen Qwen2.5-7B recurrent-memory workload, we will first test
 whether prefix collapse exists beyond token KL, clipping, and length. Only if
@@ -64,7 +65,9 @@ generic stability as new. Its potential contribution must instead arise from a
 different probability object: the cumulative likelihood of the sequence of
 *state-producing writes* through a recurrent turn. A per-write ratio controls
 the action just sampled; a prefix ratio measures the change of measure for the
-actual chain of states on which the next shared policy acts.
+actual chain of states on which the next shared policy acts. Candidate optimizer
+steps are checked on the same actual-loss minibatch after the step; a violating
+step is rolled back together with its optimizer state and recorded as rejected.
 
 Why can this matter? Let a writer output contain (K) tokens and let every
 token ratio lie inside a PPO clipping interval. The joint ratio is their
@@ -253,4 +256,3 @@ three fresh seeds and an untouched confirmation run under separate authorization
 - [Mem-T](https://arxiv.org/abs/2601.23014)
 - [Group Distributionally Robust RL](https://proceedings.mlr.press/v206/xu23d.html)
 - [Policy Information Capacity](https://proceedings.mlr.press/v139/furuta21a.html)
-

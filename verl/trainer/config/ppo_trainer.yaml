@@ -56,6 +56,7 @@ actor_rollout_ref:
       collect_original_only: false
       ledger_dir: null
       q_min: 0.5
+      writer_log_ratio_cap: 4.0
       attempt_id: null
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size

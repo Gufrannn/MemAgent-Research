@@ -14,9 +14,10 @@ def _tolist(tensor):
 
 def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step, epoch, minibatch,
                               old_log_prob, current_log_prob, response_mask,
+                              proposed_post_log_prob,
                               writer_mask, answer_mask, trajectory_turn,
                               sample_index, advantages, denominator, prefix_stats,
-                              q_min, constraint_pass):
+                              prefix_rows, post_prefix_stats, q_min, constraint_pass, accepted):
     if not ledger_dir:
         raise ValueError("RWWPO enabled without required ledger_dir")
     root = Path(ledger_dir).resolve()
@@ -27,13 +28,15 @@ def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step
         "attempt_id": str(attempt_id), "mode": str(mode), "global_step": int(global_step), "rank": int(rank), "epoch": int(epoch),
         "minibatch": int(minibatch), "old_log_prob": _tolist(old_log_prob),
         "current_log_prob": _tolist(current_log_prob),
+        "proposed_post_log_prob": _tolist(proposed_post_log_prob),
         "response_mask": _tolist(response_mask.to(dtype=old_log_prob.dtype)),
         "writer_mask": _tolist(writer_mask.to(dtype=old_log_prob.dtype)),
         "answer_mask": _tolist(answer_mask.to(dtype=old_log_prob.dtype)),
         "trajectory_turn": _tolist(trajectory_turn), "sample_index": _tolist(sample_index),
         "advantages": _tolist(advantages), "denominator": int(denominator),
-        "prefix_stats": prefix_stats, "q_min": float(q_min),
-        "constraint_pass": bool(constraint_pass),
+        "prefix_rows": prefix_rows, "prefix_stats": prefix_stats,
+        "post_prefix_stats": post_prefix_stats, "q_min": float(q_min),
+        "constraint_pass": bool(constraint_pass), "accepted": bool(accepted),
     }
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"))
     record["record_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()

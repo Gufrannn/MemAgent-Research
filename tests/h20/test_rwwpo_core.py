@@ -52,3 +52,24 @@ def test_prefix_ess_detects_concentration():
     assert metrics["prefix_stats"][0]["ess_fraction"] < 1.0
     assert metrics["prefix_stats"][0]["chi2"] > 0.0
 
+
+def test_common_large_prefix_shift_is_numerically_capped():
+    old, response, final, writer, sample, turn, adv = _batch()
+    current = old + writer * 100.0
+    loss, metrics = compute_rwwpo_policy_loss(old, current, adv, response, writer, final,
+                                              sample, turn, 0.2, 0.2, 0.2,
+                                              writer_log_ratio_cap=4.0)
+    assert torch.isfinite(loss)
+    assert max(abs(row["log_ratio"]) for row in metrics["prefix_log_ratios"]) > 4.0
+
+
+def test_non_scalar_writer_advantage_is_rejected():
+    old, response, final, writer, sample, turn, adv = _batch()
+    adv = adv.clone(); adv[2, 0] += 0.1
+    try:
+        compute_rwwpo_policy_loss(old, old, adv, response, writer, final, sample, turn,
+                                  0.2, 0.2, 0.2)
+    except ValueError as exc:
+        assert "scalar advantage" in str(exc)
+    else:
+        raise AssertionError("non-scalar trajectory advantage was accepted")

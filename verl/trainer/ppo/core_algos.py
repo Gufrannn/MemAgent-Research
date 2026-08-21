@@ -443,6 +443,7 @@ def compute_rwwpo_policy_loss(
     cliprange_low=None,
     cliprange_high=None,
     clip_ratio_c=3.0,
+    writer_log_ratio_cap=4.0,
 ):
     """RWWPO writer-prefix surrogate plus unchanged final-answer token PPO.
 
@@ -507,11 +508,19 @@ def compute_rwwpo_policy_loss(
         if torch.unique(turns).numel() != turns.numel():
             raise ValueError("RWWPO duplicate writer turn inside a trajectory")
         prefix_log_ratio = torch.cumsum(writer_row_log_ratio[rows], dim=0)
+        trajectory_advantages = torch.cat([advantages[row][writer_mask[row]] for row in rows])
+        if not torch.allclose(trajectory_advantages, trajectory_advantages[:1].expand_as(trajectory_advantages),
+                              rtol=0.0, atol=1e-7):
+            raise ValueError("RWWPO exact-match contract requires one scalar advantage per trajectory")
         final_row = rows[-1]
         final_adv = advantages[final_row][writer_mask[final_row]].mean()
-        trajectory_losses.append(-torch.exp(prefix_log_ratio[-1]) * final_adv)
-        for turn, value in zip(turns, prefix_log_ratio):
-            prefix_rows.append((int(turn.item()), value, int(sid.item())))
+        trajectory_losses.append(
+            -torch.exp(torch.clamp(prefix_log_ratio[-1], -writer_log_ratio_cap,
+                                   writer_log_ratio_cap)) * final_adv
+        )
+        prefix_token_count = torch.cumsum(writer_mask[rows].sum(dim=-1), dim=0)
+        for turn, value, tokens in zip(turns, prefix_log_ratio, prefix_token_count):
+            prefix_rows.append((int(turn.item()), value, int(sid.item()), int(tokens.item())))
     # At behavior point each trajectory loss differentiates through every writer
     # token exactly once.  Multiplying by writer token count is unnecessary: the
     # derivative of the summed log-ratio already is the token-gradient sum.
@@ -535,8 +544,9 @@ def compute_rwwpo_policy_loss(
         "writer_trajectory_count": len(trajectory_losses),
         "prefix_stats": prefix_stats,
         "prefix_log_ratios": [
-            {"turn": turn, "sample_index": sid, "log_ratio": float(value.detach().item())}
-            for turn, value, sid in prefix_rows
+            {"turn": turn, "sample_index": sid, "log_ratio": float(value.detach().item()),
+             "prefix_token_count": tokens}
+            for turn, value, sid, tokens in prefix_rows
         ],
         "log_ratio": log_ratio,
         "answer_mask": answer_mask,

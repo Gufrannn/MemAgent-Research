@@ -9,6 +9,12 @@ if [[ $RWWPO_PHASE == continue ]]; then
   [[ ${RWWPO_RESUME_STEP:-} =~ ^(5|10|15|20)$ ]] || { echo 'RWWPO_NO_GO:RWWPO_RESUME_STEP must be prior anchor' >&2; exit 75; }
   [[ ${RWWPO_TARGET_STEP:-} =~ ^(10|15|20|25)$ && $RWWPO_TARGET_STEP -gt $RWWPO_RESUME_STEP ]] || { echo 'RWWPO_NO_GO:invalid target anchor' >&2; exit 76; }
   PREFLIGHT+=(--resume-step "$RWWPO_RESUME_STEP")
+  PRIOR_HEALTH=$RWWPO_CERT_ROOT/t${RWWPO_RESUME_STEP}_health.json
+  PRIOR_COMPARE=$RWWPO_CERT_ROOT/t${RWWPO_RESUME_STEP}_compare.json
+  "$RWWPO_PYTHON" -c 'import json,sys
+h=json.load(open(sys.argv[1])); c=json.load(open(sys.argv[2])); step=int(sys.argv[3]); commit=sys.argv[4]
+ok=(h.get("status")=="PASS" and h.get("decision")==f"RWWPO_T{step}_HEALTH_PASS" and h.get("git_commit")==commit and c.get("status")=="PASS" and c.get("decision")==f"RWWPO_T{step}_COMPARE_PASS" and c.get("git_commit")==commit)
+raise SystemExit(0 if ok else 1)' "$PRIOR_HEALTH" "$PRIOR_COMPARE" "$RWWPO_RESUME_STEP" "$RWWPO_EXPECTED_COMMIT" || { echo 'RWWPO_NO_GO:prior anchor health/comparison gate missing or invalid' >&2; exit 84; }
 fi
 "${PREFLIGHT[@]}"
 rwwpo_acquire_gpu_locks

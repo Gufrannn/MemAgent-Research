@@ -12,12 +12,15 @@ cannot be used to manufacture E1.
 
 ```bash
 git fetch origin h20/qwen25-7b-rwwpo-t25-frozen-20260822
-git checkout --detach <RELEASE_SHA>
+git checkout h20/qwen25-7b-rwwpo-t25-frozen-20260822
+test "$(git rev-parse HEAD)" = <RELEASE_SHA>
 export RWWPO_REPO_DIR=$PWD
 export RWWPO_EXPECTED_COMMIT=<RELEASE_SHA>
 export RWWPO_WORK_ROOT=/data/cw/memagent_work
 export GPU_PAIR=2,5                 # any two idle H20s, distinct and ascending
 export RWWPO_RUN_ID=rwwpo_seed2026_primary
+export RWWPO_ORIGINAL_RESOLVED_MANIFEST=/readonly/original/accepted_resolved_manifest.json
+export RWWPO_ORIGINAL_RESOLVED_SHA256=<ACCEPTED_RESOLVED_MANIFEST_SHA256>
 ```
 
 Never select an output that already exists. The run ID is semantic and explicit;
@@ -35,6 +38,7 @@ aggregates. The importer copies no predictions.
 mkdir -p "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates"
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/import_rwwpo_original_baseline.py \
   --bundle /readonly/original_curve/baseline_bundle.json \
+  --bundle-sha256 <AUTHORITY_PUBLISHED_BUNDLE_SHA256> \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/baseline_import.json"
 
@@ -93,6 +97,11 @@ RWWPO_EVAL_STEP=5 bash scripts/h20/run_rwwpo_s128_anchor.sh
   --resolved-manifest "$RWWPO_EVAL_RESOLVED_MANIFEST" \
   --expected-manifest-sha256 "$RWWPO_EVAL_RESOLVED_SHA256" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/t5_s128.json"
+"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/compare_rwwpo_anchor.py \
+  --method "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/t5_s128.json" \
+  --baseline-import "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/baseline_import.json" \
+  --step 5 --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/t5_compare.json"
 ```
 
 ## T10/T15/T20/T25 continuation

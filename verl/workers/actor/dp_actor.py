@@ -58,6 +58,28 @@ class DataParallelPPOActor(BasePPOActor):
             else verl_F.entropy_from_logits
         )
 
+    def _snapshot_local_optimizer_step(self):
+        """CPU snapshot of local FSDP shards and optimizer for reject/rollback."""
+        def cpu_clone(value):
+            if torch.is_tensor(value):
+                return value.detach().cpu().clone()
+            if isinstance(value, dict):
+                return {key: cpu_clone(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [cpu_clone(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(cpu_clone(item) for item in value)
+            return value
+        params = [param.detach().cpu().clone() for param in self.actor_module.parameters()]
+        return params, cpu_clone(self.actor_optimizer.state_dict())
+
+    def _restore_local_optimizer_step(self, snapshot):
+        params, optimizer = snapshot
+        with torch.no_grad():
+            for target, source in zip(self.actor_module.parameters(), params):
+                target.copy_(source.to(device=target.device, dtype=target.dtype))
+        self.actor_optimizer.load_state_dict(optimizer)
+
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
@@ -395,7 +417,8 @@ class DataParallelPPOActor(BasePPOActor):
                         cliprange=self.config.clip_ratio,
                         cliprange_low=self.config.clip_ratio_low,
                         cliprange_high=self.config.clip_ratio_high,
-                        clip_ratio_c=self.config.get("clip_ratio_c", 3.0))
+                        clip_ratio_c=self.config.get("clip_ratio_c", 3.0),
+                        writer_log_ratio_cap=float(rwwpo_config.get("writer_log_ratio_cap", 4.0)))
                     if rwwpo_collect_original:
                         policy_loss, original_clipfrac, original_kl, original_lower = compute_policy_loss(
                             old_log_prob=old_log_prob, log_prob=current_log_prob,
@@ -417,39 +440,68 @@ class DataParallelPPOActor(BasePPOActor):
                         policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_loss_coef
-                    prefix_rows = rwwpo_metrics["prefix_log_ratios"]
-                    if torch.distributed.is_initialized():
-                        gathered = [None] * torch.distributed.get_world_size()
-                        torch.distributed.all_gather_object(gathered, prefix_rows)
-                        prefix_rows = [row for rank_rows in gathered for row in rank_rows]
-                    global_prefix_stats = []
-                    for turn in sorted({row["turn"] for row in prefix_rows}):
-                        values = torch.tensor([row["log_ratio"] for row in prefix_rows if row["turn"] == turn],
-                                              dtype=torch.float64)
-                        weights = torch.softmax(values, dim=0)
-                        count = len(values)
-                        chi2 = float((count * weights.square().sum() - 1).item())
-                        global_prefix_stats.append({"turn": turn, "batch_size": count,
-                            "ess_fraction": 1.0 / (1.0 + chi2), "chi2": chi2})
+                    def build_global_stats(prefix_rows):
+                        if torch.distributed.is_initialized():
+                            gathered = [None] * torch.distributed.get_world_size()
+                            torch.distributed.all_gather_object(gathered, prefix_rows)
+                            prefix_rows = [row for rank_rows in gathered for row in rank_rows]
+                        result = []
+                        for turn in sorted({row["turn"] for row in prefix_rows}):
+                            turn_rows = [row for row in prefix_rows if row["turn"] == turn]
+                            values = torch.tensor([row["log_ratio"] for row in turn_rows], dtype=torch.float64)
+                            weights = torch.softmax(values, dim=0); count = len(values)
+                            chi2 = float((count * weights.square().sum() - 1).item())
+                            result.append({"turn": turn, "batch_size": count,
+                                "ess_fraction": 1.0 / (1.0 + chi2), "chi2": chi2,
+                                "max_abs_log_ratio": float(values.abs().max().item()),
+                                "mean_log_ratio": float(values.mean().item())})
+                        return result
+                    global_prefix_stats = build_global_stats(rwwpo_metrics["prefix_log_ratios"])
                     q_min = float(rwwpo_config.get("q_min", 0.5))
+                    ratio_cap = float(rwwpo_config.get("writer_log_ratio_cap", 4.0))
                     constraint_pass = rwwpo_collect_original or all(
-                        row["ess_fraction"] >= q_min for row in global_prefix_stats)
-                    from recurrent.research.rwwpo_ledger import append_actual_loss_record
-                    append_actual_loss_record(
-                        ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
-                        mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
-                        global_step=int(joined("rwwpo_global_step")[0].item()),
-                        epoch=epoch, minibatch=batch_idx, old_log_prob=old_log_prob,
-                        current_log_prob=current_log_prob, response_mask=response_mask,
-                        writer_mask=writer_mask, answer_mask=rwwpo_metrics["answer_mask"],
-                        trajectory_turn=joined("trajectory_turn"), sample_index=joined("sample_index"),
-                        advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
-                        prefix_stats=global_prefix_stats, q_min=q_min,
-                        constraint_pass=constraint_pass)
+                        row["ess_fraction"] >= q_min and row["max_abs_log_ratio"] <= ratio_cap
+                        for row in global_prefix_stats)
                     if rwwpo_enabled and not constraint_pass:
                         self.actor_optimizer.zero_grad()
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
                     policy_loss.backward()
+                    snapshot = self._snapshot_local_optimizer_step() if rwwpo_enabled else None
+                    grad_norm = self._optimizer_step()
+                    post_log_prob = current_log_prob.detach()
+                    post_prefix_stats = global_prefix_stats
+                    accepted = True
+                    if rwwpo_enabled:
+                        with torch.no_grad():
+                            post_log_prob = torch.cat([
+                                self._forward_micro_batch(item[0], temperature=temperature,
+                                                          calculate_entropy=False)[1]
+                                for item in forwarded], dim=0)
+                            _, post_metrics = compute_rwwpo_policy_loss(
+                                old_log_prob, post_log_prob, joined("advantages"), response_mask,
+                                writer_mask, final_mask, joined("sample_index"), joined("trajectory_turn"),
+                                self.config.clip_ratio, self.config.clip_ratio_low,
+                                self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
+                                writer_log_ratio_cap=ratio_cap)
+                        post_prefix_stats = build_global_stats(post_metrics["prefix_log_ratios"])
+                        accepted = all(row["ess_fraction"] >= q_min and
+                                       row["max_abs_log_ratio"] <= ratio_cap
+                                       for row in post_prefix_stats)
+                        if not accepted:
+                            self._restore_local_optimizer_step(snapshot)
+                    from recurrent.research.rwwpo_ledger import append_actual_loss_record
+                    append_actual_loss_record(
+                        ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
+                        mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
+                        global_step=int(joined("rwwpo_global_step")[0].item()), epoch=epoch,
+                        minibatch=batch_idx, old_log_prob=old_log_prob, current_log_prob=current_log_prob,
+                        proposed_post_log_prob=post_log_prob, response_mask=response_mask,
+                        writer_mask=writer_mask, answer_mask=rwwpo_metrics["answer_mask"],
+                        trajectory_turn=joined("trajectory_turn"), sample_index=joined("sample_index"),
+                        advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
+                        prefix_rows=rwwpo_metrics["prefix_log_ratios"], prefix_stats=global_prefix_stats,
+                        post_prefix_stats=post_prefix_stats, q_min=q_min,
+                        constraint_pass=constraint_pass, accepted=accepted)
                     append_to_dict(metrics, {
                         "actor/pg_loss": policy_loss.detach().item(),
                         "actor/pg_clipfrac": rwwpo_metrics["answer_clipfrac"].detach().item(),
@@ -457,8 +509,8 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/pg_clipfrac_lower": rwwpo_metrics["answer_clipfrac_lower"].detach().item(),
                         "rwwpo/min_prefix_ess": min(row["ess_fraction"] for row in global_prefix_stats),
                     })
-                    grad_norm = self._optimizer_step()
-                    append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item()})
+                    append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),
+                                             "rwwpo/update_accepted": float(accepted)})
                     continue
 
                 for data in micro_batches:

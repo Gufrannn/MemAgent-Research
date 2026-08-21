@@ -18,24 +18,42 @@ def main():
     rows=[]
     for source in a.original_ledger:
         rows.extend(json.loads(line) for line in Path(source).read_text().splitlines() if line.strip())
-    observations=[]
+    grouped={}
     for row in rows:
-        writer_tokens=sum(int(bool(v)) for token_row in row["writer_mask"] for v in token_row)
-        local=[]
-        for old,cur,mask in zip(row["old_log_prob"],row["current_log_prob"],row["writer_mask"]):
-            local.extend(c-o for o,c,m in zip(old,cur,mask) if bool(m))
-        for stat in row["prefix_stats"]:
-            observations.append((writer_tokens, stat["ess_fraction"], max(map(abs,local))))
+        grouped.setdefault((row["attempt_id"],row["global_step"],row["epoch"],row["minibatch"]),[]).append(row)
+    observations=[]
+    for identity,group in grouped.items():
+        prefix=[item for row in group for item in row["prefix_rows"]]
+        token=[]; write=[]
+        for row in group:
+            for old,cur,mask,turn in zip(row["old_log_prob"],row["current_log_prob"],row["writer_mask"],row["trajectory_turn"]):
+                values=[c-o for o,c,m in zip(old,cur,mask) if bool(m)]
+                if values: token.extend(values); write.append((int(turn),sum(values)))
+        for stat in group[0]["prefix_stats"]:
+            turn=stat["turn"]; selected=[item for item in prefix if item["turn"]==turn]
+            write_values=[value for item_turn,value in write if item_turn==turn]
+            if not selected or not write_values: continue
+            peak=max(write_values); weights=[math.exp(v-peak) for v in write_values]; total=sum(weights); weights=[v/total for v in weights]
+            write_ess=1/(len(weights)*sum(v*v for v in weights))
+            observations.append({"identity":identity,"turn":turn,"mean_prefix_length":sum(x["prefix_token_count"] for x in selected)/len(selected),
+                "prefix_ess":stat["ess_fraction"],"write_ess":write_ess,
+                "token_clipfrac":sum(abs(v)>math.log(1.2) for v in token)/len(token),
+                "max_abs_token_log_ratio":max(map(abs,token)),
+                "max_abs_prefix_log_ratio":max(abs(x["log_ratio"]) for x in selected)})
     collapse=base["min_prefix_ess"] < 0.95
-    lengths={x[0] for x in observations}
-    same_length_variation=any(max(v[1] for v in observations if v[0]==length)-min(v[1] for v in observations if v[0]==length)>1e-6 for length in lengths)
-    local_not_sufficient=any(ess < .95 and max_abs <= math.log(1.2) for _,ess,max_abs in observations)
-    status="PASS" if collapse and len(lengths)>1 and same_length_variation and local_not_sufficient else "FAIL"
+    lengths={round(x["mean_prefix_length"],6) for x in observations}
+    local_not_sufficient=any(x["prefix_ess"]<.95 and x["token_clipfrac"]==0 for x in observations)
+    per_write_not_sufficient=any(x["prefix_ess"]<.95 and x["write_ess"]>=.95 for x in observations)
+    aperture=any(.01 < x["max_abs_prefix_log_ratio"] < 4.0 for x in observations)
+    length_not_proxy=len(lengths)>1 and len({round(x["prefix_ess"],8) for x in observations})>1
+    status="PASS" if len(observations)>=8 and collapse and length_not_proxy and local_not_sufficient and per_write_not_sufficient and aperture else "FAIL"
     report={"status":status,"decision":"RWWPO_E1_PASS" if status=="PASS" else "RWWPO_E1_NO_GO",
             "git_commit":head,"source_ledgers":[{"path":str(Path(x).resolve()),"sha256":hashlib.sha256(Path(x).read_bytes()).hexdigest()} for x in a.original_ledger],
             "record_count":base["record_count"],"min_prefix_ess":base["min_prefix_ess"],"prefix_collapse_observed":collapse,
-            "distinct_writer_lengths":len(lengths),"same_length_ess_variation":same_length_variation,
-            "token_clip_does_not_exclude_prefix_collapse":local_not_sufficient}
+            "optimizer_turn_observations":len(observations),"distinct_prefix_lengths":len(lengths),"length_not_pure_proxy":length_not_proxy,
+            "token_clip_does_not_exclude_prefix_collapse":local_not_sufficient,
+            "per_write_ess_does_not_exclude_prefix_collapse":per_write_not_sufficient,
+            "nonzero_feasible_aperture":aperture}
     raw=json.dumps(report,sort_keys=True,separators=(",",":")); report["report_sha256"]=hashlib.sha256(raw.encode()).hexdigest()
     out=Path(a.output); out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
     raise SystemExit(0 if status=="PASS" else 1)

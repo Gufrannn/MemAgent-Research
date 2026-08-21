@@ -31,7 +31,7 @@ def audit(paths, require_method=True):
                     raise ValueError(f"duplicate optimizer identity: {identity}")
                 seen.add(identity)
                 shapes = [len(row[key]) for key in ("old_log_prob", "current_log_prob",
-                          "response_mask", "writer_mask", "answer_mask", "advantages")]
+                          "proposed_post_log_prob", "response_mask", "writer_mask", "answer_mask", "advantages")]
                 if len(set(shapes)) != 1 or shapes[0] != len(row["sample_index"]):
                     raise ValueError("row/tensor alignment failure")
                 denominator = 0
@@ -44,6 +44,21 @@ def audit(paths, require_method=True):
                         denominator += int(bool(r))
                 if denominator != row["denominator"]:
                     raise ValueError("denominator mismatch")
+                recomputed=[]
+                for sid in sorted(set(row["sample_index"])):
+                    indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
+                    indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
+                    for index in indices:
+                        active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                        advantages={round(float(row["advantages"][index][j]),12) for j in active}
+                        if len(advantages)!=1: raise ValueError("writer advantage is not scalar within a write")
+                        running += sum(float(row["current_log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active)
+                        tokens += len(active)
+                        recomputed.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
+                declared=sorted(row["prefix_rows"],key=lambda x:(x["sample_index"],x["turn"]))
+                actual=sorted(recomputed,key=lambda x:(x["sample_index"],x["turn"]))
+                if len(declared)!=len(actual) or any(d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or d["prefix_token_count"]!=v["prefix_token_count"] or not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10) for d,v in zip(declared,actual)):
+                    raise ValueError("prefix rows do not reconstruct from actual-loss tensors")
                 for stat in row["prefix_stats"]:
                     expected = 1.0 / (1.0 + stat["chi2"])
                     if not math.isclose(stat["ess_fraction"], expected, rel_tol=1e-9, abs_tol=1e-12):
@@ -51,6 +66,22 @@ def audit(paths, require_method=True):
                 rows.append(row)
     if not rows:
         raise ValueError("missing actual-loss rows")
+    groups={}
+    for row in rows:
+        key=(row["attempt_id"],row["global_step"],row["epoch"],row["minibatch"])
+        groups.setdefault(key,[]).append(row)
+    for key,group in groups.items():
+        combined=[item for row in group for item in row["prefix_rows"]]
+        expected=[]
+        for turn in sorted({item["turn"] for item in combined}):
+            values=[item["log_ratio"] for item in combined if item["turn"]==turn]
+            peak=max(values); raw=[math.exp(value-peak) for value in values]; total=sum(raw)
+            weights=[value/total for value in raw]; chi2=len(values)*sum(value*value for value in weights)-1
+            expected.append((turn,1/(1+chi2),chi2,max(abs(value) for value in values)))
+        for row in group:
+            declared=row["prefix_stats"]
+            if len(declared)!=len(expected) or any(item["turn"]!=value[0] or not math.isclose(item["ess_fraction"],value[1],rel_tol=1e-9,abs_tol=1e-10) or not math.isclose(item["chi2"],value[2],rel_tol=1e-9,abs_tol=1e-10) or not math.isclose(item["max_abs_log_ratio"],value[3],rel_tol=1e-9,abs_tol=1e-10) for item,value in zip(declared,expected)):
+                raise ValueError(f"global prefix statistics do not reconstruct for {key}")
     active = any(any(abs(c-o) > 1e-10 for old, cur in zip(row["old_log_prob"], row["current_log_prob"])
                      for o, c in zip(old, cur)) for row in rows)
     if require_method and not active:
