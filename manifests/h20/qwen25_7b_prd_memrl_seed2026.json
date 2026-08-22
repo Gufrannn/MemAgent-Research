@@ -17,6 +17,7 @@
     "curve_final_report": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json",
     "curve_resolved_manifest": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json",
     "original_training_final_report": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json",
+    "original_training_final_report_sha256": "33cab1eb09eefd89b7f764d0f2c6851eac5e58dc7c0a3d147c30ce05522c9040",
     "original_training_resolved_manifest": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json",
     "original_training_resolved_sha256": "COMPUTE_READ_ONLY_ON_H20_AND_FREEZE_IN_IMPORT_CERTIFICATE",
     "stable_s128_resolved_manifest": "/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json",

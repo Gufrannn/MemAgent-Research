@@ -32,6 +32,7 @@ export GPU_PAIR=2,7
 export PRD_PYTHON=$WORK_ROOT/.venv/bin/python
 
 export ORIGINAL_CURVE_REPORT=/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json
+export ORIGINAL_TRAINING_REPORT=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json
 export ORIGINAL_TRAINING_RESOLVED=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json
 export STABLE_S128_RESOLVED=/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json
 sha256sum "$ORIGINAL_TRAINING_RESOLVED"
@@ -46,6 +47,7 @@ $PRD_PYTHON tools/h20/import_prd_original_baseline.py \
   --curve-report "$ORIGINAL_CURVE_REPORT" \
   --stable-resolved "$STABLE_S128_RESOLVED" \
   --validation-parquet /absolute/path/to/the/frozen/hotpotqa_dev.parquet \
+  --original-training-final-report "$ORIGINAL_TRAINING_REPORT" \
   --original-training-resolved "$ORIGINAL_TRAINING_RESOLVED" \
   --output "$BASELINE_CERT"
 scripts/h20/run_qwen25_7b_prd_memrl.sh bind

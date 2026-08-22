@@ -65,8 +65,12 @@ def command_bind(args: argparse.Namespace) -> None:
         fail("baseline does not contain the complete six-anchor curve")
     if baseline.get("actual_loss_status") != "PENDING_ACTUAL_LOSS_LEDGER":
         fail("baseline actual-loss boundary missing")
-    if not baseline.get("original_training_resolved_sha256"):
-        fail("Original training protocol resolved manifest is unbound")
+    if baseline.get("original_training_final_report") != "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json":
+        fail("Original training report provenance mismatch")
+    if baseline.get("original_training_final_report_sha256") != "33cab1eb09eefd89b7f764d0f2c6851eac5e58dc7c0a3d147c30ce05522c9040":
+        fail("Original training report authentication mismatch")
+    if not baseline.get("original_training_p0_sha256") or not baseline.get("original_training_resolved_sha256"):
+        fail("Original training P0/protocol resolved manifest is unbound")
     if p0.get("status") != "PASS" or p0.get("decision") != "PRD_P0_PASS":
         fail("P0 is not PASS")
     if p0.get("evidence", {}).get("git_commit") != args.commit:
