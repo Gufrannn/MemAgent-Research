@@ -179,8 +179,11 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("torch.distributed.run",entry)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
-        self.assertIn("coral_e1_seed2026_v5",entry)
-        self.assertIn("coral_e1_seed2026_v3|coral_e1_seed2026_v4",entry)
+        self.assertIn("coral_e1_seed2026_v6",entry)
+        self.assertIn(
+            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5",
+            entry,
+        )
         self.assertIn("_coral_e1_resample_terminal",trainer)
         self.assertIn("both terminal branches must be proposal-resampled",trainer)
         self.assertIn("def clone(self) -> \"DataProto\"",protocol)
@@ -190,8 +193,14 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertNotIn("MEASUREMENT_ROOT",entry)
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
-        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v5",runbook)
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v6",runbook)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
+        clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
+        self.assertIn("sys.path.insert(0, str(ROOT))",clone_oracle)
+        self.assertLess(
+            clone_oracle.index("sys.path.insert(0, str(ROOT))"),
+            clone_oracle.index("from verl import DataProto"),
+        )
 
     def test_trainer_wires_role_phase_without_fictitious_anchor(self):
         trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()

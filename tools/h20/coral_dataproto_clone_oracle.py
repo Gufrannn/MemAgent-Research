@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,8 @@ import tensordict
 import torch
 from tensordict import TensorDict
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 from verl import DataProto
 
 

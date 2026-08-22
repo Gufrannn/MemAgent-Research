@@ -14,7 +14,7 @@ export MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/orig
 export MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256=<READ_ONLY_FROZEN_ORIGINAL_T25_RESOLVED_64HEX>
 export MEMAGENT_COSI_S128_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json
 export MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256=6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411
-export MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v5
+export MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v6
 
 cd "$MEMAGENT_COSI_REPO_DIR"
 git fetch origin h20/qwen25-7b-cosi-t25-frozen-20260822
@@ -41,7 +41,7 @@ bash scripts/h20/run_qwen25_7b_coral_e1_producer.sh
 
 E0 is an exact CPU enumeration. E1 is produced inside the real trainer, not imported from external JSON: odd writer updates 1,3,...,15 each contribute four new b4 roots with two trajectory replicas. After the actual writer update and audited vLLM synchronization, the same roots/seeds are regenerated. Source-policy final answers are discarded. Cached-old-memory and refreshed-memory terminal prompts are each sampled anew at the proposal weights with identical terminal request seeds, and reward/GRPO advantage is recomputed per branch. The actor then performs read-only actual-loss backward passes for cached answer, duplicate cached answer, refreshed answer, and cached writer. Four frozen, nonlinearly basis-separated 256-bucket CountSketch maps, an optimizer-step non-mutation check, the Gate-A ledger, and full actor inventories are sealed. The 32 roots are descriptive units nested four per writer proposal; uncertainty and the LCB are computed from the eight proposal means. This diagnostic output is never a Method warm-start.
 
-The post-v4 implementation uses the new append-only E1 ID `coral_e1_seed2026_v5`. The v4 directory is retained as failure evidence and may not be renamed, deleted, or reused. Before the distributed sketch oracle or trainer starts, the same `$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python` executes a zero-tensor-leaf `DataProto` clone oracle. Its complete runtime report and SHA are embedded by the sealer and revalidated by the final E1 auditor; bypassing that entry gate cannot yield a valid E1 certificate.
+The current implementation uses the new append-only E1 ID `coral_e1_seed2026_v6`. The v4 trainer failure and v5 clone-oracle import failure directories are retained as failure evidence and may not be renamed, deleted, or reused. Before the distributed sketch oracle or trainer starts, the same `$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python` executes a zero-tensor-leaf `DataProto` clone oracle. Its complete runtime report and SHA are embedded by the sealer and revalidated by the final E1 auditor; bypassing that entry gate cannot yield a valid E1 certificate.
 
 Expected H20 time for E1 is approximately 2--5 hours because it includes eight same-root regenerated rollouts and 128 root-level backward measurements. This is the required mechanism diagnostic, not the fresh Method curve; the fresh-T25 command remains locked unless it and the independent framing review pass.
 
