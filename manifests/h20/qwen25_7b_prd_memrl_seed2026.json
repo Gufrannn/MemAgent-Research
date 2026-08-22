@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "scientific_status": "REFRAME_GO_FOR_E0_E1_T5_GATED",
-  "training_authorization": "requires bound P0, E0, E1, paper review, and per-capacity launch receipt",
+  "scientific_status": "REFRAME_GO_FOR_E0_AND_INLINE_T5_HEALTH_GATED_METHOD; MECHANISM_CLAIMS_POSTHOC_E1_GATED",
+  "training_authorization": "requires E0 PASS, independently bound paper review GO, P0/baseline bind, and per-capacity launch receipt; E1 is posthoc and gates conditional-rate/information-bottleneck claims, not Method training",
   "branch": "h20/qwen25-7b-prd-memrl-t25-frozen-20260822",
   "fresh_base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
   "runtime": {
