@@ -17,7 +17,7 @@ case "$ACTION" in
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" e0 --output "$E0_CERT"
     ;;
   e1)
-    [[ ${E1_ROWS:-} == /* && -f ${E1_ROWS:-} ]] || prd_die 'E1_ROWS must name frozen Original JSONL'
+    [[ ${E1_ROWS:-} == /* && -f ${E1_ROWS:-} ]] || prd_die 'E1_ROWS must name authenticated on-policy Method JSONL'
     [[ ! -e $E1_CERT ]] || prd_die 'E1 certificate already exists; use a new RUN_ID'
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" e1 --rows "$E1_ROWS" --output "$E1_CERT"
     ;;
