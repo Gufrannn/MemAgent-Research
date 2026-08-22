@@ -5,7 +5,7 @@ import pytest
 
 from recurrent.research.mic import (
     CriticCheckpoint, append_jsonl_new, cross_fitted_values, innovation_ledger,
-    route_role_advantages, sha256_json, stable_fold_assignments,
+    route_role_advantages, sha256_json, stable_fold_assignments, stable_source_identities,
     validate_admissible_state,
 )
 
@@ -56,6 +56,16 @@ def test_stable_root_folds_are_deterministic_and_grouped():
     two = stable_fold_assignments(reversed(ids), 2)
     assert one == two
     assert one["b"] in (0, 1)
+
+
+def test_real_recurrent_source_schema_builds_stable_ids_without_prompt_ids_on_original_batch():
+    dataset_indices = [11, 11, 19, 19]
+    source_snapshot = [[101, 7], [101, 7], [101, 8], [101, 8]]
+    roots, examples = stable_source_identities(dataset_indices, source_snapshot, rollout_n=2)
+    assert roots[0] == roots[1] and roots[2] == roots[3] and roots[0] != roots[2]
+    assert len(set(examples)) == 4
+    with pytest.raises(ValueError, match="coverage mismatch"):
+        stable_source_identities(dataset_indices, source_snapshot[:-1], rollout_n=2)
 
 
 def test_oof_receipts_exclude_held_roots_and_close():

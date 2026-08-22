@@ -1864,9 +1864,27 @@ class RayPPOTrainer:
                             gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                             mic_config = self.config.algorithm.get("mic", {})
                             mic_enabled = bool(mic_config.get("enabled", False))
+                            mic_source_prompt_ids = None
+                            mic_source_context_ids = None
                             if mic_enabled:
                                 if self.config.algorithm.get("filter_groups", None):
                                     raise RuntimeError("MIC_NO_GO: filter_groups is incompatible with stable OOF routing")
+                                if "prompt_ids" not in gen_batch.non_tensor_batch \
+                                        or "context_ids" not in gen_batch.batch \
+                                        or "context_length" not in gen_batch.batch:
+                                    raise RuntimeError(
+                                        "MIC_NO_GO: recurrent source prompt/context capture is absent"
+                                    )
+                                mic_source_prompt_ids = [
+                                    [int(token) for token in tokens]
+                                    for tokens in gen_batch.non_tensor_batch["prompt_ids"]
+                                ]
+                                mic_source_context_ids = [
+                                    [int(token) for token in gen_batch.batch["context_ids"][row][
+                                        :int(gen_batch.batch["context_length"][row].item())
+                                    ].detach().cpu().tolist()]
+                                    for row in range(len(gen_batch))
+                                ]
                                 gen_batch.meta_info["mic_capture_post_write"] = True
                             trajectory_seed_mode = self.config.actor_rollout_ref.rollout.get("trajectory_seed_mode", None)
                             if trajectory_seed_mode not in (None, "", "legacy_shared"):
@@ -2141,26 +2159,24 @@ class RayPPOTrainer:
                                 from recurrent.research.mic import (
                                     CriticCheckpoint, append_jsonl_new, calibration_report,
                                     cross_fitted_values, innovation_ledger,
-                                    route_role_advantages, sha256_json,
+                                    route_role_advantages, sha256_json, stable_source_identities,
                                 )
 
                                 if "mic_materialized_memory" not in batch.non_tensor_batch \
                                         or "mic_turn_index" not in batch.batch:
                                     raise RuntimeError("MIC_NO_GO: materialized post-write capture is absent")
                                 base_trajectory_ids = [str(value) for value in source_trajectory_ids]
-                                stable_roots = [sha256_json({
-                                    "dataset_index": int(dataset_indices[index]),
-                                    "prompt_ids": [int(token) for token in
-                                                   original_batch.non_tensor_batch["prompt_ids"][index]],
-                                }) for index in range(len(base_trajectory_ids))]
-                                stable_examples = [sha256_json({
-                                    "stable_root_id": stable_roots[index],
-                                    "replica": index % int(self.config.actor_rollout_ref.rollout.n),
-                                }) for index in range(len(base_trajectory_ids))]
+                                if mic_source_prompt_ids is None or mic_source_context_ids is None:
+                                    raise RuntimeError("MIC_NO_GO: recurrent source snapshot is absent")
+                                stable_roots, stable_examples = stable_source_identities(
+                                    [int(value) for value in dataset_indices],
+                                    mic_source_prompt_ids,
+                                    int(self.config.actor_rollout_ref.rollout.n),
+                                )
                                 states = []
                                 for index, trajectory_id in enumerate(base_trajectory_ids):
                                     question = self.tokenizer.decode(
-                                        original_batch.non_tensor_batch["prompt_ids"][index],
+                                        mic_source_prompt_ids[index],
                                         skip_special_tokens=True,
                                     )
                                     states.append({
@@ -2178,8 +2194,8 @@ class RayPPOTrainer:
                                 chunk_size = int(self.recurrent_config.chunk_size)
                                 visible_chunks_by_source = []
                                 for source_row in range(len(base_trajectory_ids)):
-                                    context_length = int(original_batch.batch["context_length"][source_row].item())
-                                    context_ids = original_batch.batch["context_ids"][source_row][:context_length]
+                                    context_ids = mic_source_context_ids[source_row]
+                                    context_length = len(context_ids)
                                     visible_chunks_by_source.append([
                                         self.tokenizer.decode(
                                             context_ids[start:start + chunk_size], skip_special_tokens=True
@@ -2206,7 +2222,7 @@ class RayPPOTrainer:
                                         "trajectory_id": base_trajectory_ids[source_row],
                                         "turn_index": turn,
                                         "question": self.tokenizer.decode(
-                                            original_batch.non_tensor_batch["prompt_ids"][source_row],
+                                            mic_source_prompt_ids[source_row],
                                             skip_special_tokens=True,
                                         ),
                                         "visible_chunks": visible_chunks,

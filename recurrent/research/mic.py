@@ -134,6 +134,27 @@ def stable_fold_assignments(root_ids: Sequence[str], fold_count: int) -> dict[st
             for root in unique}
 
 
+def stable_source_identities(dataset_indices: Sequence[int],
+                             prompt_token_ids: Sequence[Sequence[int]],
+                             rollout_n: int) -> tuple[list[str], list[str]]:
+    """Bind recurrent source rows to deterministic dataset/prompt coordinates."""
+    if isinstance(rollout_n, bool) or not isinstance(rollout_n, int) or rollout_n < 1:
+        raise ValueError("MIC_NO_GO: rollout_n must be a positive integer")
+    if len(dataset_indices) != len(prompt_token_ids) or not dataset_indices:
+        raise ValueError("MIC_NO_GO: stable source identity coverage mismatch")
+    roots, examples = [], []
+    for row, (dataset_index, token_ids) in enumerate(zip(dataset_indices, prompt_token_ids)):
+        if isinstance(dataset_index, bool) or not isinstance(dataset_index, int) \
+                or not isinstance(token_ids, Sequence) \
+                or any(isinstance(token, bool) or not isinstance(token, int) for token in token_ids):
+            raise ValueError("MIC_NO_GO: invalid stable source coordinates")
+        root = sha256_json({"dataset_index": dataset_index,
+                            "prompt_ids": [int(token) for token in token_ids]})
+        roots.append(root)
+        examples.append(sha256_json({"stable_root_id": root, "replica": row % rollout_n}))
+    return roots, examples
+
+
 def _hashed_text_features(text: str, dimension: int) -> np.ndarray:
     vector = np.zeros(dimension, dtype=np.float64)
     for token in text.lower().split():
