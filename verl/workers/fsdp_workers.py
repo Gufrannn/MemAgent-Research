@@ -569,9 +569,10 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def measure_coral_role_gradient(self, data: DataProto, phase: str):
+    def measure_coral_role_gradient(self, data: DataProto):
         """Produce a read-only, actual-loss E1 gradient receipt per FSDP rank."""
         assert self._is_actor
+        phase = data.meta_info.get("coral_e1_measurement_role")
         if phase not in ("memory_writer", "terminal_answer"):
             raise ValueError("CORAL_E1_NO_GO: invalid measurement role")
         data = data.to(torch.cuda.current_device())

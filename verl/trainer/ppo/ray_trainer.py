@@ -1538,10 +1538,11 @@ class RayPPOTrainer:
             root.batch["final_mask"], self.actor_rollout_wg.world_size, valid_rows,
         ))
         root.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+        root.meta_info["coral_e1_measurement_role"] = phase
         root.meta_info["global_token_num"] = torch.sum(
             root.batch["attention_mask"], dim=-1,
         ).tolist()
-        output = self.actor_rollout_wg.measure_coral_role_gradient(root, phase)
+        output = self.actor_rollout_wg.measure_coral_role_gradient(root)
         sketches = output.batch["gradient_sketch"].detach().cpu().double()
         norms = output.batch["gradient_squared_norm"].detach().cpu().double().sqrt()
         if len(sketches) != self.actor_rollout_wg.world_size \
