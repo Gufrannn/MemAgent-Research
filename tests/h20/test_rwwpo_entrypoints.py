@@ -164,6 +164,16 @@ def test_tf_runbook_exports_variant_before_common_and_pins_same_output_root():
     assert text.index("export RWWPO_CONTROLLER_VARIANT=feasible_backtracking") < source
     assert "qwen25_7b_rwwpo_whole_prefix_feasible_backtracking_seed2026_" in text
 
+def test_tf_e0_is_self_contained_and_runbook_hashes_raw_ledger_tail():
+    e0=(ROOT/"tools/h20/run_tf_rwwpo_e0.py").read_text()
+    assert "Path(__file__).resolve().parents[2]" in e0
+    assert e0.index("sys.path.insert") < e0.index("from recurrent.research.rwwpo_transaction")
+    runbook=(ROOT/"docs/h20/tf_rwwpo_h20_runbook_20260822.md").read_text()
+    assert 'tail -n 1 "$CURVE_LEDGER" | sha256sum' in runbook
+    assert "git switch -C h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822 FETCH_HEAD" in runbook
+    assert 'for STEP in 5 10 15 20 25; do' in runbook
+    assert 'readonly_reaudit/t${STEP}_health.json' in runbook
+
 def test_tf_manifest_freezes_grid_constraint_and_t25_chain():
     row=json.loads((ROOT/"manifests/h20/qwen25_7b_tf_rwwpo_seed2026.json").read_text())
     assert row["method"]["q_min"]==0.5

@@ -9,10 +9,7 @@ Never reuse a run ID or output root.  Never kill another GPU process.
 ```bash
 cd /home/test001/memagent-rwwpo-release
 git fetch origin h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822
-git switch h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822 || \
-  git switch --track -c h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822 \
-    origin/h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822
-git merge --ff-only origin/h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822
+git switch -C h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822 FETCH_HEAD
 test "$(git rev-parse HEAD)" = '<REVIEWED_RELEASE_SHA>'
 test -z "$(git status --porcelain)"
 
@@ -51,7 +48,7 @@ export BASELINE_ROOT="$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/baseline_materia
 export CURVE_FINAL_SHA="$(sha256sum "$CURVE_FINAL" | awk '{print $1}')"
 export CURVE_RESOLVED_SHA="$(sha256sum "$CURVE_RESOLVED" | awk '{print $1}')"
 export CURVE_LEDGER_SHA="$(sha256sum "$CURVE_LEDGER" | awk '{print $1}')"
-export CURVE_LEDGER_TAIL="$("$RWWPO_PYTHON" -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["record_sha256"])' "$CURVE_LEDGER")"
+export CURVE_LEDGER_TAIL="$(tail -n 1 "$CURVE_LEDGER" | sha256sum | awk '{print $1}')"
 
 "$RWWPO_PYTHON" tools/h20/materialize_rwwpo_baseline_bundle.py \
   --final-report "$CURVE_FINAL" --final-report-sha256 "$CURVE_FINAL_SHA" \
@@ -113,16 +110,25 @@ run ID from fresh P0.  An unmatched transaction intent makes audit fail closed.
 
 ## Post-training audit and evaluation
 
-After T25, run `audit_rwwpo_actual_loss.py` and then:
+After T25, run `audit_rwwpo_actual_loss.py`, then materialize and independently
+reproduce the health receipt for every saved anchor:
 
 ```bash
-"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_run.py \
-  --run-root "$RWWPO_OUTPUT" --actual-ledger-dir "$RWWPO_LEDGER_DIR" \
-  --execution-ledger "$RWWPO_EXECUTION_LEDGER" \
-  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
-  --expected-schema-version rwwpo-actual-loss-v2 \
-  --expected-objective whole_prefix --expected-controller feasible_backtracking \
-  --target-step 25 --output "$RWWPO_CERT_ROOT/t25_health.json"
+mkdir -p "$RWWPO_CERT_ROOT/readonly_reaudit"
+for STEP in 5 10 15 20 25; do
+  for DEST in "$RWWPO_CERT_ROOT/t${STEP}_health.json" \
+              "$RWWPO_CERT_ROOT/readonly_reaudit/t${STEP}_health.json"; do
+    "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_run.py \
+      --run-root "$RWWPO_OUTPUT" --actual-ledger-dir "$RWWPO_LEDGER_DIR" \
+      --execution-ledger "$RWWPO_EXECUTION_LEDGER" \
+      --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+      --expected-schema-version rwwpo-actual-loss-v2 \
+      --expected-objective whole_prefix --expected-controller feasible_backtracking \
+      --target-step "$STEP" --output "$DEST"
+  done
+  cmp "$RWWPO_CERT_ROOT/t${STEP}_health.json" \
+      "$RWWPO_CERT_ROOT/readonly_reaudit/t${STEP}_health.json"
+done
 ```
 
 Then perform a second read-only re-audit. Only after both pass, evaluate the saved

@@ -8,6 +8,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# This file is a user-facing H20 entrypoint, so it must work when invoked as
+# ``python tools/h20/run_tf_rwwpo_e0.py`` without relying on an ambient
+# PYTHONPATH.  Python otherwise puts tools/h20, rather than the repository
+# root, on sys.path.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from recurrent.research.rwwpo_transaction import ALPHA_GRID, largest_tested_feasible
 
 
