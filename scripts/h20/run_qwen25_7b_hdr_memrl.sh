@@ -2,33 +2,12 @@
 set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/hdr_memrl_common.sh"
-: "${HDR_TARGET_STEP:?set HDR_TARGET_STEP to 5,10,15,20,25}"
-[[ $HDR_TARGET_STEP =~ ^(5|10|15|20|25)$ ]] || { echo HDR_NO_GO:invalid_target >&2; exit 73; }
+: "${HDR_TARGET_STEP:=25}"
+[[ $HDR_TARGET_STEP == 25 ]] || { echo HDR_NO_GO:method_is_one_continuous_fresh_T25_run >&2; exit 73; }
 hdr_require_checkout; hdr_acquire_gpu_locks; hdr_require_gates; hdr_require_idle
 mkdir -p "$HDR_ROOT" "$HDR_CERT"
-if [[ $HDR_TARGET_STEP -eq 5 ]]; then
-  [[ ! -e $HDR_OUTPUT ]] || { echo HDR_NO_GO:fresh_output_exists >&2; exit 74; }
-  PHASE=fresh; SOURCE_STEP=0
-else
-  case "$HDR_TARGET_STEP" in 10) SOURCE_STEP=5;; 15) SOURCE_STEP=10;; 20) SOURCE_STEP=15;; 25) SOURCE_STEP=20;; esac
-  "$HDR_PYTHON" - "$HDR_CERT/t${SOURCE_STEP}_health.json" "$SOURCE_STEP" <<'PY'
-import json,os,sys
-r=json.load(open(sys.argv[1])); prefix="HDR" if os.environ.get("HDR_VARIANT","dro")=="dro" else "UNIFORM"; expected=f"{prefix}_T{sys.argv[2]}_HEALTH_PASS"
-raise SystemExit(0 if r.get("status")=="PASS" and r.get("decision")==expected else "HDR_NO_GO:previous_anchor_health")
-PY
-  [[ -d $HDR_OUTPUT/global_step_$SOURCE_STEP/actor && -f $HDR_OUTPUT/global_step_$SOURCE_STEP/data.pt && -f $HDR_OUTPUT/global_step_$SOURCE_STEP/hdr_dro_state.json && -f $HDR_OUTPUT/global_step_$SOURCE_STEP/hdr_checkpoint_binding.json ]] || { echo HDR_NO_GO:incomplete_resume_checkpoint >&2; exit 75; }
-  "$HDR_PYTHON" - "$HDR_OUTPUT/global_step_$SOURCE_STEP" "$MEMAGENT_HDR_EXPECTED_COMMIT" "$HDR_RUN_ID" "$GPU_PAIR" <<'PY'
-import hashlib,json,sys
-from pathlib import Path
-root=Path(sys.argv[1]); b=json.load(open(root/'hdr_checkpoint_binding.json'))
-if (b.get('git_commit'),b.get('run_id'),b.get('gpu_pair')) != tuple(sys.argv[2:5]): raise SystemExit('HDR_NO_GO:resume_binding_drift')
-for item in b.get('inventory',[]):
- p=root/item['path']; h=hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
- if h!=item['sha256'] or p.stat().st_size!=item['size']: raise SystemExit('HDR_NO_GO:checkpoint_inventory_tamper')
-PY
-  [[ ! -e $HDR_OUTPUT/global_step_$HDR_TARGET_STEP ]] || { echo HDR_NO_GO:target_would_overwrite >&2; exit 76; }
-  PHASE=resume
-fi
+[[ ! -e $HDR_OUTPUT ]] || { echo HDR_NO_GO:fresh_output_exists >&2; exit 74; }
+PHASE=fresh; SOURCE_STEP=0
 export CUDA_VISIBLE_DEVICES=$GPU_PAIR
 export HDR_MANIFEST_SHA256
 HDR_MANIFEST_SHA256=$(shasum -a 256 "$HDR_MANIFEST" | awk '{print $1}')
@@ -42,7 +21,7 @@ if [[ $HDR_VARIANT == dro ]]; then export HDR_DRO_ENABLED=true; else export HDR_
 export WORK_ROOT=$MEMAGENT_HDR_WORK_ROOT CODE=$HDR_REPO PYTHON=$HDR_PYTHON EXP=$HDR_EXP RUN_SEED=2026
 export TRAIN_BATCH_SIZE=4 ROLLOUT_N=2 PPO_MINI_BATCH_SIZE=4 N_GPUS=2 FSDP_SIZE=2 REWARD_MANAGER=naive
 export GPU_MEMORY_UTILIZATION=0.55 PHASE SAVE_FREQ=5 MAX_ACTOR_CKPT_TO_KEEP=5
-if [[ $PHASE == fresh ]]; then export FRESH_TOTAL_STEPS=5; else export RESUME_TOTAL_STEPS=$HDR_TARGET_STEP RESUME_SOURCE_STEP=$SOURCE_STEP RESUME_FROM=$HDR_OUTPUT/global_step_$SOURCE_STEP; fi
+export FRESH_TOTAL_STEPS=25
 OVERRIDES_JSON=$(EMIT_TRAINER_OVERRIDES=1 bash "$HDR_REPO/experiments/7b_gate_a/run_gate_a.sh" | tail -n 1)
 export OVERRIDES_JSON
 HDR_RUNTIME_OVERRIDE_SHA256=$("$HDR_PYTHON" - "$HDR_ROOT/runtime_overrides_t${HDR_TARGET_STEP}.json" "$HDR_TARGET_STEP" "$SOURCE_STEP" <<'PY'

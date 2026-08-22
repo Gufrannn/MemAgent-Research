@@ -48,7 +48,7 @@ def main():
   sp=SamplingParams(n=1,temperature=0.0,top_p=1.0,max_tokens=1024,seed=a.seed+idx*1009+horizon*37+horizon)
   ans=llm.generate([msg],sp,use_tqdm=False)[0].outputs[0]; cap |= ans.finish_reason=="length"
   reward=row.get("reward_model",{}); gold=reward.get("ground_truth",reward.get("target",row.get("answer",""))) if isinstance(reward,dict) else row.get("answer","")
-  rec={"stable_id":f"{rid}:h{horizon}","root_id":rid,"horizon":horizon,"prediction":ans.text,"gold":str(gold),"total_input_tokens":total,"cap_hit":bool(cap),"truncated":False,"evidence_equated":True,"model_path":str(Path(a.model).resolve()),"seed":a.seed,"receipt":receipt.as_dict()}; rec.update(prediction_metrics(ans.text,str(gold))); rows.append(rec)
+  rec={"stable_id":f"{rid}:h{horizon}","root_id":rid,"source_order_index":int(row.get("source_order_index",idx)),"horizon":horizon,"prediction":ans.text,"gold":str(gold),"total_input_tokens":total,"cap_hit":bool(cap),"truncated":False,"evidence_equated":True,"model_path":str(Path(a.model).resolve()),"seed":a.seed,"receipt":receipt.as_dict()}; rec.update(prediction_metrics(ans.text,str(gold))); rows.append(rec)
  from recurrent.research.hdr_memrl import validate_evidence_equated
  validate_evidence_equated(receipts, sorted(set(int(x) for x in df["horizon_id"].tolist())))
  out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(rows,indent=2,sort_keys=True)+"\n")

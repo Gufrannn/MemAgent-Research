@@ -3,8 +3,8 @@
   "frozen_at": "2026-08-22T00:00:00+08:00",
   "branch": "h20/qwen25-7b-hdr-memrl-t25-frozen-20260822",
   "base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
-  "accepted_original_resolved_manifest": "manifests/h20/qwen25_7b_original_t25_seed2026.json",
-  "accepted_original_resolved_manifest_sha256": "35db74bb4860b9c1de0b3ab80c7d209eb7ec7d336a4e090610ddb7dd49270cff",
+  "accepted_original_resolved_manifest": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json",
+  "accepted_original_resolved_manifest_sha256": "814fc1219530f013d4c82e5edd67bc04be7b62699936da9598303911ab7fc220",
   "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
   "train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
   "training": {"source": "fresh_base", "first_method_update": 1, "seed": 2026, "anchors": [5, 10, 15, 20, 25], "one_allowed_revision_class": "dual_timescale_or_curriculum"},
@@ -15,5 +15,5 @@
   "allowed_manifest_differences": ["recurrent.memory.config.hdr_*", "algorithm.hdr_memrl", "trainer.experiment_name", "trainer.total_training_steps", "trainer.resume_*", "trainer.default_local_dir", "trainer.save_freq"],
   "forbidden": ["original_step3_warmstart", "gold_or_future_features", "row_outcome_features", "manual_scores", "random_uuid_identity", "hf_rollout_fallback", "trajectory_budget_increase"],
   "gpu": {"pair_from_environment": "GPU_PAIR", "world_size": 2, "canonical_ascending": true, "lock_template": "locks/memagent_h20_gpu_N.lock"},
-  "authorization": {"requires_p0": true, "requires_e0": true, "requires_e1": true, "requires_baseline_import": true, "requires_paper_review_go": true, "gpu_authorized_by_manifest_alone": false}
+  "authorization": {"requires_p0": true, "requires_e0": true, "requires_e1": true, "requires_baseline_import_for_training": false, "requires_original_curve_for_post_training_comparison": true, "requires_paper_review_go": true, "gpu_authorized_by_manifest_alone": false}
 }

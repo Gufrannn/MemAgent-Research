@@ -6,24 +6,32 @@ ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT))
 from recurrent.research.hdr_memrl import build_horizon_receipt, stable_root_id, validate_evidence_equated, write_json
 
 def main():
- p=argparse.ArgumentParser(); p.add_argument("--input",required=True); p.add_argument("--input-sha256",required=True); p.add_argument("--model",required=True); p.add_argument("--horizons",type=int,nargs="+",required=True); p.add_argument("--count",type=int,default=128); p.add_argument("--output-parquet",required=True); p.add_argument("--receipts",required=True); p.add_argument("--roots",required=True); a=p.parse_args()
+ p=argparse.ArgumentParser(); p.add_argument("--input",required=True); p.add_argument("--input-sha256",required=True); p.add_argument("--model",required=True); p.add_argument("--horizons",type=int,nargs="+",required=True); p.add_argument("--count",type=int,default=128); p.add_argument("--identity-resolved"); p.add_argument("--identity-resolved-sha256"); p.add_argument("--output-parquet",required=True); p.add_argument("--receipts",required=True); p.add_argument("--roots",required=True); a=p.parse_args()
  import pandas as pd
  from transformers import AutoTokenizer
  h=hashlib.sha256(Path(a.input).read_bytes()).hexdigest()
  if h!=a.input_sha256: raise SystemExit("HDR_NO_GO:dataset_sha_mismatch")
  tok=AutoTokenizer.from_pretrained(a.model,local_files_only=True)
  df=pd.read_parquet(a.input); out=[]; receipts=[]; roots=[]
- for source_pos,row in df.iterrows():
+ selected=None
+ if a.identity_resolved:
+  if hashlib.sha256(Path(a.identity_resolved).read_bytes()).hexdigest()!=a.identity_resolved_sha256: raise SystemExit("HDR_NO_GO:identity_resolved_sha_mismatch")
+  identity=json.loads(Path(a.identity_resolved).read_text()).get("identity_payload",{}).get("rows",[])
+  if len(identity)!=a.count or [int(x["source_order_index"]) for x in identity]!=list(range(a.count)): raise SystemExit("HDR_NO_GO:identity_row_closure")
+  selected={int(x["raw_row_position"]):x for x in identity}
+  iterator=((pos,df.iloc[pos]) for pos in selected)
+ else: iterator=df.iterrows()
+ for source_pos,row in iterator:
   if len(roots) >= a.count: break
   prompt=row["prompt"]; query=prompt[0]["content"] if isinstance(prompt,(list,tuple)) else prompt.tolist()[0]["content"]
   idx=int(row.get("extra_info",{}).get("index",source_pos)); rid=stable_root_id(dataset_sha256=h,source_index=idx,query=query)
   tokens=tok.encode(str(row["context"]),add_special_tokens=False)
   if len(tokens)>40000: continue
   if not tokens: raise SystemExit("HDR_NO_GO:empty_effective_evidence")
-  roots.append(rid)
+  roots.append(rid); source_order=int(selected[source_pos]["source_order_index"]) if selected else len(roots)-1
   for horizon in a.horizons:
    receipt=build_horizon_receipt(rid,query,tokens,horizon); receipts.append(receipt)
-   item=row.to_dict(); item["horizon_id"]=horizon; item["stable_root_id_receipt"]=rid; out.append(item)
+   item=row.to_dict(); item["horizon_id"]=horizon; item["stable_root_id_receipt"]=rid; item["source_order_index"]=source_order; out.append(item)
  validate_evidence_equated(receipts,a.horizons)
  if len(set(roots)) != a.count: raise SystemExit(f"HDR_NO_GO:only_{len(set(roots))}_nontruncated_roots")
  Path(a.output_parquet).parent.mkdir(parents=True,exist_ok=True); pd.DataFrame(out).to_parquet(a.output_parquet,index=False)

@@ -75,7 +75,7 @@ def test_evaluator_rejects_cross_root_incomplete_horizons():
 def test_entry_contains_required_real_guards():
     common=(ROOT/"scripts/h20/hdr_memrl_common.sh").read_text(); run=(ROOT/"scripts/h20/run_qwen25_7b_hdr_memrl.sh").read_text()
     for needle in ["dirty_tree","wrong_commit","gpu_lock_conflict","gpu_occupied_no_process_killed","PAPER_FRAMING_GO"]: assert needle in common
-    for needle in ["fresh_output_exists","incomplete_resume_checkpoint","hdr_dro_state.json","FRESH_TOTAL_STEPS=5"]: assert needle in run
+    for needle in ["fresh_output_exists","hdr_dro_state.json","FRESH_TOTAL_STEPS=25","method_is_one_continuous_fresh_T25_run"]: assert needle in run
 
 def test_no_original_warmstart_or_kill_in_launcher():
     text=(ROOT/"scripts/h20/run_qwen25_7b_hdr_memrl.sh").read_text()
@@ -89,3 +89,28 @@ def test_manifest_budget_and_fresh_activation():
 def test_memory_agent_has_real_hdr_path():
     t=(ROOT/"recurrent/impls/memory.py").read_text(); tr=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
     assert "hdr_bounds" in t and "horizon_id" in t and "OnlineGroupDRO" in tr and "sample_multipliers" in tr
+
+def test_training_gate_does_not_require_original_curve_bundle():
+    common=(ROOT/"scripts/h20/hdr_memrl_common.sh").read_text()
+    assert "MEMAGENT_HDR_BASELINE_BUNDLE_SHA256" not in common
+    assert '"baseline_import.json"' not in common
+
+def test_original_curve_import_is_inventory_bound_and_recomputed():
+    control=(ROOT/"tools/h20/hdr_memrl_control.py").read_text()
+    for needle in ["curve ledger does not authenticate final report","certified terminal artifact missing","independently recomputed rows digest mismatch","stable-S128 ground truth drift"]:
+        assert needle in control
+    assert "--bundle" not in control and "--final-report" in control
+
+def test_fixed_s128_suite_requires_frozen_identity_positions():
+    prep=(ROOT/"tools/h20/prepare_hdr_horizon_suite.py").read_text()
+    evaluator=(ROOT/"tools/h20/run_hdr_strict_vllm_eval.py").read_text()
+    runbook=(ROOT/"docs/h20/hdr_memrl_h20_runbook.md").read_text()
+    assert "raw_row_position" in prep and "identity_resolved_sha_mismatch" in prep
+    assert '"source_order_index"' in evaluator
+    assert "--identity-resolved-sha256 6c17c818" in runbook
+
+def test_runbook_trains_once_then_evaluates_all_anchors():
+    text=(ROOT/"docs/h20/hdr_memrl_h20_runbook.md").read_text()
+    assert text.count("HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh")==1
+    assert "for HDR_ANCHOR in 5 10 15 20 25" in text
+    assert text.index("HDR_TARGET_STEP=25") < text.index("baseline-import") < text.index("for HDR_ANCHOR")
