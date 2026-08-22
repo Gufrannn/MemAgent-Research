@@ -114,7 +114,7 @@ def test_resume_corruption_real_training_entry_rejection(tmp_path):
 
 def _audit_fixture(tmp_path):
     gate_specs = {
-        "p0": ("MIC_P0_PASS", {"git_commit": "a" * 40}),
+        "p0": ("MIC_P0_PASS", {"git_commit": "a" * 40, "run_id": "audit-run"}),
         "e0": ("MIC_E0_PASS", {}), "e1": ("MIC_E1_PASS", {}),
         "paper_review": ("MIC_PAPER_REVIEW_GO", {}),
         "baseline": ("MIC_BASELINE_IMPORT_PASS", {}),
@@ -194,6 +194,34 @@ def _valid_gradient_row():
             }}
 
 
+def _append_valid_weight_sync(path, *, summary_digest="d" * 64):
+    parameters = ["model.layers.0.self_attn.o_proj.weight"]
+    for rank in (0, 1):
+        append_jsonl(path, {
+            "record_type": "weight_sync_ack", "sync_kind": "post_actor_update",
+            "git_commit": "a" * 40, "run_id": "audit-run",
+            "global_step": 5, "actor_version": 5, "vllm_ack_version": 5,
+            "vllm_worker_rank": rank,
+            "actor_master_sampled_tensor_digest": "e" * 64,
+            "actor_rollout_sampled_tensor_digest": summary_digest,
+            "actor_sampled_tensor_digest": summary_digest,
+            "vllm_sampled_tensor_digest": summary_digest,
+            "weight_transfer_format": "dtensor",
+            "loaded_parameter_count": 199, "model_parameter_count": 199,
+            "loaded_parameter_names_sha256": "f" * 64,
+            "model_parameter_names_sha256": "f" * 64,
+            "audited_loaded_parameters": parameters,
+            "sampled_parameter_dtypes": {parameters[0]: "torch.bfloat16"},
+        })
+    append_jsonl(path, {
+        "record_type": "weight_sync_summary", "sync_kind": "post_actor_update",
+        "git_commit": "a" * 40, "run_id": "audit-run",
+        "global_step": 5, "actor_version": 5, "worker_ranks": [0, 1],
+        "sampled_tensor_digest": summary_digest,
+        "actor_master_sampled_tensor_digest": "e" * 64,
+    })
+
+
 def test_checkpoint_tamper_rejected_through_real_audit_entry(tmp_path):
     args = _audit_fixture(tmp_path)
     checkpoint = tmp_path / "critic.json"
@@ -236,6 +264,48 @@ def test_weight_sync_tamper_rejected_through_real_audit_entry(tmp_path):
         PIPELINE.audit(args)
 
 
+def test_weight_sync_ack_summary_mismatch_rejected_through_real_audit_entry(tmp_path):
+    args = _audit_fixture(tmp_path)
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    append_jsonl_new(args.ledger, advantage)
+    append_jsonl_new(args.ledger, _valid_gradient_row())
+    _append_valid_weight_sync(args.weight_ledger, summary_digest="d" * 64)
+    rows = [json.loads(line) for line in Path(args.weight_ledger).read_text().splitlines()]
+    rows[-1]["sampled_tensor_digest"] = "c" * 64
+    # Re-chain the deliberately self-consistent tampered ledger so the semantic
+    # summary-vs-ack guard, rather than the hash-chain guard, must reject it.
+    Path(args.weight_ledger).unlink()
+    for row in rows:
+        for key in ("record_index", "previous_record_sha256", "record_sha256"):
+            row.pop(key, None)
+        append_jsonl(args.weight_ledger, row)
+    with pytest.raises(ValueError, match="weight-sync summary mismatch"):
+        PIPELINE.audit(args)
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("actor_version", 4, "summary version mismatch"),
+    ("run_id", "other-run", "run binding mismatch"),
+    ("git_commit", "b" * 40, "run binding mismatch"),
+])
+def test_weight_sync_summary_identity_tamper_rejected_after_rechain(
+        tmp_path, field, value, message):
+    args = _audit_fixture(tmp_path)
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    append_jsonl_new(args.ledger, advantage)
+    append_jsonl_new(args.ledger, _valid_gradient_row())
+    _append_valid_weight_sync(args.weight_ledger)
+    rows = [json.loads(line) for line in Path(args.weight_ledger).read_text().splitlines()]
+    rows[-1][field] = value
+    Path(args.weight_ledger).unlink()
+    for row in rows:
+        for key in ("record_index", "previous_record_sha256", "record_sha256"):
+            row.pop(key, None)
+        append_jsonl(args.weight_ledger, row)
+    with pytest.raises(ValueError, match=message):
+        PIPELINE.audit(args)
+
+
 @pytest.mark.parametrize("field,value,message", [
     ("mic_gradient/writer_logprob_grad_l2", 0.0, "writer gradient is zero"),
     ("mic_gradient/writer_pg_loss", float("nan"), "gradient metric is non-finite"),
@@ -267,11 +337,7 @@ def test_real_calibration_producer_flows_through_real_audit(tmp_path):
     assert calibration["mae"] >= 0
     append_jsonl_new(args.ledger, advantage)
     append_jsonl_new(args.ledger, _valid_gradient_row())
-    append_jsonl(args.weight_ledger, {
-        "sync_kind": "post_actor_update", "global_step": 5,
-        "worker_ranks": [0, 1], "sampled_tensor_digest": "d" * 64,
-        "actor_master_sampled_tensor_digest": "e" * 64,
-    })
+    _append_valid_weight_sync(args.weight_ledger)
     report = PIPELINE.audit(args)
     assert report["decision"] == "MIC_T5_AUDIT_PASS"
     assert report["on_policy_health"][5]["calibration"]["mae"] == pytest.approx(

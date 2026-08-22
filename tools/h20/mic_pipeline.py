@@ -451,12 +451,14 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "paper_review": "MIC_PAPER_REVIEW_GO",
     }
     checked = {}
+    gate_values = {}
     for name, decision in required.items():
         path = Path(getattr(args, name))
         value = read_json(path)
         if value.get("status") != "PASS" or value.get("decision") != decision:
             raise ValueError(f"MIC_NO_GO: {name} gate is not {decision}")
         checked[name] = sha256_file(path)
+        gate_values[name] = value
     ledger_path = Path(args.ledger)
     lines = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines() if line]
     previous = "0" * 64
@@ -578,18 +580,105 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     weight_failures = validate_jsonl_chain(weight_rows)
     if weight_failures:
         raise ValueError("MIC_NO_GO: weight-sync ledger chain corrupted: " + ";".join(weight_failures))
-    sync_steps = []
-    for row in weight_rows:
-        if row.get("sync_kind") != "post_actor_update":
-            continue
-        sync_steps.append(int(row["global_step"]))
-        if row.get("worker_ranks") != [0, 1] \
-                or re.fullmatch(r"[0-9a-f]{64}", str(row.get("sampled_tensor_digest", ""))) is None \
-                or re.fullmatch(r"[0-9a-f]{64}", str(
-                    row.get("actor_master_sampled_tensor_digest", "")
-                )) is None:
-            raise ValueError("MIC_NO_GO: actor/vLLM weight-sync summary mismatch")
-    if sorted(set(steps)) != sorted(set(sync_steps)):
+    post_sync_rows = [
+        row for row in weight_rows if row.get("sync_kind") == "post_actor_update"
+    ]
+    expected_weight_binding = {
+        "git_commit": gate_values["p0"].get("git_commit"),
+        "run_id": gate_values["p0"].get("run_id"),
+    }
+    if any(not value for value in expected_weight_binding.values()):
+        raise ValueError("MIC_NO_GO: P0 weight-sync identity binding missing")
+    for row in post_sync_rows:
+        if any(row.get(key) != value for key, value in expected_weight_binding.items()):
+            raise ValueError("MIC_NO_GO: actor/vLLM weight-sync run binding mismatch")
+    unknown_post_sync_types = sorted({
+        str(row.get("record_type")) for row in post_sync_rows
+        if row.get("record_type") not in {"weight_sync_ack", "weight_sync_summary"}
+    })
+    if unknown_post_sync_types:
+        raise ValueError(
+            "MIC_NO_GO: unexpected actor/vLLM weight-sync record types: "
+            + ",".join(unknown_post_sync_types)
+        )
+    ack_rows = [
+        row for row in post_sync_rows if row.get("record_type") == "weight_sync_ack"
+    ]
+    summary_rows = [
+        row for row in post_sync_rows if row.get("record_type") == "weight_sync_summary"
+    ]
+    sync_steps = [int(row["global_step"]) for row in summary_rows]
+    ack_steps = [int(row["global_step"]) for row in ack_rows]
+    sha_pattern = re.compile(r"[0-9a-f]{64}")
+    for step in sorted(set(steps)):
+        step_acks = [row for row in ack_rows if int(row["global_step"]) == step]
+        step_summaries = [row for row in summary_rows if int(row["global_step"]) == step]
+        if len(step_acks) != 2 or len(step_summaries) != 1:
+            raise ValueError(
+                "MIC_NO_GO: actor/vLLM weight-sync evidence cardinality mismatch "
+                f"at step {step}: acks={len(step_acks)}, summaries={len(step_summaries)}"
+            )
+        ranks = sorted(int(row.get("vllm_worker_rank", -1)) for row in step_acks)
+        summary = step_summaries[0]
+        if ranks != [0, 1] or summary.get("worker_ranks") != [0, 1]:
+            raise ValueError(
+                f"MIC_NO_GO: actor/vLLM weight-sync ranks mismatch at step {step}"
+            )
+        if int(summary.get("actor_version", -1)) != step:
+            raise ValueError(
+                f"MIC_NO_GO: actor/vLLM weight-sync summary version mismatch at step {step}"
+            )
+        effective_digests = set()
+        master_digests = set()
+        loaded_name_digests = set()
+        loaded_counts = set()
+        for ack in step_acks:
+            if int(ack.get("actor_version", -1)) != step \
+                    or int(ack.get("vllm_ack_version", -1)) != step:
+                raise ValueError(
+                    f"MIC_NO_GO: actor/vLLM weight-sync version mismatch at step {step}"
+                )
+            effective = str(ack.get("actor_rollout_sampled_tensor_digest", ""))
+            master = str(ack.get("actor_master_sampled_tensor_digest", ""))
+            vllm = str(ack.get("vllm_sampled_tensor_digest", ""))
+            if sha_pattern.fullmatch(effective) is None \
+                    or sha_pattern.fullmatch(master) is None \
+                    or sha_pattern.fullmatch(vllm) is None \
+                    or ack.get("actor_sampled_tensor_digest") != effective \
+                    or vllm != effective:
+                raise ValueError(
+                    f"MIC_NO_GO: actor/vLLM weight-sync acknowledgement mismatch at step {step}"
+                )
+            if ack.get("weight_transfer_format") != "dtensor":
+                raise ValueError(
+                    f"MIC_NO_GO: actor/vLLM weight-sync transfer format mismatch at step {step}"
+                )
+            loaded_count = int(ack.get("loaded_parameter_count", -1))
+            model_count = int(ack.get("model_parameter_count", -1))
+            loaded_names = str(ack.get("loaded_parameter_names_sha256", ""))
+            model_names = str(ack.get("model_parameter_names_sha256", ""))
+            audited_parameters = sorted(ack.get("audited_loaded_parameters") or [])
+            sampled_dtypes = sorted((ack.get("sampled_parameter_dtypes") or {}).keys())
+            if loaded_count <= 0 or loaded_count != model_count \
+                    or sha_pattern.fullmatch(loaded_names) is None \
+                    or loaded_names != model_names \
+                    or not audited_parameters or sampled_dtypes != audited_parameters:
+                raise ValueError(
+                    f"MIC_NO_GO: actor/vLLM weight-sync load coverage mismatch at step {step}"
+                )
+            effective_digests.add(effective)
+            master_digests.add(master)
+            loaded_name_digests.add(loaded_names)
+            loaded_counts.add(loaded_count)
+        if len(effective_digests) != 1 or len(master_digests) != 1 \
+                or len(loaded_name_digests) != 1 or len(loaded_counts) != 1 \
+                or summary.get("sampled_tensor_digest") not in effective_digests \
+                or summary.get("actor_master_sampled_tensor_digest") not in master_digests:
+            raise ValueError(
+                f"MIC_NO_GO: actor/vLLM weight-sync summary mismatch at step {step}"
+            )
+    if sorted(set(steps)) != sorted(set(sync_steps)) \
+            or sorted(steps * 2) != sorted(ack_steps):
         raise ValueError("MIC_NO_GO: weight-sync step coverage differs from MIC updates")
     report = {"schema": SCHEMA, "status": "PASS", "decision": f"MIC_T{args.target_step}_AUDIT_PASS",
               "gate_sha256": checked, "ledger_tail_sha256": previous, "mic_steps": steps,
