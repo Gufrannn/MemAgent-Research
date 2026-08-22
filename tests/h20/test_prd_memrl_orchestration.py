@@ -179,6 +179,9 @@ class OrchestrationTests(unittest.TestCase):
         trainer=(REPO/"verl/trainer/ppo/ray_trainer.py").read_text()
         self.assertIn('resume_mode == "prd_actor_only_eval"',trainer)
         self.assertIn("validate_checkpoint(Path(global_step_folder)",trainer)
+        self.assertIn('os.environ.get("GATE_A_WEIGHT_DIGEST_SAMPLES") != "256"',trainer)
+        self.assertIn("GATE_A_WEIGHT_DIGEST_PARAMETERS=model.embed_tokens.weight",entry)
+        self.assertIn("GATE_A_WEIGHT_DIGEST_SAMPLES=256",entry)
 
 
 if __name__ == "__main__": unittest.main()

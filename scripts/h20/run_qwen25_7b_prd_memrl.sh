@@ -66,6 +66,8 @@ case "$ACTION" in
     tmp=$PRD_RUN_ROOT/frontier/$cid/raw_terminal/.producer_anchor_$ANCHOR
     [[ ! -e $tmp ]] || prd_die 'raw producer temp already exists'; mkdir -p "$tmp/generated"
     export PYTHONNOUSERSITE=1 PYTHONPATH=$PRD_REPO CUDA_DEVICE_ORDER=PCI_BUS_ID TOKENIZERS_PARALLELISM=false VLLM_WORKER_MULTIPROC_METHOD=spawn
+    export GATE_A_WEIGHT_DIGEST_PARAMETERS=model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight
+    export GATE_A_WEIGHT_DIGEST_SAMPLES=256
     "$PRD_PYTHON" -m verl.trainer.main_ppo \
       recurrent.enable=memory recurrent.memory.config.chunk_size=5000 recurrent.memory.config.max_chunks=8 \
       recurrent.memory.config.max_prompt_length=1024 recurrent.memory.config.max_memorization_length=1024 recurrent.memory.config.max_final_response_length=1024 \

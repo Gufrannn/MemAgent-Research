@@ -1763,6 +1763,10 @@ class RayPPOTrainer:
             eval_identity_config is not None and eval_identity_config.get("enabled", False)
         )
         prd_eval_identity = str(self.config.trainer.resume_mode) == "prd_actor_only_eval"
+        if prd_eval_identity:
+            expected_digest_parameters = "model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight"
+            if os.environ.get("GATE_A_WEIGHT_DIGEST_PARAMETERS") != expected_digest_parameters or os.environ.get("GATE_A_WEIGHT_DIGEST_SAMPLES") != "256":
+                raise RuntimeError("PRD evaluation weight-digest environment is missing or drifted")
         stable_eval_weight_before = None
         if strict_eval_identity or prd_eval_identity:
             stable_eval_weight_before = self._stable_eval_weight_snapshot(

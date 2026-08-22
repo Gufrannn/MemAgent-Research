@@ -9,6 +9,8 @@
     "gpu_pair_rules": "two distinct canonical ascending physical H20 indices; non-contiguous allowed",
     "per_gpu_lock_template": "${WORK_ROOT}/locks/memagent_h20_gpu_N.lock",
     "strict_vllm": true,
+    "weight_digest_parameters": "model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight",
+    "weight_digest_samples": 256,
     "allow_hf_fallback": false
   },
   "baseline_import": {
