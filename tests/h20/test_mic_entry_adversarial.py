@@ -43,6 +43,28 @@ def test_gpu_pair_drift_real_shell_entry_rejection(tmp_path):
     assert "canonical ascending" in result.stderr
 
 
+def test_mic_ray_task_environment_is_explicit_and_fail_closed(monkeypatch):
+    from verl.trainer.main_ppo import _task_runner_runtime_env
+
+    required = {
+        "MEMAGENT_MIC_WORK_ROOT": "/frozen/work",
+        "MEMAGENT_MIC_REPO_DIR": "/frozen/repo",
+        "MEMAGENT_MIC_EXPECTED_COMMIT": "a" * 40,
+        "MEMAGENT_MIC_RUN_ID": "mic-eval",
+    }
+    monkeypatch.setenv("MEMAGENT_MIC_REQUIRED", "1")
+    for key, value in required.items():
+        monkeypatch.setenv(key, value)
+    runtime_env = _task_runner_runtime_env()["env_vars"]
+    assert runtime_env["MEMAGENT_MIC_REQUIRED"] == "1"
+    for key, value in required.items():
+        assert runtime_env[key] == value
+
+    monkeypatch.delenv("MEMAGENT_MIC_REPO_DIR")
+    with pytest.raises(RuntimeError, match="Ray task environment missing.*REPO_DIR"):
+        _task_runner_runtime_env()
+
+
 @pytest.mark.parametrize("extra,code,message", [
     ({"MEMAGENT_MIC_ENABLE": "0", "RUN_SEED": "2026"}, 60, "inactive method"),
     ({"MEMAGENT_MIC_ENABLE": "1", "RUN_SEED": "7"}, 61, "trajectory seed"),

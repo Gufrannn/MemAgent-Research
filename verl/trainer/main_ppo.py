@@ -26,6 +26,50 @@ from verl.trainer.ppo.reward import load_reward_manager
 import uvloop
 uvloop.install()
 
+
+_MIC_RAY_ENV_KEYS = (
+    "MEMAGENT_MIC_WORK_ROOT",
+    "MEMAGENT_MIC_REPO_DIR",
+    "MEMAGENT_MIC_REQUIRED",
+    "MEMAGENT_MIC_ENABLE",
+    "MEMAGENT_MIC_LEDGER_PATH",
+    "MEMAGENT_MIC_CRITIC_ROOT",
+    "MEMAGENT_MIC_EXPECTED_COMMIT",
+    "MEMAGENT_MIC_RUN_ID",
+    "GATE_A_FROZEN_AUDIT",
+    "GATE_A_EXECUTION_LEDGER",
+    "GATE_A_EXPERIMENT_NAME",
+    "GATE_A_GIT_COMMIT",
+    "GATE_A_RUN_ID",
+    "GATE_A_WEIGHT_DIGEST_PARAMETERS",
+    "GATE_A_WEIGHT_DIGEST_SAMPLES",
+)
+
+
+def _task_runner_runtime_env() -> dict:
+    """Build the explicit Ray environment used by the MIC task runner."""
+    env_vars = {
+        "TOKENIZERS_PARALLELISM": "true",
+        "NCCL_DEBUG": "WARN",
+        "VLLM_LOGGING_LEVEL": "WARN",
+    }
+    if os.environ.get("MEMAGENT_MIC_REQUIRED") == "1":
+        required = (
+            "MEMAGENT_MIC_WORK_ROOT",
+            "MEMAGENT_MIC_REPO_DIR",
+            "MEMAGENT_MIC_EXPECTED_COMMIT",
+            "MEMAGENT_MIC_RUN_ID",
+        )
+        missing = [key for key in required if not os.environ.get(key)]
+        if missing:
+            raise RuntimeError(
+                "MIC_NO_GO: Ray task environment missing " + ",".join(missing)
+            )
+    for key in _MIC_RAY_ENV_KEYS:
+        if key in os.environ:
+            env_vars[key] = os.environ[key]
+    return {"env_vars": env_vars}
+
 def get_custom_reward_fn(config):
     import importlib.util
     import sys
@@ -67,14 +111,15 @@ def run_ppo(config) -> None:
     # TODO(linjunrong.ocss884): this ENV is left for resolving SGLang conflict with ray devices
     # isolation, will solve in the future
     os.environ["ENSURE_CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    task_runtime_env = _task_runner_runtime_env()
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(
-            runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}},
+            runtime_env=task_runtime_env,
             num_cpus=config.ray_init.num_cpus,
         )
 
-    runner = TaskRunner.remote()
+    runner = TaskRunner.options(runtime_env=task_runtime_env).remote()
     ray.get(runner.run.remote(config))
 
 
