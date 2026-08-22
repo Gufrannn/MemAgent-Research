@@ -49,7 +49,7 @@ def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step
                               committed_parameter_displacement_norm=0.0,
                               pre_digests=None, commit_digests=None,
                               trial_forward_wall_seconds=0.0,
-                              mechanism_diagnostics=None):
+                              mechanism_diagnostics=None, gradient_norm=0.0):
     if not ledger_dir:
         raise ValueError("RWWPO enabled without required ledger_dir")
     root = Path(ledger_dir).resolve()
@@ -88,10 +88,17 @@ def append_actual_loss_record(*, ledger_dir, attempt_id, mode, rank, global_step
         "trial_evidence": trial_evidence or [],
         "full_parameter_displacement_norm": float(full_parameter_displacement_norm),
         "committed_parameter_displacement_norm": float(committed_parameter_displacement_norm),
+        "full_writer_logprob_movement": max(
+            abs(float(p)-float(c)) for post,cur,mask in zip(_tolist(proposed_post_log_prob),
+            _tolist(current_log_prob),_tolist(writer_mask)) for p,c,m in zip(post,cur,mask) if bool(m)),
+        "committed_writer_logprob_movement": max(
+            abs(float(p)-float(c)) for post,cur,mask in zip(_tolist(committed_log_prob),
+            _tolist(current_log_prob),_tolist(writer_mask)) for p,c,m in zip(post,cur,mask) if bool(m)),
         "pre_digests": dict(pre_digests or {}),
         "commit_digests": dict(commit_digests or {}),
         "trial_forward_wall_seconds": float(trial_forward_wall_seconds),
         "mechanism_diagnostics": mechanism_diagnostics or {},
+        "gradient_norm": float(gradient_norm),
         "previous_record_sha256": previous,
     }
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"))

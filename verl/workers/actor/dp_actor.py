@@ -547,6 +547,11 @@ class DataParallelPPOActor(BasePPOActor):
                     trial_rows = []
                     full_params = parameter_snapshot(self.actor_module) if rwwpo_capture else None
                     full_displacement = displacement_norm(snapshot[0], full_params) if rwwpo_capture else 0.0
+                    if rwwpo_capture and torch.distributed.is_initialized():
+                        squared=torch.tensor(full_displacement**2,dtype=torch.float64,
+                                             device=torch.cuda.current_device())
+                        torch.distributed.all_reduce(squared,op=torch.distributed.ReduceOp.SUM)
+                        full_displacement=float(squared.sqrt().item())
                     proposal_zero = full_displacement <= 1e-15
                     if rwwpo_enabled:
                         alpha_grid = tuple(float(value) for value in rwwpo_config.get("alpha_grid", ALPHA_GRID))
@@ -615,6 +620,7 @@ class DataParallelPPOActor(BasePPOActor):
                             torch.distributed.all_gather_object(decisions, alpha_committed)
                             if len(set(decisions)) != 1:
                                 self._restore_local_optimizer_step(snapshot)
+                                restore_rng(pre_rng)
                                 raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
                         commit_params = parameter_snapshot(self.actor_module)
                         if accepted and self.actor_lr_scheduler is not None:
@@ -654,6 +660,12 @@ class DataParallelPPOActor(BasePPOActor):
                                           if self.actor_lr_scheduler is not None else digest(None),
                                           "scaler": "not_applicable_bfloat16", "rng": digest(rng_snapshot())}
                         trial_forward_wall_seconds = 0.0
+                    committed_displacement=displacement_norm(snapshot[0],commit_params)
+                    if torch.distributed.is_initialized():
+                        squared=torch.tensor(committed_displacement**2,dtype=torch.float64,
+                                             device=torch.cuda.current_device())
+                        torch.distributed.all_reduce(squared,op=torch.distributed.ReduceOp.SUM)
+                        committed_displacement=float(squared.sqrt().item())
                     from recurrent.research.rwwpo_ledger import append_actual_loss_record
                     append_actual_loss_record(
                         ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
@@ -676,7 +688,7 @@ class DataParallelPPOActor(BasePPOActor):
                         alpha_committed=alpha_committed, accepted_nonzero=accepted,
                         proposal_zero=proposal_zero, trial_evidence=trial_rows,
                         full_parameter_displacement_norm=full_displacement,
-                        committed_parameter_displacement_norm=displacement_norm(snapshot[0], commit_params),
+                        committed_parameter_displacement_norm=committed_displacement,
                         pre_digests=pre_digests, commit_digests=commit_digests,
                         trial_forward_wall_seconds=trial_forward_wall_seconds if rwwpo_enabled else 0.0,
                         mechanism_diagnostics={
@@ -686,7 +698,7 @@ class DataParallelPPOActor(BasePPOActor):
                             "per_write_stats": rwwpo_metrics["per_write_stats"],
                             "covariance_diagnostics": rwwpo_metrics["covariance_diagnostics"],
                             "whole_prefix_tokenwise_gradient_cosine": coefficient_cosine,
-                        })
+                        }, gradient_norm=float(grad_norm.detach().item()))
                     if rwwpo_enabled:
                         append_transaction_marker(
                             ledger_dir=rwwpo_config.get("ledger_dir"),attempt_id=rwwpo_config.get("attempt_id"),

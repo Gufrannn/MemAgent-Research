@@ -242,8 +242,12 @@ three fresh seeds and an untouched confirmation run under separate authorization
   dtype-specific tolerance; closure of response = writer disjoint-union answer;
   RWWPO disabled follows byte-for-byte Original control flow and passes relevant
   regressions.
-- **T5 health PASS:** finite loss/gradients, complete checkpoint, valid
-  append-only Method ledger and weight sync; no S128 pause is required.
+- **T5 health PASS:** finite loss/gradients; at least four of updates 1--5 are
+  nonzero commits; median committed alpha is at least 1/8; no majority of
+  nonzero commits uses only alpha <= 1/32; every committed prefix satisfies
+  ESS >= 0.5 and the frozen cap; behavior-point identity, rank agreement,
+  rollback digests, checkpoint inventory, append-only ledger anchors, and
+  weight sync all close. No S128 performance is consulted at this gate.
 - **T25 success:** T25 F1 +0.02 and five-anchor mean +0.01, with no anchor worse
   than Original by more than 0.02.
 - **Immediate NO-GO:** Method prefix diagnostics add no signal beyond local

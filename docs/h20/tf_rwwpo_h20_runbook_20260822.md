@@ -70,8 +70,19 @@ run ID from fresh P0.  An unmatched transaction intent makes audit fail closed.
 
 ## Post-training audit and evaluation
 
-After T25, run `audit_rwwpo_actual_loss.py` and `audit_rwwpo_run.py --target-step
-25`, then a second read-only re-audit.  Only after both pass, evaluate the saved
+After T25, run `audit_rwwpo_actual_loss.py` and then:
+
+```bash
+"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_run.py \
+  --run-root "$RWWPO_OUTPUT" --actual-ledger-dir "$RWWPO_LEDGER_DIR" \
+  --execution-ledger "$RWWPO_EXECUTION_LEDGER" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --expected-schema-version rwwpo-actual-loss-v2 \
+  --expected-objective whole_prefix --expected-controller feasible_backtracking \
+  --target-step 25 --output "$RWWPO_CERT_ROOT/t25_health.json"
+```
+
+Then perform a second read-only re-audit. Only after both pass, evaluate the saved
 T5/10/15/20/25 checkpoints using the same fixed-S128 manifest and strict-vLLM
 launcher, import the certified Original five-anchor bundle read-only, and run
 the per-anchor plus five-anchor auditors.  Performance rows remain separate

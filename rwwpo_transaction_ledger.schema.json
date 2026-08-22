@@ -11,8 +11,9 @@
     "prefix_rows", "prefix_stats", "post_prefix_rows", "post_prefix_stats",
     "alpha_grid", "alpha_test_order", "alpha_committed", "accepted_nonzero",
     "proposal_zero", "trial_evidence", "full_parameter_displacement_norm",
-    "committed_parameter_displacement_norm", "pre_digests", "commit_digests",
-    "trial_forward_wall_seconds", "q_min", "writer_log_ratio_cap",
+    "committed_parameter_displacement_norm", "full_writer_logprob_movement",
+    "committed_writer_logprob_movement", "pre_digests", "commit_digests",
+    "trial_forward_wall_seconds", "gradient_norm", "q_min", "writer_log_ratio_cap",
     "previous_record_sha256", "record_sha256"
   ],
   "properties": {

@@ -6,13 +6,22 @@ from tools.h20.audit_rwwpo_actual_loss import audit
 from recurrent.research.gate_a_execution import validate_jsonl_chain,checkpoint_inventory
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--run-root",required=True); p.add_argument("--actual-ledger-dir",required=True); p.add_argument("--execution-ledger",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--target-step",type=int,required=True); p.add_argument("--output",required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--run-root",required=True); p.add_argument("--actual-ledger-dir",required=True); p.add_argument("--execution-ledger",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--expected-schema-version",required=True); p.add_argument("--expected-objective",required=True); p.add_argument("--expected-controller",required=True); p.add_argument("--target-step",type=int,required=True); p.add_argument("--output",required=True); a=p.parse_args()
     ck=Path(a.run_root)/f"global_step_{a.target_step}"
     if not (ck.joinpath("actor").is_dir() and ck.joinpath("data.pt").is_file()): raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint")
     ledgers=sorted(Path(a.actual_ledger_dir).glob("actual_loss_rank*.jsonl"))
     actual=audit(ledgers,require_method=True)
+    if actual.get("schema_versions")!=[a.expected_schema_version]: raise SystemExit("RWWPO_AUDIT_NO_GO:schema identity")
+    if actual.get("objective_variants")!=[a.expected_objective]: raise SystemExit("RWWPO_AUDIT_NO_GO:objective identity")
+    if actual.get("controller_variants")!=[a.expected_controller]: raise SystemExit("RWWPO_AUDIT_NO_GO:controller identity")
+    actual_rows=[]
+    for ledger in ledgers:
+        actual_rows.extend(json.loads(line) for line in ledger.read_text().splitlines() if line.strip())
+    actual_identities={(row["attempt_id"],int(row["rank"]),int(row["global_step"]),int(row["epoch"]),int(row["minibatch"])):row for row in actual_rows}
     markers=sorted(Path(a.actual_ledger_dir).glob("transaction_rank*.jsonl"))
     if len(markers)!=2: raise SystemExit("RWWPO_AUDIT_NO_GO:transaction marker ranks")
+    marker_completions={}
+    marker_intents={}
     for marker in markers:
         records=[json.loads(line) for line in marker.read_text().splitlines() if line.strip()]
         previous="0"*64; pending=None
@@ -25,9 +34,20 @@ def main():
             if record["phase"]=="intent":
                 if pending is not None: raise SystemExit("RWWPO_AUDIT_NO_GO:nested transaction intent")
                 pending=identity
+                if identity in marker_intents: raise SystemExit("RWWPO_AUDIT_NO_GO:duplicate transaction intent")
+                marker_intents[identity]=record["model_digest"]
             elif pending!=identity: raise SystemExit("RWWPO_AUDIT_NO_GO:orphan transaction completion")
-            else: pending=None
+            else:
+                if identity in marker_completions: raise SystemExit("RWWPO_AUDIT_NO_GO:duplicate transaction completion")
+                marker_completions[identity]=record["model_digest"]; pending=None
         if pending is not None: raise SystemExit("RWWPO_AUDIT_NO_GO:interrupted trial transaction")
+    if set(marker_intents)!=set(actual_identities) or set(marker_completions)!=set(actual_identities):
+        raise SystemExit("RWWPO_AUDIT_NO_GO:transaction marker/actual identity bijection")
+    for identity,row in actual_identities.items():
+        if marker_intents[identity]!=row["pre_digests"]["model"]:
+            raise SystemExit("RWWPO_AUDIT_NO_GO:transaction intent model digest mismatch")
+        if marker_completions[identity]!=row["commit_digests"]["model"]:
+            raise SystemExit("RWWPO_AUDIT_NO_GO:transaction completion model digest mismatch")
     if actual["modes"] != ["rwwpo_method"]: raise SystemExit("RWWPO_AUDIT_NO_GO:wrong ledger mode")
     events=[json.loads(x) for x in Path(a.execution_ledger).read_text().splitlines() if x.strip()]
     failures=validate_jsonl_chain(events)
@@ -37,7 +57,20 @@ def main():
     inventories=[row for row in events if row.get("record_type")=="checkpoint_inventory" and row.get("global_step")==a.target_step]
     current_inventory=checkpoint_inventory(ck)
     if not inventories or inventories[-1].get("inventory")!=current_inventory: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint inventory")
-    transactional=actual.get("controller_variants")==["feasible_backtracking"]
+    anchors=inventories[-1].get("rwwpo_ledger_anchors",{})
+    expected_anchor_names={f"{kind}_rank{rank}.jsonl" for kind in ("actual_loss","transaction") for rank in (0,1)}
+    if set(anchors)!=expected_anchor_names: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint ledger anchors")
+    for name,anchor in anchors.items():
+        path=Path(a.actual_ledger_dir)/name
+        lines=[line for line in path.read_bytes().splitlines(keepends=True) if line.strip()]
+        count=int(anchor.get("record_count",-1))
+        if count<1 or len(lines)<count: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint ledger anchor count")
+        prefix=b"".join(lines[:count])
+        if hashlib.sha256(prefix).hexdigest()!=anchor.get("prefix_sha256"):
+            raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint ledger prefix SHA")
+        if json.loads(lines[count-1])["record_sha256"]!=anchor.get("tail_sha256"):
+            raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint ledger tail")
+    transactional=a.expected_controller=="feasible_backtracking"
     if transactional and a.target_step==5:
         early=[alpha for step in range(1,6)
                for alpha in actual["steps"].get(str(step),{}).get("alpha_committed",[])

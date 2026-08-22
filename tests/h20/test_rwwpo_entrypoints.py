@@ -173,6 +173,21 @@ def test_transaction_audit_rejects_interrupted_trial():
     text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
     assert "interrupted trial transaction" in text
     assert "transaction marker chain" in text
+    assert "transaction marker/actual identity bijection" in text
+    assert "transaction completion model digest mismatch" in text
+
+def test_tf_audit_requires_schema_objective_and_controller_identity():
+    text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
+    assert 'add_argument("--expected-schema-version",required=True)' in text
+    assert 'add_argument("--expected-objective",required=True)' in text
+    assert 'add_argument("--expected-controller",required=True)' in text
+
+def test_checkpoint_inventory_anchors_both_transaction_ledgers():
+    trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
+    audit=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
+    assert "rwwpo_ledger_anchors" in trainer
+    assert "checkpoint ledger prefix SHA" in audit
+    assert "checkpoint ledger tail" in audit
 
 def test_old_diagnostic_is_never_promoted_to_formal():
     row=json.loads((ROOT/"manifests/h20/rwwpo_hard_rollback_diagnostic_inventory_20260822.json").read_text())

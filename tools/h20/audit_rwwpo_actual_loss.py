@@ -25,6 +25,10 @@ def audit(paths, require_method=True):
                     raise ValueError(f"bad schema at {path}:{line_no}")
                 if row.get("mode") not in ("rwwpo_method", "original_collection"):
                     raise ValueError(f"bad mode at {path}:{line_no}")
+                if row["schema_version"]=="rwwpo-actual-loss-v2":
+                    expected_rank=int(Path(path).stem.rsplit("rank",1)[1])
+                    if int(row.get("rank",-1))!=expected_rank:
+                        raise ValueError(f"rank/file identity mismatch at {path}:{line_no}")
                 if canonical_sha(row) != row.get("record_sha256"):
                     raise ValueError(f"record hash mismatch at {path}:{line_no}")
                 if row.get("schema_version")=="rwwpo-actual-loss-v2":
@@ -142,6 +146,17 @@ def audit(paths, require_method=True):
                             raise ValueError("trial prefix rows do not reconstruct from actual logprobs")
                     if evidence[0]["log_prob"] != row["proposed_post_log_prob"]:
                         raise ValueError("full proposal logprob does not bind alpha=1 trial")
+                    if declared_alpha>0:
+                        selected=[trial for trial in evidence if float(trial["alpha"])==declared_alpha]
+                        if len(selected)!=1 or row["committed_log_prob"]!=selected[0]["log_prob"]:
+                            raise ValueError("committed logprob is not selected trial logprob")
+                        if row["post_prefix_rows"]!=selected[0]["prefix_rows"] or row["post_prefix_stats"]!=selected[0]["prefix_stats"]:
+                            raise ValueError("committed post certificate is not selected trial certificate")
+                    else:
+                        if row["committed_log_prob"]!=row["current_log_prob"]:
+                            raise ValueError("zero-alpha commit did not restore behavior logprob")
+                        if row["post_prefix_rows"]!=row["prefix_rows"] or row["post_prefix_stats"]!=row["prefix_stats"]:
+                            raise ValueError("zero-alpha post certificate did not restore pre-step certificate")
                 for stat in row["prefix_stats"]:
                     expected = 1.0 / (1.0 + stat["chi2"])
                     if not math.isclose(stat["ess_fraction"], expected, rel_tol=1e-9, abs_tol=1e-12):
@@ -149,11 +164,17 @@ def audit(paths, require_method=True):
                 rows.append(row)
     if not rows:
         raise ValueError("missing actual-loss rows")
+    if any(row["schema_version"]=="rwwpo-actual-loss-v2" for row in rows):
+        expected_names={"actual_loss_rank0.jsonl","actual_loss_rank1.jsonl"}
+        if {Path(path).name for path in paths} != expected_names:
+            raise ValueError("actual-loss v2 must cover exactly rank0 and rank1")
     groups={}
     for row in rows:
         key=(row["attempt_id"],row["global_step"],row["epoch"],row["minibatch"])
         groups.setdefault(key,[]).append(row)
     for key,group in groups.items():
+        if group[0]["schema_version"]=="rwwpo-actual-loss-v2" and sorted(int(row["rank"]) for row in group)!=[0,1]:
+            raise ValueError(f"optimizer transaction lacks exact rank0/rank1 coverage for {key}")
         def reconstruct(field):
             combined=[item for row in group for item in row[field]]; result=[]
             for turn in sorted({item["turn"] for item in combined}):
@@ -244,6 +265,7 @@ def audit(paths, require_method=True):
             "record_count": len(rows), "method_active": active,
             "behavior_point_max_delta": behavior_point_max_delta,
             "modes": sorted({row["mode"] for row in rows}),
+            "schema_versions": sorted({row["schema_version"] for row in rows}),
             "objective_variants": sorted({row.get("objective_variant","legacy") for row in rows}),
             "controller_variants": sorted({row.get("controller_variant","legacy") for row in rows}),
             "nonzero_commit_count": len(nonzero_alphas),

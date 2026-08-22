@@ -1302,10 +1302,26 @@ class RayPPOTrainer:
             gate_a_enabled,
         )
         if gate_a_enabled():
+            rwwpo_anchors={}
+            rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
+            ledger_dir=rwwpo_cfg.get("ledger_dir")
+            if bool(rwwpo_cfg.get("enable",False)):
+                for rank in range(2):
+                    for kind in ("actual_loss","transaction"):
+                        path=os.path.join(str(ledger_dir),f"{kind}_rank{rank}.jsonl")
+                        if not os.path.isfile(path):
+                            raise RuntimeError(f"RWWPO_CHECKPOINT_LEDGER_MISSING:{path}")
+                        payload=open(path,"rb").read()
+                        lines=[line for line in payload.splitlines() if line.strip()]
+                        if not lines: raise RuntimeError(f"RWWPO_CHECKPOINT_LEDGER_EMPTY:{path}")
+                        tail=json.loads(lines[-1])["record_sha256"]
+                        rwwpo_anchors[os.path.basename(path)]={"record_count":len(lines),
+                            "prefix_sha256":hashlib.sha256(payload).hexdigest(),"tail_sha256":tail}
             append_gate_a_record(
                 "checkpoint_inventory",
                 global_step=int(self.global_steps),
                 inventory=checkpoint_inventory(local_global_step_folder),
+                rwwpo_ledger_anchors=rwwpo_anchors,
             )
 
     def _audit_gate_a_weight_sync(self, *, global_step: int, actor_version: int, sync_kind: str) -> None:
@@ -2267,26 +2283,31 @@ class RayPPOTrainer:
                     rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
                     if bool(rwwpo_cfg.get("enable", False)) and str(
                         rwwpo_cfg.get("controller_variant", "hard_rollback")) == "feasible_backtracking":
+                        def rwwpo_t5_fail(reason):
+                            from recurrent.research.gate_a_execution import append_gate_a_record
+                            append_gate_a_record("rwwpo_t5_health_failure",global_step=int(self.global_steps),
+                                                 reason=str(reason),diagnostic_only=True)
+                            raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:"+str(reason))
                         if not hasattr(self, "_rwwpo_t5_alpha_history"):
                             self._rwwpo_t5_alpha_history=[]
                         self._rwwpo_t5_alpha_history.append(float(metrics.get("rwwpo/alpha_committed",0.0)))
                         if self.global_steps <= 5:
                             if float(metrics.get("rwwpo/post_min_prefix_ess",0.0)) < 0.5:
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:POST_PREFIX_ESS")
+                                rwwpo_t5_fail("POST_PREFIX_ESS")
                             if float(metrics.get("rwwpo/post_max_abs_prefix_log_ratio",float("inf"))) > float(
                                 rwwpo_cfg.get("writer_log_ratio_cap",4.0)):
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:PREFIX_CAP")
+                                rwwpo_t5_fail("PREFIX_CAP")
                             if float(metrics.get("rwwpo/behavior_point_max_delta",1.0)) > 1e-7:
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:BEHAVIOR_POINT_IDENTITY")
+                                rwwpo_t5_fail("BEHAVIOR_POINT_IDENTITY")
                         if self.global_steps == 5:
                             import statistics
                             nonzero=[alpha for alpha in self._rwwpo_t5_alpha_history if alpha>0]
                             if len(nonzero)<4:
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:NONZERO_COMMIT_COUNT")
+                                rwwpo_t5_fail("NONZERO_COMMIT_COUNT")
                             if statistics.median(nonzero)<0.125:
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:MEDIAN_ALPHA")
+                                rwwpo_t5_fail("MEDIAN_ALPHA")
                             if sum(alpha<=1/32 for alpha in nonzero)>len(nonzero)/2:
-                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:PSEUDO_ACTIVITY")
+                                rwwpo_t5_fail("PSEUDO_ACTIVITY")
 
                 # training metrics
                 metrics.update(

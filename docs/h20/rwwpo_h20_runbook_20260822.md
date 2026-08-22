@@ -109,7 +109,9 @@ RWWPO_PHASE=full bash scripts/h20/run_qwen25_7b_rwwpo.sh
   --run-root "$RWWPO_WORK_ROOT/logs/memory_agent/qwen25_7b_rwwpo_seed2026_${RWWPO_RUN_ID}" \
   --actual-ledger-dir "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/actual_loss" \
   --execution-ledger "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/execution.jsonl" \
-  --expected-commit "$RWWPO_EXPECTED_COMMIT" --target-step 5 \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --expected-schema-version rwwpo-actual-loss-v1 \
+  --expected-objective legacy --expected-controller legacy --target-step 5 \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/t5_health.json"
 ```
 
