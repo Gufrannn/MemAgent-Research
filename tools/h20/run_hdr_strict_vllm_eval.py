@@ -47,7 +47,11 @@ def main():
   msg=template.format(message=TEMPLATE_FINAL_BOXED.format(prompt=query,memory=memory)); total+=len(tok.encode(msg,add_special_tokens=False))
   sp=SamplingParams(n=1,temperature=0.0,top_p=1.0,max_tokens=1024,seed=a.seed+idx*1009+horizon*37+horizon)
   ans=llm.generate([msg],sp,use_tqdm=False)[0].outputs[0]; cap |= ans.finish_reason=="length"
-  reward=row.get("reward_model",{}); gold=reward.get("ground_truth",reward.get("target",row.get("answer",""))) if isinstance(reward,dict) else row.get("answer","")
+  reward=row.get("reward_model",{})
+  if isinstance(reward,str):
+   try: reward=json.loads(reward)
+   except json.JSONDecodeError: raise SystemExit("HDR_NO_GO:invalid_reward_model_json")
+  gold=reward.get("ground_truth",reward.get("target",row.get("answer",""))) if isinstance(reward,dict) else row.get("answer","")
   rec={"stable_id":f"{rid}:h{horizon}","root_id":rid,"source_order_index":int(row.get("source_order_index",idx)),"raw_row_position":int(row.get("raw_row_position",idx)),"identity_resolved_sha256":row.get("identity_resolved_sha256"),"ground_truth_hash":row.get("ground_truth_hash"),"suite_sha256":hashlib.sha256(Path(a.suite).read_bytes()).hexdigest(),"horizon":horizon,"prediction":ans.text,"gold":gold,"total_input_tokens":total,"cap_hit":bool(cap),"truncated":False,"evidence_equated":True,"model_path":str(Path(a.model).resolve()),"seed":a.seed,"receipt":receipt.as_dict()}
   if row.get("identity_resolved_sha256"):
    from recurrent.research.s128_hotpot_metrics import score_terminal_output
