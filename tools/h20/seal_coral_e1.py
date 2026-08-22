@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--capture-root", required=True)
     parser.add_argument("--training-output", required=True)
     parser.add_argument("--base-model", required=True)
+    parser.add_argument("--dataproto-clone-oracle", required=True)
     parser.add_argument("--sketch-oracle", required=True)
     parser.add_argument("--gate-a-ledger", required=True)
     parser.add_argument("--expected-commit", required=True)
@@ -38,12 +39,20 @@ def main():
     training = Path(args.training_output).resolve()
     base = Path(args.base_model).resolve()
     ledger_path = Path(args.gate_a_ledger).resolve()
+    clone_oracle_path = Path(args.dataproto_clone_oracle).resolve()
     oracle_path = Path(args.sketch_oracle).resolve()
     if any(not path.is_dir() for path in (capture, training, base)) \
-            or not ledger_path.is_file() or not oracle_path.is_file():
+            or not ledger_path.is_file() or not clone_oracle_path.is_file() \
+            or not oracle_path.is_file() \
+            or clone_oracle_path.parent != oracle_path.parent:
         raise ValueError("CORAL_E1_NO_GO: producer/checkpoint/ledger paths")
+    clone_oracle = json.loads(clone_oracle_path.read_text())
     oracle = json.loads(oracle_path.read_text())
-    from recurrent.research.coral_e1 import validate_fsdp_sketch_oracle_report
+    from recurrent.research.coral_e1 import (
+        validate_dataproto_clone_oracle_report,
+        validate_fsdp_sketch_oracle_report,
+    )
+    validate_dataproto_clone_oracle_report(clone_oracle)
     validate_fsdp_sketch_oracle_report(oracle)
     ledger = [json.loads(line) for line in ledger_path.read_text().splitlines() if line]
     failures = validate_jsonl_chain(ledger)
@@ -81,10 +90,12 @@ def main():
     if len(list(capture.glob("proposal_step_*.json"))) != len(PROPOSAL_STEPS):
         raise ValueError("CORAL_E1_NO_GO: unexpected/adaptive proposal count")
     evidence = {
-        "schema": "memagent.coral.e1.v3",
+        "schema": "memagent.coral.e1.v4",
         "git_commit": args.expected_commit,
         "preregistration": PREREGISTRATION,
         "gate_a_ledger_sha256": sha256_file(ledger_path),
+        "dataproto_clone_oracle_report_sha256": clone_oracle["report_sha256"],
+        "dataproto_clone_oracle_report": clone_oracle,
         "fsdp_sketch_oracle_report_sha256": oracle["report_sha256"],
         "fsdp_sketch_oracle_report": oracle,
         "proposal_bindings": bindings,

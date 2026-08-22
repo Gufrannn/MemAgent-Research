@@ -195,6 +195,25 @@ class DataProto:
         else:
             return 0
 
+    def clone(self) -> "DataProto":
+        """Clone without routing TensorDict through pickle serialization.
+
+        ``copy.deepcopy(DataProto)`` invokes :meth:`__getstate__`.  TensorDict
+        0.5/0.6 cannot consolidate a batch that has a valid batch size but no
+        tensor leaves (``torch.cat`` receives an empty list).  That shape is
+        intentional after the trainer pops every generation tensor while
+        retaining root identity/reward metadata.  Clone each payload directly
+        so the zero-leaf batch remains a first-class DataProto state.
+        """
+        cloned_batch = None
+        if self.batch is not None:
+            cloned_batch = self.batch.clone(recurse=True)
+        return type(self)(
+            batch=cloned_batch,
+            non_tensor_batch=copy.deepcopy(self.non_tensor_batch),
+            meta_info=copy.deepcopy(self.meta_info),
+        )
+
     def __getitem__(self, item):
         """
         Enhanced indexing for DataProto objects.
@@ -233,7 +252,11 @@ class DataProto:
         import io
 
         buffer = io.BytesIO()
-        if version.parse(tensordict.__version__) >= version.parse("0.5.0") and self.batch is not None:
+        if (
+            version.parse(tensordict.__version__) >= version.parse("0.5.0")
+            and self.batch is not None
+            and len(self.batch.keys()) > 0
+        ):
             self.batch = self.batch.contiguous()
             self.batch = self.batch.consolidate()
         torch.save(self.batch, buffer)

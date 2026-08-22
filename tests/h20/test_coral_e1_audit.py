@@ -2,7 +2,8 @@ import copy
 import unittest
 
 from recurrent.research.coral_e1 import (
-    SKETCH_BASIS_SHA256, validate_fsdp_sketch_oracle_report,
+    SKETCH_BASIS_SHA256, validate_dataproto_clone_oracle_report,
+    validate_fsdp_sketch_oracle_report,
 )
 from recurrent.research.cosi import canonical_sha256
 from tools.h20.audit_coral_e1 import (
@@ -10,6 +11,24 @@ from tools.h20.audit_coral_e1 import (
 )
 
 COMMIT = "1" * 40
+
+
+def clone_oracle_report():
+    value = {
+        "schema": "memagent.coral.dataproto-clone-oracle.v1",
+        "status": "PASS",
+        "decision": "CORAL_DATAPROTO_CLONE_ORACLE_PASS",
+        "batch_size": 8,
+        "zero_leaf_keys": 0,
+        "tensor_clone_independent": True,
+        "non_tensor_clone_independent": True,
+        "meta_clone_independent": True,
+        "python_version": "3.10.14",
+        "torch_version": "2.4.0+cu121",
+        "tensordict_version": "0.6.2",
+    }
+    value["report_sha256"] = canonical_sha256(value)
+    return value
 
 
 def oracle_report():
@@ -92,6 +111,7 @@ def proposal(step):
 
 def evidence():
     proposals = [proposal(step) for step in PROPOSAL_STEPS]
+    embedded_clone_oracle = clone_oracle_report()
     embedded_oracle = oracle_report()
     bindings = [{
         "global_step": step,
@@ -100,10 +120,13 @@ def evidence():
         "proposal_sha256": value["proposal_sha256"],
     } for step, value in zip(PROPOSAL_STEPS, proposals)]
     value = {
-        "schema": "memagent.coral.e1.v3",
+        "schema": "memagent.coral.e1.v4",
         "git_commit": COMMIT,
         "preregistration": PREREGISTRATION,
         "gate_a_ledger_sha256": "6" * 64,
+        "dataproto_clone_oracle_report_sha256":
+            embedded_clone_oracle["report_sha256"],
+        "dataproto_clone_oracle_report": embedded_clone_oracle,
         "fsdp_sketch_oracle_report_sha256": embedded_oracle["report_sha256"],
         "fsdp_sketch_oracle_report": embedded_oracle,
         "proposal_bindings": bindings,
@@ -114,6 +137,30 @@ def evidence():
 
 
 class CoralE1AuditTests(unittest.TestCase):
+    def test_clone_oracle_complete_contract_and_tamper_rejection(self):
+        validate_dataproto_clone_oracle_report(clone_oracle_report())
+        mutations = []
+        value = clone_oracle_report()
+        value["schema"] = "memagent.coral.dataproto-clone-oracle.v0"
+        mutations.append(value)
+        value = clone_oracle_report()
+        value["zero_leaf_keys"] = 1
+        mutations.append(value)
+        value = clone_oracle_report()
+        value["tensor_clone_independent"] = False
+        mutations.append(value)
+        value = clone_oracle_report()
+        value["torch_version"] = ""
+        mutations.append(value)
+        for value in mutations:
+            value["report_sha256"] = canonical_sha256({
+                key: item for key, item in value.items()
+                if key != "report_sha256"
+            })
+            with self.subTest():
+                with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
+                    validate_dataproto_clone_oracle_report(value)
+
     def test_complete_v2_oracle_contract_and_forged_old_pass_rejection(self):
         validate_fsdp_sketch_oracle_report(oracle_report())
         old_forged = {
@@ -211,6 +258,12 @@ class CoralE1AuditTests(unittest.TestCase):
         mutations.append(value)
         value = evidence()
         value["proposals"][0]["records"][0]["terminal_action_policy"] = "reuse_source_answer"
+        mutations.append(value)
+        value = evidence()
+        value["dataproto_clone_oracle_report"]["status"] = "FAIL"
+        mutations.append(value)
+        value = evidence()
+        value["dataproto_clone_oracle_report_sha256"] = "7" * 64
         mutations.append(value)
         for value in mutations:
             for proposal_value in value["proposals"]:

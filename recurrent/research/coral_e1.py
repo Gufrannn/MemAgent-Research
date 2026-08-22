@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Iterable
 
 
@@ -47,6 +48,13 @@ ORACLE_REPORT_FIELDS = {
     "collision_calibration_error_aperture", "two_rank_local_denominators",
     "denominator_gradient_closure_max_abs_error",
     "denominator_gradient_closure_aperture", "report_sha256",
+}
+
+DATAPROTO_CLONE_ORACLE_FIELDS = {
+    "schema", "status", "decision", "batch_size", "zero_leaf_keys",
+    "tensor_clone_independent", "non_tensor_clone_independent",
+    "meta_clone_independent", "python_version", "torch_version",
+    "tensordict_version", "report_sha256",
 }
 
 
@@ -127,6 +135,34 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
     recomputed_dense_error = abs(dense_projected - dense_exact) / dense_exact
     if abs(recomputed_dense_error - dense_error) > 1e-12:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle derived error")
+
+
+def validate_dataproto_clone_oracle_report(report) -> None:
+    """Validate the same-runtime empty-leaf DataProto capture oracle."""
+    if not isinstance(report, dict) or set(report) != DATAPROTO_CLONE_ORACLE_FIELDS:
+        raise ValueError("CORAL_E1_NO_GO: DataProto clone oracle fields")
+    unsigned = {key: value for key, value in report.items()
+                if key != "report_sha256"}
+    versions = (
+        report["python_version"], report["torch_version"],
+        report["tensordict_version"],
+    )
+    if report["schema"] != "memagent.coral.dataproto-clone-oracle.v1" \
+            or report["status"] != "PASS" \
+            or report["decision"] != "CORAL_DATAPROTO_CLONE_ORACLE_PASS" \
+            or type(report["batch_size"]) is not int \
+            or report["batch_size"] != 8 \
+            or type(report["zero_leaf_keys"]) is not int \
+            or report["zero_leaf_keys"] != 0 \
+            or any(type(report[field]) is not bool or not report[field] for field in (
+                "tensor_clone_independent", "non_tensor_clone_independent",
+                "meta_clone_independent",
+            )) \
+            or any(not isinstance(value, str)
+                   or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}", value) is None
+                   for value in versions) \
+            or report["report_sha256"] != canonical_sha256(unsigned):
+        raise ValueError("CORAL_E1_NO_GO: DataProto clone oracle identity")
 
 
 def sketch_bucket_and_sign(index: int, ordinal: int, rank: int, basis: int):

@@ -5,10 +5,14 @@ source "$SCRIPT_DIR/cosi_common.sh"
 cosi_checkout_guard
 cosi_acquire_gpu_locks
 readonly PYTHON=$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python
-readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-coral_e1_seed2026_v3}
+readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-coral_e1_seed2026_v5}
 [[ $RUN_ID =~ ^[a-z0-9][a-z0-9_-]{7,79}$ ]] || {
   echo CORAL_E1_NO_GO:run_id >&2; exit 78;
 }
+case "$RUN_ID" in
+  coral_e1_seed2026_v3|coral_e1_seed2026_v4)
+    echo CORAL_E1_NO_GO:retired_evidence_run_id >&2; exit 78 ;;
+esac
 readonly EXP=qwen25_7b_coral_e1_actual_loss_${RUN_ID}
 readonly RUN_ROOT=$MEMAGENT_COSI_WORK_ROOT/logs/coral_e1/$RUN_ID
 readonly OUTPUT=$MEMAGENT_COSI_WORK_ROOT/logs/memory_agent/$EXP
@@ -24,6 +28,8 @@ readonly CERT=$MEMAGENT_COSI_WORK_ROOT/logs/cosi_preflight/certificates
   --manifest "$MEMAGENT_COSI_REPO_DIR/manifests/h20/qwen25_7b_cosi_seed2026.json" \
   --stage research
 mkdir -p "$CAPTURE" "$CERT"
+"$PYTHON" "$MEMAGENT_COSI_REPO_DIR/tools/h20/coral_dataproto_clone_oracle.py" \
+  --output "$RUN_ROOT/coral_dataproto_clone_oracle.json"
 "$PYTHON" -m torch.distributed.run --standalone --nproc_per_node=2 \
   "$MEMAGENT_COSI_REPO_DIR/tools/h20/coral_e1_fsdp_sketch_oracle.py" \
   --output "$RUN_ROOT/coral_e1_fsdp_sketch_oracle.json"
@@ -58,6 +64,7 @@ unset CORAL_E1_CAPTURE_DIR
   --capture-root "$CAPTURE" \
   --training-output "$OUTPUT" \
   --base-model "$MODEL" \
+  --dataproto-clone-oracle "$RUN_ROOT/coral_dataproto_clone_oracle.json" \
   --sketch-oracle "$RUN_ROOT/coral_e1_fsdp_sketch_oracle.json" \
   --gate-a-ledger "$RUN_ROOT/gate_a_execution_ledger.jsonl" \
   --expected-commit "$MEMAGENT_COSI_EXPECTED_COMMIT" \

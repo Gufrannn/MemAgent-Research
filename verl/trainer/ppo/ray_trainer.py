@@ -1338,7 +1338,7 @@ class RayPPOTrainer:
 
     def _coral_e1_rebase_behavior(self, value: DataProto) -> DataProto:
         """Recompute PPO behavior/reference logits at the fixed proposal weights."""
-        result = deepcopy(value)
+        result = value.clone()
         result.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
         padded, pad_size = pad_dataproto_to_divisor(
             result, self.actor_rollout_wg.world_size,
@@ -1357,7 +1357,7 @@ class RayPPOTrainer:
         """Regenerate a full trajectory only to materialize proposal-memory prompts."""
         self._audit_coral_e1_rollout_start("refreshed_memory_materialization")
         refreshed, final_mask, sample_index = self.generation_manager.run_llm_loop(
-            deepcopy(gen_batch), timing_raw,
+            gen_batch.clone(), timing_raw,
         )
         if int(final_mask.sum().item()) != len(original_batch):
             raise RuntimeError("CORAL_E1_NO_GO: refreshed final/root cardinality drift")
@@ -1489,7 +1489,7 @@ class RayPPOTrainer:
         sample_index = combined.batch["sample_index"]
         from recurrent.utils import final_batch
         reward_batch = final_batch(combined, final_mask, sample_index).union(
-            deepcopy(original_batch)
+            original_batch.clone()
         )
         reward_tensor, _ = compute_reward(reward_batch, self.reward_fn)
         advantage_scalar = compute_1D_grpo_advantage(
@@ -2531,9 +2531,9 @@ class RayPPOTrainer:
                                 from recurrent.research.coral import phase_for_step
                                 if phase_for_step(int(self.global_steps)) == "memory_writer":
                                     coral_e1_context = {
-                                        "cached": deepcopy(batch),
-                                        "gen_batch": deepcopy(gen_batch),
-                                        "original_batch": deepcopy(original_batch),
+                                        "cached": batch.clone(),
+                                        "gen_batch": gen_batch.clone(),
+                                        "original_batch": original_batch.clone(),
                                         "source_weight_digest": str(
                                             self._gate_a_synced_actor_digest
                                         ),

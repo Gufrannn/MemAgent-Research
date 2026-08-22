@@ -13,7 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from recurrent.research.coral_e1 import (
-    SKETCH_BASIS_SHA256, validate_fsdp_sketch_oracle_report,
+    SKETCH_BASIS_SHA256, validate_dataproto_clone_oracle_report,
+    validate_fsdp_sketch_oracle_report,
 )
 from recurrent.research.cosi import canonical_sha256, require_sha256
 
@@ -174,12 +175,14 @@ def validate_proposal(value, expected_step, expected_commit):
 def audit_evidence(evidence):
     fields = {
         "schema", "git_commit", "preregistration", "gate_a_ledger_sha256",
+        "dataproto_clone_oracle_report_sha256",
+        "dataproto_clone_oracle_report",
         "fsdp_sketch_oracle_report_sha256",
         "fsdp_sketch_oracle_report",
         "proposal_bindings", "proposals", "evidence_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != fields \
-            or evidence.get("schema") != "memagent.coral.e1.v3":
+            or evidence.get("schema") != "memagent.coral.e1.v4":
         raise ValueError("CORAL_E1_NO_GO: evidence schema")
     unsigned = {key: value for key, value in evidence.items() if key != "evidence_sha256"}
     if evidence["evidence_sha256"] != canonical_sha256(unsigned):
@@ -189,6 +192,16 @@ def audit_evidence(evidence):
             or evidence["preregistration"] != PREREGISTRATION:
         raise ValueError("CORAL_E1_NO_GO: commit/preregistration drift")
     require_sha256(evidence["gate_a_ledger_sha256"], "gate_a_ledger_sha256")
+    require_sha256(
+        evidence["dataproto_clone_oracle_report_sha256"],
+        "dataproto_clone_oracle_report_sha256",
+    )
+    validate_dataproto_clone_oracle_report(
+        evidence["dataproto_clone_oracle_report"]
+    )
+    if evidence["dataproto_clone_oracle_report_sha256"] \
+            != evidence["dataproto_clone_oracle_report"]["report_sha256"]:
+        raise ValueError("CORAL_E1_NO_GO: embedded DataProto clone oracle binding")
     require_sha256(
         evidence["fsdp_sketch_oracle_report_sha256"],
         "fsdp_sketch_oracle_report_sha256",
@@ -287,7 +300,7 @@ def main():
     evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
     summary = audit_evidence(evidence)
     report = {
-        "schema": "memagent.coral.e1-report.v3",
+        "schema": "memagent.coral.e1-report.v4",
         **summary,
         "estimand": "fixed-proposal terminal-answer gradient response to same-root materialized-memory refresh",
         "evidence_sha256": evidence["evidence_sha256"],

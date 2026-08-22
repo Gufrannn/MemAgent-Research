@@ -44,6 +44,7 @@ class CoralFrozenContractTests(unittest.TestCase):
         )
         from recurrent.research.coral_e1 import SKETCH_BASIS_SHA256
         diagnostic = manifest["occupancy_response_diagnostic"]
+        self.assertEqual(diagnostic["schema"], "memagent.coral.e1.v4")
         self.assertEqual(
             diagnostic["gradient_sketch_basis_sha256"],
             SKETCH_BASIS_SHA256,
@@ -161,6 +162,7 @@ class CoralFrozenContractTests(unittest.TestCase):
     def test_e1_real_entry_owns_measurements_and_checkpoint_binding(self):
         entry=(ROOT/"scripts/h20/run_qwen25_7b_coral_e1_producer.sh").read_text()
         trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
+        protocol=(ROOT/"verl/protocol.py").read_text()
         worker=(ROOT/"verl/workers/fsdp_workers.py").read_text()
         sealer=(ROOT/"tools/h20/seal_coral_e1.py").read_text()
         self.assertIn("CORAL_E1_CAPTURE_DIR",entry)
@@ -170,11 +172,26 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("measure_coral_role_gradient",worker)
         self.assertIn("measurement mutated optimizer state",worker)
         self.assertIn("checkpoint_inventory",sealer)
+        self.assertIn('parser.add_argument("--dataproto-clone-oracle", required=True)',sealer)
+        self.assertIn('"dataproto_clone_oracle_report": clone_oracle',sealer)
+        self.assertIn("validate_dataproto_clone_oracle_report",sealer)
         self.assertIn("coral_e1_fsdp_sketch_oracle.py",entry)
         self.assertIn("torch.distributed.run",entry)
+        self.assertIn("coral_dataproto_clone_oracle.py",entry)
+        self.assertIn("--dataproto-clone-oracle",entry)
+        self.assertIn("coral_e1_seed2026_v5",entry)
+        self.assertIn("coral_e1_seed2026_v3|coral_e1_seed2026_v4",entry)
         self.assertIn("_coral_e1_resample_terminal",trainer)
         self.assertIn("both terminal branches must be proposal-resampled",trainer)
+        self.assertIn("def clone(self) -> \"DataProto\"",protocol)
+        self.assertIn('"original_batch": original_batch.clone()',trainer)
+        self.assertNotIn('"original_batch": deepcopy(original_batch)',trainer)
+        self.assertNotIn("deepcopy(original_batch)",trainer)
         self.assertNotIn("MEASUREMENT_ROOT",entry)
+
+        runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v5",runbook)
+        self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
 
     def test_trainer_wires_role_phase_without_fictitious_anchor(self):
         trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
