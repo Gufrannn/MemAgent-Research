@@ -294,6 +294,7 @@ def calibration_report(ledger: Mapping[str, Any]) -> dict[str, float]:
     prediction = np.asarray([row["values"][-1] for row in trajectories], dtype=np.float64)
     outcome = np.asarray([row["outcome"] for row in trajectories], dtype=np.float64)
     mse = float(np.mean((prediction - outcome) ** 2))
+    mae = float(np.mean(np.abs(prediction - outcome)))
     centered = prediction - prediction.mean()
     denominator = float(centered @ centered)
     slope = float(centered @ (outcome - outcome.mean()) / denominator) if denominator else 0.0
@@ -301,7 +302,8 @@ def calibration_report(ledger: Mapping[str, Any]) -> dict[str, float]:
     innovations = np.asarray([value for row in trajectories
                               for value in row["writer_innovations"]], dtype=np.float64)
     return {
-        "mse": mse, "calibration_slope": slope, "calibration_intercept": intercept,
+        "mse": mse, "mae": mae, "calibration_slope": slope,
+        "calibration_intercept": intercept,
         "writer_innovation_mean": float(innovations.mean()),
         "writer_innovation_variance": float(innovations.var()),
         "answer_residual_variance": float(np.asarray(

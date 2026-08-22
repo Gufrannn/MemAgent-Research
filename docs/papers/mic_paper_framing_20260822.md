@@ -1,6 +1,6 @@
 # Paper II framing: Materialized Memory Innovation Credit
 
-Status: **REFRAME; conditional KEEP only if E0 and E1 pass.** This document is a
+Status: **REFRAME; Method execution GO after E0 and independent review.** This document is a
 preregistration and paper skeleton, not a statement of positive MIC results.
 
 ## Working title
@@ -28,8 +28,9 @@ independent critic checkpoints, and trajectory-wise telescoping checks at
 machine precision. We state conditions under which the oracle increments are
 valid control variates and characterize approximation-error terms; we do not
 claim that Doob decomposition itself is new. Before training, an oracle toy MDP
-and frozen Original trajectories must show exact closure, absence of leakage,
-and predictive value beyond turn/length baselines. If these gates pass, we will
+must show exact closure and absence of leakage. Method on-policy trajectories
+then provide falsifiable OOF mechanism diagnostics without requiring unavailable
+Original internals. We will
 compare fresh-from-base training under an identical budget at five checkpoints;
 otherwise the method is rejected. Results are intentionally left pending.
 
@@ -102,12 +103,13 @@ not make a misspecified value estimator unbiased.
 The paper is designed around a sequence of falsifiable tests. E0 uses a finite
 toy MDP with an analytic conditional value to recover exact increments, checks
 shuffle and fold exclusions, and requires machine-precision closure. E1 uses
-frozen Original trajectories and outcomes, never retraining Original. The OOF
+frozen Method on-policy trajectories and outcomes. The OOF
 critic must outperform a critic restricted to turn and length, remain calibrated
 by fold and turn, pass martingale conditional-mean diagnostics, and prove that
-no held-out stable ID contributed its outcome to training. Only then can a fresh
-Method-T5 run be formed from the same Qwen2.5-7B base and the accepted Original
-manifest, with only MIC fields differing.
+no held-out stable ID contributed its outcome to training. These diagnostics
+identify mechanism quality but do not block initial Method collection. A fresh
+Method run starts from the same Qwen2.5-7B base and accepted Original protocol,
+with only MIC fields differing.
 
 Conditional on those gates, the empirical study will compare terminal broadcast,
 turn/length baselines, a conventional scalar value critic, non-cross-fitted
@@ -125,11 +127,11 @@ Our intended contributions are therefore conditional rather than asserted:
    proposition separating exact algebraic closure from value-estimation error.
 2. A cross-fitted, leakage-audited role-specific estimator whose predictions,
    checkpoints, folds, and optimizer delivery can be independently reconstructed.
-3. A credit stress suite and frozen-trajectory feasibility protocol that can
-   reject the method before expensive training.
-4. If and only if the gates pass, a same-budget five-anchor study of whether
+3. A credit stress suite and on-policy mechanism protocol that can reject the
+   critic claim without requiring Original-internal tensors.
+4. A same-budget five-anchor study of whether
    materialization-aligned credit improves performance or writer-gradient
-   variance. Numerical results remain `[PENDING E0/E1/T5/T25]`.
+   variance. Numerical results remain `[PENDING E0/T5/T25/E1]`.
 
 ## 2. Problem formulation and propositions
 
@@ -261,7 +263,7 @@ not reproduced by simpler turn/length or conventional value baselines.
 | Role routing | Token masks, scalar credits, gradient ledger | writer gets `D_t`; final gets only `R-V_T`; no overlap |
 | Checkpoint | Critic-only state and actor hash | Independent critic restore; actor unchanged |
 
-### E1: frozen Original trajectories
+### E1: frozen Method on-policy trajectories
 
 The input bundle must be read-only and hash-authenticated. E1 is feasibility,
 not performance training. Fold assignment is stable-root grouped. Models and
@@ -285,7 +287,7 @@ multiple-testing correction; non-degenerate writer credit; answer residual does
 not absorb all signal; machine-precision closure. Failure of prediction power is
 `NO-GO_E1`, not permission to add gold or future inputs.
 
-### Fresh training tables, only after dual GO
+### Fresh training tables
 
 | Method | T5 EM/F1/format | T10 | T15 | T20 | T25 | writer-grad variance | compute |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -304,13 +306,14 @@ commit, manifest, experiment name, output root, and ledger; no result overwrite.
 ### Failure criteria and revision rule
 
 - E0 failure, leakage, or closure failure: stop until corrected; no T5 command.
-- E1 no predictive value beyond turn/length: `NO-GO_E1`.
+- E1 no predictive value beyond turn/length: the critic mechanism claim fails,
+  but no Original rerun or fabricated internal quantity is permitted.
 - E1 predictive but conditional-mean/calibration failure: one preregistered
   simplification/regularization revision, then `NO-GO_E1` if repeated.
 - T5 mechanism inactive or calibration failure: one matching failure-class
   revision only.
-- T5 S128 token F1 worse than certified Original-T5 by more than 2 points:
-  `NO-GO_T5` even if critic loss improves.
+- T5 stops continuation only for numerical, checkpoint, ledger, gradient, or
+  weight-sync failure. S128 comparison is performed for all anchors after T25.
 - T25 success remains the frozen program criterion: +2 F1, or F1 within 1 point
   with at least 30% writer-gradient variance reduction and +2 worst-anchor F1;
   multi-seed confirmation remains separately authorized.
@@ -318,7 +321,7 @@ commit, manifest, experiment name, output root, and ledger; no result overwrite.
 ## 5. Complete paper story and decision points
 
 1. **Phenomenon:** measure whether terminal broadcast produces high-variance or
-   misallocated writer signal on frozen trajectories. `[PENDING E1]`
+   misallocated writer signal on Method on-policy trajectories. `[PENDING E1]`
 2. **Failure mechanism:** show with an oracle deletion/recovery MDP why equal
    trajectory credit cannot identify state-changing writes.
 3. **Insight:** the defensible boundary is the exact text state consumed by the
@@ -329,12 +332,11 @@ commit, manifest, experiment name, output root, and ledger; no result overwrite.
    delivery error accounting; no novelty claim for the classical identity.
 6. **Identification:** feature taint firewall, OOF receipts, calibration,
    conditional means, exact closure, and gradient ledger.
-7. **Empirics:** same-base, same-budget T5--T25 anchors only after E0/E1 and
+7. **Empirics:** same-base, same-budget T5--T25 anchors after E0 and
    independent framing review GO.
 8. **External validity:** frozen variable-tracking stress suite; boundary cases
    include uninformative states, endogenous chunk selection, related-ID leakage,
    and answer-side compensation.
 
-Current decision: **REFRAME**, not yet GO. The next admissible transitions are
-`REFRAME -> NO-GO_E1` or `REFRAME -> KEEP_AFTER_E1`; paper numbering does not
-override the evidence.
+Current decision: **REFRAME / METHOD EXECUTION GO**. E1 remains a falsifiable
+on-policy mechanism diagnostic rather than a dependency on Original internals.

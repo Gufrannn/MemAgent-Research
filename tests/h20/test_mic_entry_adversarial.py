@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from recurrent.research.mic import CriticCheckpoint, append_jsonl_new, sha256_file
+from recurrent.research.mic import (
+    CriticCheckpoint, append_jsonl_new, calibration_report, sha256_file,
+)
+from recurrent.research.gate_a_execution import append_jsonl
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("mic_pipeline", REPO / "tools/h20/mic_pipeline.py")
@@ -125,6 +128,35 @@ def _audit_fixture(tmp_path):
                            target_step=5, output=None)
 
 
+def _valid_advantage_row(checkpoint, digest):
+    return {
+        "record_type": "mic_advantage_delivery", "global_step": 5,
+        "critic_checkpoint": str(checkpoint), "critic_checkpoint_sha256": digest,
+        "oof_bundle_sha256": "b" * 64, "parent_critic_checkpoint_sha256": None,
+        "maximum_closure_error": 0.0,
+        "calibration": {
+            "mse": 0.2, "mae": 0.3, "calibration_slope": 0.8,
+            "calibration_intercept": 0.1, "writer_innovation_mean": 0.01,
+            "writer_innovation_variance": 0.4, "answer_residual_variance": 0.6,
+        },
+        "delivery": {"writer_active_tokens": 20, "answer_active_tokens": 5},
+    }
+
+
+def _valid_gradient_row():
+    return {"record_type": "mic_actual_gradient_delivery", "global_step": 5,
+            "role_metrics": {
+                "mic_gradient/writer_pg_loss": 0.2,
+                "mic_gradient/answer_pg_loss": 0.1,
+                "mic_gradient/writer_active_tokens": 20,
+                "mic_gradient/answer_active_tokens": 5,
+                "mic_gradient/writer_logprob_grad_l2": 0.4,
+                "mic_gradient/answer_logprob_grad_l2": 0.2,
+                "mic_gradient/writer_logprob_grad_abs_max": 0.1,
+                "mic_gradient/answer_logprob_grad_abs_max": 0.05,
+            }}
+
+
 def test_checkpoint_tamper_rejected_through_real_audit_entry(tmp_path):
     args = _audit_fixture(tmp_path)
     checkpoint = tmp_path / "critic.json"
@@ -161,19 +193,77 @@ def test_weight_sync_tamper_rejected_through_real_audit_entry(tmp_path):
         "oof": {}, "history_states": [], "history_outcomes": {},
         "parent_checkpoint_sha256": None,
     }).write_new(checkpoint)
-    append_jsonl_new(args.ledger, {
-        "record_type": "mic_advantage_delivery", "global_step": 5,
-        "critic_checkpoint": str(checkpoint), "critic_checkpoint_sha256": digest,
-        "oof_bundle_sha256": "b" * 64, "parent_critic_checkpoint_sha256": None,
-        "maximum_closure_error": 0.0,
-    })
-    append_jsonl_new(args.ledger, {"record_type": "mic_actual_gradient_delivery", "global_step": 5})
+    append_jsonl_new(args.ledger, _valid_advantage_row(checkpoint, digest))
+    append_jsonl_new(args.ledger, _valid_gradient_row())
     Path(args.weight_ledger).write_text(json.dumps({
         "record_index": 0, "previous_record_sha256": "0" * 64,
         "record_sha256": "f" * 64, "sync_kind": "post_actor_update", "global_step": 5,
     }) + "\n")
     with pytest.raises(ValueError, match="weight-sync ledger chain corrupted"):
         PIPELINE.audit(args)
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("mic_gradient/writer_logprob_grad_l2", 0.0, "writer gradient is zero"),
+    ("mic_gradient/writer_pg_loss", float("nan"), "gradient metric is non-finite"),
+    ("mic_gradient/writer_active_tokens", 0, "gradient tokens inactive"),
+])
+def test_unhealthy_actual_gradient_rejected_through_audit(tmp_path, field, value, message):
+    args = _audit_fixture(tmp_path)
+    checkpoint = tmp_path / "critic.json"
+    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
+        "oof": {}, "history_states": [], "history_outcomes": {},
+        "parent_checkpoint_sha256": None,
+    }).write_new(checkpoint)
+    append_jsonl_new(args.ledger, _valid_advantage_row(checkpoint, digest))
+    gradient = _valid_gradient_row(); gradient["role_metrics"][field] = value
+    append_jsonl_new(args.ledger, gradient)
+    with pytest.raises(ValueError, match=message):
+        PIPELINE.audit(args)
+
+
+def test_degenerate_on_policy_signal_rejected_through_audit(tmp_path):
+    args = _audit_fixture(tmp_path)
+    checkpoint = tmp_path / "critic.json"
+    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
+        "oof": {}, "history_states": [], "history_outcomes": {},
+        "parent_checkpoint_sha256": None,
+    }).write_new(checkpoint)
+    advantage = _valid_advantage_row(checkpoint, digest)
+    advantage["calibration"]["writer_innovation_variance"] = 0.0
+    append_jsonl_new(args.ledger, advantage)
+    append_jsonl_new(args.ledger, _valid_gradient_row())
+    with pytest.raises(ValueError, match="writer innovation is degenerate"):
+        PIPELINE.audit(args)
+
+
+def test_real_calibration_producer_flows_through_real_audit(tmp_path):
+    args = _audit_fixture(tmp_path)
+    checkpoint = tmp_path / "critic.json"
+    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
+        "oof": {}, "history_states": [], "history_outcomes": {},
+        "parent_checkpoint_sha256": None,
+    }).write_new(checkpoint)
+    mechanism_ledger = {"trajectories": [
+        {"values": [0.5], "outcome": 1.0, "writer_innovations": [0.5],
+         "answer_residual": 0.5},
+        {"values": [-0.5], "outcome": -1.0, "writer_innovations": [-0.5],
+         "answer_residual": -0.5},
+    ]}
+    calibration = calibration_report(mechanism_ledger)
+    assert calibration["mae"] == pytest.approx(0.5)
+    advantage = _valid_advantage_row(checkpoint, digest)
+    advantage["calibration"] = calibration
+    append_jsonl_new(args.ledger, advantage)
+    append_jsonl_new(args.ledger, _valid_gradient_row())
+    append_jsonl(args.weight_ledger, {
+        "sync_kind": "post_actor_update", "global_step": 5,
+        "worker_ranks": [0, 1], "sampled_tensor_digest": "d" * 64,
+        "actor_master_sampled_tensor_digest": "e" * 64,
+    })
+    report = PIPELINE.audit(args)
+    assert report["decision"] == "MIC_T5_AUDIT_PASS"
+    assert report["on_policy_health"][5]["calibration"]["mae"] == pytest.approx(0.5)
 
 
 def test_source_firewall_real_entry_passes():
@@ -187,28 +277,34 @@ def test_source_firewall_real_entry_passes():
 
 def _p0_fixture(tmp_path, monkeypatch, *, authority="0" * 64):
     original = tmp_path / "original.json"
-    inventory = tmp_path / "inventory.json"
+    curve = tmp_path / "curve.json"
+    training_report = tmp_path / "training_report.json"
     manifest = tmp_path / "manifest.json"
     original.write_text("{}")
-    inventory.write_text(json.dumps({"files": []}))
+    curve.write_text(json.dumps({"status": "PASS", "decision": "ORIGINAL_S128_CURVE_PASS"}))
+    training_report.write_text(json.dumps({"status": "PASS"}))
     required = [
         "MEMAGENT_MIC_WORK_ROOT", "MEMAGENT_MIC_REPO_DIR",
         "MEMAGENT_MIC_EXPECTED_COMMIT", "MEMAGENT_MIC_GPU_PAIR",
         "MEMAGENT_MIC_RUN_ID", "MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST",
-        "MEMAGENT_MIC_BASELINE_INVENTORY", "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256",
-        "MEMAGENT_MIC_E1_BUNDLE",
+        "MEMAGENT_MIC_ORIGINAL_CURVE_REPORT",
     ]
     manifest.write_text(json.dumps({
         "runtime": {"required_environment": required},
         "original_manifest_equal_paths": [], "only_allowed_scientific_differences": ["algorithm.mic"],
+        "certified_read_only_sources": {
+            "original_s128_curve": {"final_report": str(curve)},
+            "original_t25_training": {
+                "resolved": str(original), "final_report": str(training_report),
+                "final_report_sha256": sha256_file(training_report),
+            },
+        },
     }))
     values = {
         "MEMAGENT_MIC_WORK_ROOT": str(tmp_path), "MEMAGENT_MIC_REPO_DIR": str(REPO),
         "MEMAGENT_MIC_EXPECTED_COMMIT": "a" * 40, "MEMAGENT_MIC_GPU_PAIR": "1,3",
         "MEMAGENT_MIC_RUN_ID": "mic-entry-test", "MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST": str(original),
-        "MEMAGENT_MIC_BASELINE_INVENTORY": str(inventory),
-        "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256": authority,
-        "MEMAGENT_MIC_E1_BUNDLE": str(tmp_path / "e1.json"),
+        "MEMAGENT_MIC_ORIGINAL_CURVE_REPORT": str(curve),
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -234,16 +330,14 @@ def test_dirty_tree_real_p0_rejection(tmp_path, monkeypatch):
         PIPELINE.p0(args)
 
 
-def test_fake_baseline_authority_real_p0_rejection(tmp_path, monkeypatch):
-    args = _p0_fixture(tmp_path, monkeypatch, authority="f" * 64)
-    def fake_git(*parts):
-        if parts == ("rev-parse", "HEAD"): return "a" * 40
-        if parts == ("branch", "--show-current"): return PIPELINE.BRANCH
-        if parts == ("status", "--porcelain"): return ""
-        return ""
-    monkeypatch.setattr(PIPELINE, "git", fake_git)
-    with pytest.raises(ValueError, match="out-of-band authority SHA"):
-        PIPELINE.p0(args)
+def test_fake_baseline_authority_rejected_at_real_evaluation_import(tmp_path, monkeypatch):
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text(json.dumps({"files": [], "prediction_files": []}))
+    monkeypatch.setenv("MEMAGENT_MIC_BASELINE_INVENTORY", str(inventory))
+    monkeypatch.setenv("MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256", "f" * 64)
+    with pytest.raises(ValueError, match="evaluation inventory authority"):
+        PIPELINE.import_baseline(SimpleNamespace(manifest=str(tmp_path / "manifest.json"),
+                                                 output=str(tmp_path / "baseline.json")))
 
 
 def test_gpu_lock_conflict_real_shell_entry_rejection(tmp_path):

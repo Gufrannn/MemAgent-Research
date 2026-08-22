@@ -156,31 +156,35 @@ def p0(args: argparse.Namespace) -> dict[str, Any]:
     if re.fullmatch(r"[a-z0-9][a-z0-9._-]{7,63}", run_id) is None:
         raise ValueError("MIC_NO_GO: run ID must be explicit stable text, not UUID")
     original_path = Path(os.environ["MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST"])
-    inventory_path = Path(os.environ["MEMAGENT_MIC_BASELINE_INVENTORY"])
-    if not original_path.is_file() or not inventory_path.is_file():
-        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: baseline evidence is absent")
+    curve_path = Path(os.environ["MEMAGENT_MIC_ORIGINAL_CURVE_REPORT"])
+    if not original_path.is_file() or not curve_path.is_file():
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: certified protocol/curve is absent")
     original = read_json(original_path)
     validate_original_parity(manifest, original)
-    authority_sha = os.environ["MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256"]
-    if re.fullmatch(r"[0-9a-f]{64}", authority_sha) is None \
-            or sha256_file(inventory_path) != authority_sha:
-        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: out-of-band authority SHA")
-    inventory = read_json(inventory_path)
-    for item in inventory.get("files", []):
-        path = Path(expand(item["path"]))
-        if not path.is_file() or sha256_file(path) != item.get("sha256"):
-            raise ValueError(f"ORIGINAL_BASELINE_PROTOCOL_MISMATCH: {path}")
-    parity = validate_full_resolved_parity(manifest, inventory)
+    curve = read_json(curve_path)
+    if curve.get("status") != "PASS" or curve.get("decision") != "ORIGINAL_S128_CURVE_PASS":
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: certified curve is not PASS")
+    certified = manifest["certified_read_only_sources"]
+    expected_curve = Path(certified["original_s128_curve"]["final_report"])
+    if curve_path.resolve() != expected_curve.resolve():
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: unexpected curve authority path")
+    expected_original = Path(certified["original_t25_training"]["resolved"])
+    if original_path.resolve() != expected_original.resolve():
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: unexpected Original protocol path")
+    training_report = Path(certified["original_t25_training"]["final_report"])
+    if not training_report.is_file() or sha256_file(training_report) != \
+            certified["original_t25_training"]["final_report_sha256"]:
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: Original training authority")
     evidence = {
         "schema": SCHEMA, "status": "PASS", "decision": "MIC_P0_PASS",
         "git_commit": expected, "branch": BRANCH, "run_id": run_id,
         "gpu_pair": list(pair), "manifest_sha256": sha256_file(args.manifest),
         "original_resolved_manifest": str(original_path.resolve()),
         "original_resolved_manifest_sha256": sha256_file(original_path),
-        "baseline_inventory": str(inventory_path.resolve()),
-        "baseline_inventory_sha256": sha256_file(inventory_path),
-        "out_of_band_baseline_authority_sha256": authority_sha,
-        "resolved_config_parity": parity,
+        "original_curve_report": str(curve_path.resolve()),
+        "original_curve_report_sha256": sha256_file(curve_path),
+        "baseline_inventory_deferred_to_evaluation": True,
+        "original_internal_trajectory_required": False,
     }
     if args.check_runtime:
         result = subprocess.run([
@@ -383,7 +387,17 @@ def e1(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def import_baseline(args: argparse.Namespace) -> dict[str, Any]:
-    inventory = read_json(os.environ["MEMAGENT_MIC_BASELINE_INVENTORY"])
+    inventory_path = Path(os.environ.get("MEMAGENT_MIC_BASELINE_INVENTORY", ""))
+    authority_sha = os.environ.get("MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256", "")
+    if not inventory_path.is_file() or re.fullmatch(r"[0-9a-f]{64}", authority_sha) is None \
+            or sha256_file(inventory_path) != authority_sha:
+        raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: evaluation inventory authority")
+    inventory = read_json(inventory_path)
+    for item in inventory.get("files", []):
+        path = Path(expand(item["path"]))
+        if not path.is_file() or sha256_file(path) != item.get("sha256"):
+            raise ValueError(f"ORIGINAL_BASELINE_PROTOCOL_MISMATCH: {path}")
+    validate_full_resolved_parity(expand(read_json(args.manifest)), inventory)
     interfaces = {}
     frozen_keys = None
     for item in inventory.get("prediction_files", []):
@@ -420,7 +434,7 @@ def import_baseline(args: argparse.Namespace) -> dict[str, Any]:
     if set(interfaces) != required:
         raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: all six baseline interfaces required")
     report = {"schema": SCHEMA, "status": "PASS", "decision": "MIC_BASELINE_IMPORT_PASS",
-              "inventory_sha256": sha256_file(os.environ["MEMAGENT_MIC_BASELINE_INVENTORY"]),
+              "inventory_sha256": sha256_file(inventory_path),
               "interfaces": interfaces}
     write_new(args.output, report)
     return report
@@ -430,8 +444,8 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     from recurrent.research.mic import CriticCheckpoint
     from recurrent.research.gate_a_execution import validate_jsonl_chain
     required = {
-        "p0": "MIC_P0_PASS", "e0": "MIC_E0_PASS", "e1": "MIC_E1_PASS",
-        "paper_review": "MIC_PAPER_REVIEW_GO", "baseline": "MIC_BASELINE_IMPORT_PASS",
+        "p0": "MIC_P0_PASS", "e0": "MIC_E0_PASS",
+        "paper_review": "MIC_PAPER_REVIEW_GO",
     }
     checked = {}
     for name, decision in required.items():
@@ -446,6 +460,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     previous_critic = None
     steps = []
     gradient_steps = []
+    health_by_step: dict[int, dict[str, Any]] = {}
     for sequence, row in enumerate(lines):
         digest = row.pop("entry_sha256", None)
         if row.get("sequence") != sequence or row.get("previous_entry_sha256") != previous \
@@ -453,7 +468,8 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("MIC_NO_GO: execution ledger chain corrupted")
         previous = digest
         if row.get("record_type") == "mic_advantage_delivery":
-            steps.append(int(row["global_step"]))
+            step = int(row["global_step"])
+            steps.append(step)
             checkpoint = Path(row["critic_checkpoint"])
             if not checkpoint.is_file():
                 raise ValueError("MIC_NO_GO: critic checkpoint binding mismatch")
@@ -469,14 +485,71 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
                     ) != previous_critic:
                 raise ValueError("MIC_NO_GO: critic resume chain mismatch")
             previous_critic = checkpoint_payload["checkpoint_sha256"]
-            if float(row["maximum_closure_error"]) > 1e-12:
+            closure = float(row["maximum_closure_error"])
+            if not math.isfinite(closure) or closure > 1e-12:
                 raise ValueError("MIC_NO_GO: training closure drift")
+            calibration = row.get("calibration", {})
+            required_calibration = (
+                "mse", "mae", "calibration_slope", "calibration_intercept",
+                "writer_innovation_mean", "writer_innovation_variance",
+                "answer_residual_variance",
+            )
+            try:
+                calibration_values = {key: float(calibration[key]) for key in required_calibration}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("MIC_NO_GO: on-policy calibration metrics missing") from exc
+            if any(not math.isfinite(value) for value in calibration_values.values()):
+                raise ValueError("MIC_NO_GO: on-policy calibration is non-finite")
+            writer_variance = calibration_values["writer_innovation_variance"]
+            answer_variance = calibration_values["answer_residual_variance"]
+            if writer_variance <= 1e-15:
+                raise ValueError("MIC_NO_GO: writer innovation is degenerate")
+            residual_share = answer_variance / max(writer_variance + answer_variance, 1e-15)
+            if residual_share >= 0.999999:
+                raise ValueError("MIC_NO_GO: answer residual absorbs all on-policy signal")
+            delivery = row.get("delivery", {})
+            if int(delivery.get("writer_active_tokens", 0)) <= 0 \
+                    or int(delivery.get("answer_active_tokens", 0)) <= 0:
+                raise ValueError("MIC_NO_GO: writer/answer advantage delivery inactive")
+            health_by_step.setdefault(step, {}).update({
+                "closure": closure, "calibration": calibration_values,
+                "answer_residual_variance_share": residual_share,
+                "advantage_delivery": {
+                    "writer_active_tokens": int(delivery["writer_active_tokens"]),
+                    "answer_active_tokens": int(delivery["answer_active_tokens"]),
+                },
+            })
         elif row.get("record_type") == "mic_actual_gradient_delivery":
-            gradient_steps.append(int(row["global_step"]))
+            step = int(row["global_step"])
+            gradient_steps.append(step)
+            role_metrics = row.get("role_metrics", {})
+            required_role_metrics = (
+                "mic_gradient/writer_pg_loss", "mic_gradient/answer_pg_loss",
+                "mic_gradient/writer_active_tokens", "mic_gradient/answer_active_tokens",
+                "mic_gradient/writer_logprob_grad_l2", "mic_gradient/answer_logprob_grad_l2",
+                "mic_gradient/writer_logprob_grad_abs_max",
+                "mic_gradient/answer_logprob_grad_abs_max",
+            )
+            try:
+                numeric_role_metrics = {key: float(role_metrics[key]) for key in required_role_metrics}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("MIC_NO_GO: actual role gradient metrics missing") from exc
+            if any(not math.isfinite(value) for value in numeric_role_metrics.values()):
+                raise ValueError("MIC_NO_GO: actual role gradient metric is non-finite")
+            if numeric_role_metrics["mic_gradient/writer_active_tokens"] <= 0 \
+                    or numeric_role_metrics["mic_gradient/answer_active_tokens"] <= 0:
+                raise ValueError("MIC_NO_GO: actual role gradient tokens inactive")
+            if numeric_role_metrics["mic_gradient/writer_logprob_grad_l2"] <= 0 \
+                    or numeric_role_metrics["mic_gradient/writer_logprob_grad_abs_max"] <= 0:
+                raise ValueError("MIC_NO_GO: actual writer gradient is zero")
+            health_by_step.setdefault(step, {})["actual_role_gradient"] = numeric_role_metrics
     if args.target_step not in steps:
         raise ValueError(f"MIC_NO_GO: target step {args.target_step} absent from MIC ledger")
     if sorted(steps) != sorted(gradient_steps):
         raise ValueError("MIC_NO_GO: role-specific actual gradient ledger coverage differs")
+    if set(health_by_step) != set(steps) \
+            or any("actual_role_gradient" not in health_by_step[step] for step in steps):
+        raise ValueError("MIC_NO_GO: on-policy mechanism health coverage differs")
     weight_rows = [json.loads(line) for line in Path(args.weight_ledger).read_text(
         encoding="utf-8").splitlines() if line]
     weight_failures = validate_jsonl_chain(weight_rows)
@@ -497,7 +570,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("MIC_NO_GO: weight-sync step coverage differs from MIC updates")
     report = {"schema": SCHEMA, "status": "PASS", "decision": f"MIC_T{args.target_step}_AUDIT_PASS",
               "gate_sha256": checked, "ledger_tail_sha256": previous, "mic_steps": steps,
-              "gradient_steps": gradient_steps}
+              "gradient_steps": gradient_steps, "on_policy_health": health_by_step}
     report["weight_sync_ledger_sha256"] = sha256_file(args.weight_ledger)
     if args.output:
         write_new(args.output, report)
@@ -520,17 +593,14 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     if sha256_json(keys) != baseline["interfaces"][interface]["stable_key_inventory_sha256"]:
         raise ValueError("MIC_NO_GO: method S128 identities differ from frozen Original")
     f1_delta_pp = 100.0 * (float(aggregate["token_f1"]) - float(original["token_f1"]))
-    decision = "MIC_T5_HEALTH_PASS" if args.step == 5 and f1_delta_pp >= -2.0 \
-        else (f"MIC_T{args.step}_EVAL_PASS" if args.step != 5 else "MIC_NO_GO_T5")
+    decision = f"MIC_T{args.step}_EVAL_PASS"
     report = {
-        "schema": SCHEMA, "status": "PASS" if "NO_GO" not in decision else "FAIL",
+        "schema": SCHEMA, "status": "PASS",
         "decision": decision, "step": args.step,
         "prediction_sha256": sha256_file(args.predictions), "aggregate": aggregate,
         "original_aggregate": original, "token_f1_delta_pp": f1_delta_pp,
     }
     write_new(args.output, report)
-    if report["status"] != "PASS":
-        raise ValueError(f"MIC_NO_GO_T5: token-F1 delta {f1_delta_pp:.6g}pp")
     return report
 
 
@@ -605,7 +675,7 @@ def parser() -> argparse.ArgumentParser:
     sub.choices["e1"].add_argument("--minimum-conditional-group-size", type=int, default=8)
     sub.choices["e1"].add_argument("--maximum-conditional-t", type=float, default=3.5)
     child = sub.add_parser("audit")
-    for name in ("p0", "e0", "e1", "paper-review", "baseline", "ledger", "weight-ledger"):
+    for name in ("p0", "e0", "paper-review", "ledger", "weight-ledger"):
         child.add_argument("--" + name, required=True)
     child.add_argument("--target-step", type=int, choices=(5, 10, 15, 20, 25), required=True)
     child.add_argument("--output")

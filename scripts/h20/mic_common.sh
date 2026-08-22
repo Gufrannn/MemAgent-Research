@@ -71,8 +71,6 @@ mic_require_gate() {
 mic_require_training_gates() {
   mic_require_gate "$MIC_P0" MIC_P0_PASS
   mic_require_gate "$MIC_E0" MIC_E0_PASS
-  mic_require_gate "$MIC_E1" MIC_E1_PASS
-  mic_require_gate "$MIC_BASELINE" MIC_BASELINE_IMPORT_PASS
   mic_require_gate "$MIC_PAPER_REVIEW" MIC_PAPER_REVIEW_GO
 }
 

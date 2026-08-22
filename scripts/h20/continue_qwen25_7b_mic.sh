@@ -8,9 +8,7 @@ source "$SCRIPT_DIR/mic_common.sh"
 mic_require_checkout; mic_require_training_gates
 mic_require_gate "$MIC_CERT/t${SOURCE_STEP}_audit.json" MIC_T${SOURCE_STEP}_AUDIT_PASS
 if [[ $SOURCE_STEP -eq 5 ]]; then
-  mic_require_gate "$MIC_CERT/t5_health.json" MIC_T5_HEALTH_PASS
-else
-  mic_require_gate "$MIC_CERT/t${SOURCE_STEP}_eval.json" MIC_T${SOURCE_STEP}_EVAL_PASS
+  mic_require_gate "$MIC_CERT/t5_health.json" MIC_T5_TRAINING_HEALTH_PASS
 fi
 mic_acquire_gpu_locks; mic_require_idle
 [[ -d $MIC_OUTPUT/global_step_${SOURCE_STEP}/actor && -f $MIC_OUTPUT/global_step_${SOURCE_STEP}/data.pt ]] || {

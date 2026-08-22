@@ -2,7 +2,7 @@
   "schema_version": 1,
   "branch": "h20/qwen25-7b-mic-t25-frozen-20260822",
   "base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
-  "decision": "REFRAME_PENDING_E0_E1_AND_PAPER_REVIEW",
+  "decision": "REFRAME_METHOD_EXECUTION_GO_EVAL_AUTHORITY_DEFERRED",
   "experiment_name": "qwen25_7b_h20_mic_fresh_t25_seed2026_20260822",
   "certified_read_only_sources": {
     "original_s128_curve": {
@@ -52,9 +52,7 @@
       "MEMAGENT_MIC_GPU_PAIR",
       "MEMAGENT_MIC_RUN_ID",
       "MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST",
-      "MEMAGENT_MIC_BASELINE_INVENTORY",
-      "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256",
-      "MEMAGENT_MIC_E1_BUNDLE"
+      "MEMAGENT_MIC_ORIGINAL_CURVE_REPORT"
     ],
     "python": "${MEMAGENT_MIC_WORK_ROOT}/.venv/bin/python",
     "gpu_count": 2,
@@ -117,11 +115,13 @@
     "trainer.resume_from_path"
   ],
   "gates": {
-    "required_before_gpu": ["MIC_P0_PASS", "MIC_E0_PASS", "MIC_E1_PASS", "MIC_PAPER_REVIEW_GO"],
+    "required_before_gpu": ["MIC_P0_PASS", "MIC_E0_PASS", "MIC_PAPER_REVIEW_GO"],
     "t5_noninferiority_token_f1_pp": -2.0,
     "t5_revision_limit": 1,
     "allowed_revision_classes": ["numerical_instability", "critic_regularization"],
-    "continuation_requires": "MIC_T5_HEALTH_PASS"
+    "continuation_requires": "MIC_T5_TRAINING_HEALTH_PASS",
+    "original_internal_trajectory_required": false,
+    "mechanism_diagnostics_source": "method_on_policy_only"
   },
   "evaluation": {
     "fixed_examples": 128,

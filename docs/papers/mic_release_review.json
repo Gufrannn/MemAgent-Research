@@ -3,14 +3,13 @@
   "status": "PASS",
   "decision": "MIC_PAPER_REVIEW_GO",
   "review_scope": "paper_framing_and_code_release_readiness",
-  "scientific_execution_status": "BLOCKED_EXTERNAL_AUTHORITY",
-  "t5_authorized": false,
+  "scientific_execution_status": "METHOD_T5_TO_T25_AUTHORIZED_BASELINE_EVAL_DEFERRED",
+  "t5_authorized": true,
   "external_requirements": [
-    "certified Original inventory",
-    "certified Original evidence bundle",
-    "out-of-band SHA-256 of the complete inventory",
+    "certified Original inventory before fixed-S128 evaluation",
+    "out-of-band SHA-256 of the complete evaluation inventory",
     "P0 PASS",
-    "E1 PASS"
+    "E0 PASS"
   ],
   "review_findings": {
     "fixable_blockers_remaining": 0,

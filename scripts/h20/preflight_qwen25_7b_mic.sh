@@ -8,5 +8,3 @@ mkdir -p "$MIC_CERT"
 "$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" p0 \
   --manifest "$MIC_MANIFEST" --output "$MIC_P0" --check-runtime
 "$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" e0 --output "$MIC_E0"
-"$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" e1 --output "$MIC_E1"
-"$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" import-baseline --output "$MIC_BASELINE"

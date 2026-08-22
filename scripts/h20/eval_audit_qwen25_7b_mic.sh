@@ -6,6 +6,17 @@ case "$STEP" in 5|10|15|20|25) ;; *) echo 'MIC_NO_GO: invalid anchor' >&2; exit 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/mic_common.sh"
 mic_require_checkout; mic_require_training_gates; mic_acquire_gpu_locks; mic_require_idle
+[[ -n ${MEMAGENT_MIC_BASELINE_INVENTORY:-} \
+    && -n ${MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256:-} ]] || {
+  echo 'MIC_NO_GO: evaluation requires certified read-only baseline inventory and authority SHA' >&2
+  exit 82
+}
+if [[ ! -e $MIC_BASELINE ]]; then
+  "$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" import-baseline \
+    --manifest "$MIC_MANIFEST" --output "$MIC_BASELINE"
+fi
+mic_require_gate "$MIC_BASELINE" MIC_BASELINE_IMPORT_PASS
+mic_require_gate "$MIC_CERT/t${STEP}_audit.json" MIC_T${STEP}_AUDIT_PASS
 [[ -d $MIC_OUTPUT/global_step_${STEP}/actor ]] || { echo 'MIC_NO_GO: actor checkpoint absent' >&2; exit 80; }
 EVAL_ROOT=$MIC_ROOT/eval_t${STEP}
 [[ ! -e $EVAL_ROOT ]] || { echo 'MIC_NO_GO: evaluation output exists' >&2; exit 81; }
@@ -32,11 +43,6 @@ env WORK_ROOT="$MEMAGENT_MIC_WORK_ROOT" CODE="$MEMAGENT_MIC_REPO_DIR" PYTHON="$M
   --generations "$EVAL_ROOT/raw/${STEP}.jsonl" \
   --validation "$MEMAGENT_MIC_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
   --identity-source "$IDENTITY_SOURCE" --output "$EVAL_ROOT/predictions.jsonl"
-"$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" audit \
-  --p0 "$MIC_P0" --e0 "$MIC_E0" --e1 "$MIC_E1" --paper-review "$MIC_PAPER_REVIEW" \
-  --baseline "$MIC_BASELINE" --ledger "$MIC_LEDGER" --target-step "$STEP" \
-  --weight-ledger "$MIC_WEIGHT_LEDGER" \
-  --output "$MIC_CERT/t${STEP}_audit.json"
 "$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" evaluate \
   --predictions "$EVAL_ROOT/predictions.jsonl" --baseline "$MIC_BASELINE" --step "$STEP" \
-  --output "$MIC_CERT/$( [[ $STEP -eq 5 ]] && echo t5_health || echo t${STEP}_eval ).json"
+  --output "$MIC_CERT/t${STEP}_eval.json"

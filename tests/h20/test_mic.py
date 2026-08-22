@@ -147,7 +147,7 @@ def test_training_entry_guards_are_present():
     assert "mic_require_training_gates" in fresh
     assert "PHASE=fresh" in fresh and "FRESH_TOTAL_STEPS=5" in fresh
     assert "5:10|10:15|15:20|20:25" in continuation
-    assert "MIC_T5_HEALTH_PASS" in continuation
+    assert "MIC_T5_TRAINING_HEALTH_PASS" in continuation
     assert "Original_global_step_3" not in fresh + continuation
 
 

@@ -1,7 +1,7 @@
 # MIC H20 execution runbook
 
 Scientific status at publication of this branch: **REFRAME, GPU-locked until
-P0 + E0 + E1 + baseline import + independent paper/code review all PASS.** The
+P0 + E0 + independent paper/code review all PASS.** The
 presence of launch code is not authorization to bypass a failed gate.
 
 ## Evidence inputs
@@ -22,7 +22,8 @@ The canonical read-only sources shared by every method branch are:
 There is no certified standalone baseline inventory yet. It must be
 materialized from the certified S128 final-report inventory, then MIC must
 independently recompute EM, token-F1, and format success from all 128 rows.
-The materialized inventory SHA must be certified out-of-band before P0. Do not
+The materialized inventory SHA must be certified out-of-band before fixed-S128
+evaluation, but it does not block Method training. Do not
 infer paths, scores, or hashes from aggregate fields. Original actual-loss
 rank ledgers were never collected; their status is
 `PENDING_ACTUAL_LOSS_LEDGER` and they must not be synthesized or rerun.
@@ -36,11 +37,9 @@ Prediction JSONL rows contain `stable_key`, `source_order_index`, `output`, and
 `ground_truth`. MIC recomputes normalized EM, token F1, and format success from
 those fields; stored reward/aggregate fields are not trusted.
 
-E1 consumes a read-only JSON bundle with `states` and `outcomes`. Each state is
-limited to stable IDs, turn index, question, visible chunks through that turn,
-and exact materialized memory. Gold, future chunks, current-row outcome, and
-generated answers are rejected by schema. Outcomes live in a separate mapping
-and enter only fold-exclusive fitting/evaluation.
+MIC mechanism diagnostics use Method's own on-policy materialized states and
+outcomes. Missing Original-internal trajectories or actual-loss tensors never
+block Method training and are not reconstructed from aggregates.
 
 ## Copy/paste sequence
 
@@ -51,9 +50,7 @@ export MEMAGENT_MIC_EXPECTED_COMMIT=<RELEASE_SHA_FROM_HANDOFF>
 export MEMAGENT_MIC_GPU_PAIR=2,7
 export MEMAGENT_MIC_RUN_ID=mic-main-v1-seed2026
 export MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json
-export MEMAGENT_MIC_BASELINE_INVENTORY=/data/cw/memagent_work/evidence/original/baseline_inventory.json
-export MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256=<CERTIFIED_OUT_OF_BAND_INVENTORY_SHA256>
-export MEMAGENT_MIC_E1_BUNDLE=/data/cw/memagent_work/evidence/mic/e1_frozen_original_trajectories.json
+export MEMAGENT_MIC_ORIGINAL_CURVE_REPORT=/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json
 
 cd /data/cw/memagent_work/code
 git fetch origin h20/qwen25-7b-mic-t25-frozen-20260822
@@ -65,21 +62,29 @@ git switch -C h20/qwen25-7b-mic-t25-frozen-20260822 "$MEMAGENT_MIC_EXPECTED_COMM
 
 bash scripts/h20/preflight_qwen25_7b_mic.sh
 bash scripts/h20/run_qwen25_7b_mic_t5.sh
-bash scripts/h20/eval_audit_qwen25_7b_mic.sh 5
+bash scripts/h20/audit_health_qwen25_7b_mic.sh 5
 
 bash scripts/h20/continue_qwen25_7b_mic.sh 5 10
-bash scripts/h20/eval_audit_qwen25_7b_mic.sh 10
+bash scripts/h20/audit_health_qwen25_7b_mic.sh 10
 bash scripts/h20/continue_qwen25_7b_mic.sh 10 15
-bash scripts/h20/eval_audit_qwen25_7b_mic.sh 15
+bash scripts/h20/audit_health_qwen25_7b_mic.sh 15
 bash scripts/h20/continue_qwen25_7b_mic.sh 15 20
-bash scripts/h20/eval_audit_qwen25_7b_mic.sh 20
+bash scripts/h20/audit_health_qwen25_7b_mic.sh 20
 bash scripts/h20/continue_qwen25_7b_mic.sh 20 25
-bash scripts/h20/eval_audit_qwen25_7b_mic.sh 25
+bash scripts/h20/audit_health_qwen25_7b_mic.sh 25
+
+# Only after Method-T25 exists, set the certified evaluation inventory:
+export MEMAGENT_MIC_BASELINE_INVENTORY=/data/cw/memagent_work/evidence/original/baseline_inventory.json
+export MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256=<CERTIFIED_OUT_OF_BAND_INVENTORY_SHA256>
+for step in 5 10 15 20 25; do
+  bash scripts/h20/eval_audit_qwen25_7b_mic.sh "$step"
+done
 ```
 
 The equivalent unattended sequence is
 `bash scripts/h20/run_qwen25_7b_mic_full_chain.sh`, but the explicit sequence is
-preferred so the T5 health report can be inspected before continuation.
+preferred so the cheap T5 training-health report can be inspected before
+continuation. Fixed-S128 generation is deliberately deferred until T25.
 
 ## Runtime guarantees
 
@@ -107,13 +112,15 @@ preferred so the T5 health report can be inspected before continuation.
 ## T5 revision and recovery
 
 T5 continuation requires both `MIC_T5_AUDIT_PASS` and
-`MIC_T5_HEALTH_PASS`. A failed T5 is preserved. At most one new variant may be
+`MIC_T5_TRAINING_HEALTH_PASS`; this checks finite optimizer/gradient,
+checkpoint, ledger, and weight-sync evidence, not S128 performance. A failed T5
+is preserved. At most one new variant may be
 created, with a new manifest/run ID/commit/output/ledger, and only for the
 preregistered classes `numerical_instability` or `critic_regularization`. A
 second T5 failure is `NO-GO_T5`.
 
 Normal wall-clock estimates on two H20s are hardware/queue dependent. Budget
-approximately 15--30 minutes for P0/E0/E1 and baseline verification, 2--5 hours
+approximately 5--15 minutes for P0/E0, 2--5 hours
 per five-update training segment, and 1--3 hours per fixed-S128 evaluation.
 These are planning ranges, not claims from a local H20 run. This branch was not
 GPU-executed on the development machine.
