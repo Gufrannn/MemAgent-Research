@@ -781,9 +781,7 @@ def _prepare_eval_args(tmp_path, identity_path, generation_path):
         "status": "PASS", "decision": "MIC_P0_PASS",
         "git_commit": "a" * 40, "run_id": "audit-run",
     }))
-    reconstructed_reward = tmp_path / "original/recurrent/research/hotpotqa_dense_reward.py"
-    reconstructed_reward.parent.mkdir(parents=True)
-    reconstructed_reward.write_bytes(b"certified-reward-code")
+    reconstructed_reward = REPO / "recurrent/research/hotpotqa_dense_reward.py"
     checkpoint = tmp_path / "global_step_5"
     actor = checkpoint / "actor"
     actor.mkdir(parents=True)
@@ -819,9 +817,10 @@ def _prepare_eval_args(tmp_path, identity_path, generation_path):
         "generation_path": str(generation_path.resolve()),
         "generation_sha256": hashlib.sha256(generation_path.read_bytes()).hexdigest(),
         "generation_protocol_evidence": {
-            "method_generation_protocol_sha256": "b" * 64,
+            "method_generation_protocol_sha256": "a" * 64,
             "original_generation_protocol_sha256": "a" * 64,
             "original_protocol_reconstruction_path": str(reconstructed_reward.resolve()),
+            "projection_schema": "repository-relative-reward-code-sha256-v1",
             "reward_code_sha256": hashlib.sha256(reconstructed_reward.read_bytes()).hexdigest(),
         },
         "checkpoint_source": str(checkpoint.resolve()), "checkpoint_inventory": inventory,
@@ -853,8 +852,7 @@ def _stub_prepare_baseline_authority(monkeypatch, args, identity_path):
         "validation_sha256": hashlib.sha256(Path(args.validation).read_bytes()).hexdigest(),
         "shared_generation_protocol_sha256": "a" * 64,
         "original_reward_code_sha256": hashlib.sha256(
-            (Path(args.execution_summary).parent /
-             "original/recurrent/research/hotpotqa_dense_reward.py").read_bytes()
+            (REPO / "recurrent/research/hotpotqa_dense_reward.py").read_bytes()
         ).hexdigest(),
     })
     monkeypatch.setattr(PIPELINE, "verify_checkpoint_authority", lambda *unused: {
@@ -929,6 +927,103 @@ def test_original_method_generation_protocol_mismatch_is_rejected(tmp_path, monk
     Path(args.execution_summary).write_text(json.dumps(summary))
     with pytest.raises(ValueError, match="read-only evaluation summary binding mismatch"):
         PIPELINE.prepare_eval(args)
+
+
+def test_method_generation_protocol_mismatch_is_rejected(tmp_path, monkeypatch):
+    sources, identities, generations = _identity_rows()
+    identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
+    _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    summary = json.loads(Path(args.execution_summary).read_text())
+    summary["generation_protocol_evidence"]["method_generation_protocol_sha256"] = "f" * 64
+    Path(args.execution_summary).write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="read-only evaluation summary binding mismatch"):
+        PIPELINE.prepare_eval(args)
+
+
+def test_reward_path_rebinding_outside_git_repo_is_rejected(tmp_path, monkeypatch):
+    sources, identities, generations = _identity_rows()
+    identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
+    _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    canonical_reward = REPO / "recurrent/research/hotpotqa_dense_reward.py"
+    outside_reward = tmp_path / "outside/hotpotqa_dense_reward.py"
+    outside_reward.parent.mkdir(parents=True)
+    outside_reward.write_bytes(canonical_reward.read_bytes())
+    summary = json.loads(Path(args.execution_summary).read_text())
+    summary["generation_protocol_evidence"][
+        "original_protocol_reconstruction_path"
+    ] = str(outside_reward.resolve())
+    Path(args.execution_summary).write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="read-only evaluation summary binding mismatch"):
+        PIPELINE.prepare_eval(args)
+
+
+def test_repository_neutral_protocol_matches_across_checkout_roots(tmp_path):
+    from recurrent.research.mic_eval_protocol import (
+        repository_neutral_generation_protocol,
+    )
+
+    payloads = []
+    reward_bytes = b"certified reward implementation"
+    reward_sha = hashlib.sha256(reward_bytes).hexdigest()
+    for checkout in (tmp_path / "checkout-a", tmp_path / "checkout-b"):
+        reward = checkout / "recurrent/research/hotpotqa_dense_reward.py"
+        reward.parent.mkdir(parents=True)
+        reward.write_bytes(reward_bytes)
+        projection = {
+            "data": {"max_prompt_length": 8192},
+            "custom_reward_function": {
+                "path": str(reward.resolve()), "name": "compute_score",
+                "reward_kwargs": {"f1_weight": 0.95, "grounded_box_bonus": 0.05},
+            },
+        }
+        normalized, bound_reward = repository_neutral_generation_protocol(
+            projection, repo_dir=checkout,
+            expected_reward_code_sha256=reward_sha,
+        )
+        assert bound_reward == reward.resolve()
+        assert projection["custom_reward_function"]["path"] == str(reward.resolve())
+        assert normalized["custom_reward_function"]["path"] \
+            == "recurrent/research/hotpotqa_dense_reward.py"
+        assert normalized["custom_reward_function"]["path_sha256"] == reward_sha
+        payloads.append(normalized)
+    assert canonical_sha256(payloads[0]) == canonical_sha256(payloads[1])
+
+
+def test_repository_neutral_protocol_rejects_outside_repo_and_reward_tamper(tmp_path):
+    from recurrent.research.mic_eval_protocol import (
+        repository_neutral_generation_protocol,
+    )
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"reward")
+    projection = {"custom_reward_function": {"path": str(outside)}}
+    with pytest.raises(RuntimeError, match="outside the bound repository"):
+        repository_neutral_generation_protocol(
+            projection, repo_dir=checkout,
+            expected_reward_code_sha256=hashlib.sha256(outside.read_bytes()).hexdigest(),
+        )
+
+    inside = checkout / "recurrent/research/hotpotqa_dense_reward.py"
+    inside.parent.mkdir(parents=True)
+    inside.write_bytes(b"tampered")
+    projection["custom_reward_function"]["path"] = str(inside)
+    with pytest.raises(RuntimeError, match="reward code differs"):
+        repository_neutral_generation_protocol(
+            projection, repo_dir=checkout,
+            expected_reward_code_sha256=hashlib.sha256(b"certified").hexdigest(),
+        )
 
 
 def test_checkpoint_drift_real_prepare_eval_rejection(tmp_path, monkeypatch):

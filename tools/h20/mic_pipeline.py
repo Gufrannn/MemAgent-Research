@@ -1447,7 +1447,10 @@ def prepare_eval(args: argparse.Namespace) -> dict[str, Any]:
     protocol_evidence = summary.get("generation_protocol_evidence", {})
     reconstructed_reward_path = Path(
         protocol_evidence.get("original_protocol_reconstruction_path", "")
-    )
+    ).resolve()
+    expected_reward_path = (
+        REPO / "recurrent/research/hotpotqa_dense_reward.py"
+    ).resolve()
     if validation_path != Path(certified_baseline["validation_path"]).resolve() \
             or sha256_file(validation_path) != certified_baseline["validation_sha256"] \
             or identity_path != expected_identity_path:
@@ -1465,13 +1468,15 @@ def prepare_eval(args: argparse.Namespace) -> dict[str, Any]:
             ).resolve() \
             or summary.get("generation_sha256") != sha256_file(args.generations) \
             or summary.get("training_audit_sha256") != sha256_file(training_audit_path) \
-            or re.fullmatch(r"[0-9a-f]{64}", str(
-                protocol_evidence.get("method_generation_protocol_sha256", "")
-            )) is None \
+            or protocol_evidence.get("method_generation_protocol_sha256") \
+            != certified_baseline["shared_generation_protocol_sha256"] \
             or protocol_evidence.get("original_generation_protocol_sha256") \
             != certified_baseline["shared_generation_protocol_sha256"] \
+            or protocol_evidence.get("projection_schema") \
+            != "repository-relative-reward-code-sha256-v1" \
             or protocol_evidence.get("reward_code_sha256") \
             != certified_baseline["original_reward_code_sha256"] \
+            or reconstructed_reward_path != expected_reward_path \
             or not reconstructed_reward_path.is_file() \
             or sha256_file(reconstructed_reward_path) \
             != certified_baseline["original_reward_code_sha256"] \

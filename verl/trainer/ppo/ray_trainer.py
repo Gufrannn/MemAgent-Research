@@ -155,40 +155,33 @@ def _mic_generation_protocol_evidence(
             "MIC_NO_GO: strict fixed-S128 generation contract drifted: "
             + json.dumps(mismatches, sort_keys=True, separators=(",", ":"))
         )
-    def projection_sha(value) -> str:
-        encoded = json.dumps(
-            value, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+    from recurrent.research.mic_eval_protocol import (
+        PROJECTION_SCHEMA, repository_neutral_generation_protocol,
+    )
+    from recurrent.research.stable_eval_identity import canonical_sha256
 
-    actual_reward_path = Path(projection["custom_reward_function"]["path"]).resolve()
-    if not actual_reward_path.is_file():
-        raise RuntimeError("MIC_NO_GO: Method evaluation reward code is absent")
-    actual_reward_sha = hashlib.sha256(actual_reward_path.read_bytes()).hexdigest()
-    if actual_reward_sha != expected_reward_code_sha256:
-        raise RuntimeError("MIC_NO_GO: Method/Original S128 reward code differs")
-    matches = []
-    code_root = Path(work_root) / "code"
-    for candidate in sorted(code_root.rglob("hotpotqa_dense_reward.py")):
-        if candidate.parts[-3:] != (
-                "recurrent", "research", "hotpotqa_dense_reward.py"
-        ):
-            continue
-        if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected_reward_code_sha256:
-            continue
-        candidate_projection = deepcopy(projection)
-        candidate_projection["custom_reward_function"]["path"] = str(candidate.resolve())
-        if projection_sha(candidate_projection) == expected_original_sha256:
-            matches.append(str(candidate.resolve()))
-    if not matches:
+    normalized_projection, actual_reward_path = (
+        repository_neutral_generation_protocol(
+            projection, repo_dir=repo_dir,
+            expected_reward_code_sha256=expected_reward_code_sha256,
+        )
+    )
+    normalized_sha = canonical_sha256(normalized_projection)
+    if normalized_sha != expected_original_sha256:
         raise RuntimeError(
             "MIC_NO_GO: Method generation protocol does not reconstruct the certified "
-            "Original protocol after repository-path normalization"
+            "Original repository-neutral protocol: "
+            + json.dumps({
+                "actual": normalized_sha,
+                "expected": expected_original_sha256,
+                "projection_schema": PROJECTION_SCHEMA,
+            }, sort_keys=True, separators=(",", ":"))
         )
     return {
-        "method_generation_protocol_sha256": projection_sha(projection),
+        "method_generation_protocol_sha256": normalized_sha,
         "original_generation_protocol_sha256": expected_original_sha256,
-        "original_protocol_reconstruction_path": matches[0],
+        "original_protocol_reconstruction_path": str(actual_reward_path),
+        "projection_schema": PROJECTION_SCHEMA,
         "reward_code_sha256": expected_reward_code_sha256,
     }
 
