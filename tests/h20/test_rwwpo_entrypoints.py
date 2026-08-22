@@ -93,6 +93,10 @@ def test_materializer_and_auditor_pin_repository_authority():
         assert "CANONICAL_AUTHORITY" in text
         assert "noncanonical authority" in text
 
+def test_original5_authority_digest_matches_h20_final_report_readback():
+    authority=json.loads((ROOT/"manifests/h20/rwwpo_original_evidence_authority_20260822.json").read_text())
+    assert authority["original_s128_curve"]["canonical_metric_row_digests"]["Original5"] == "58b01ad5e523ee8853c05af691a65948a0d905d22f2c6ffb0590484c5a38a30d"
+
 def test_method_runtime_has_fail_closed_numeric_health_checks():
     text=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
     assert "non-finite policy loss" in text
