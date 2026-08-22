@@ -128,3 +128,11 @@ def test_target_anchor_acceptance_gate_remains_fail_closed():
     text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
     assert 'target_actual.get("accepted_fraction",0) <= 0' in text
     assert 'target_actual.get("max_proposed_update",0) <= 1e-10' in text
+
+def test_checkpoint_producer_records_inventory_after_data_state_save():
+    text=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
+    save=text.split("def _save_checkpoint(self):",1)[1].split(
+        "def _audit_gate_a_weight_sync",1)[0]
+    assert save.index("torch.save(dataloader_state_dict") < save.index(
+        'append_gate_a_record(\n                "checkpoint_inventory"')
+    assert "inventory=checkpoint_inventory(local_global_step_folder)" in save

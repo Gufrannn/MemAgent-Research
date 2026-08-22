@@ -1292,6 +1292,22 @@ class RayPPOTrainer:
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
 
+        # Record the immutable checkpoint closure only after every distributed
+        # shard and the dataloader state have completed their synchronous save.
+        # The inventory is part of the training-time hash chain; a later audit
+        # must never manufacture this evidence retroactively.
+        from recurrent.research.gate_a_execution import (
+            append_gate_a_record,
+            checkpoint_inventory,
+            gate_a_enabled,
+        )
+        if gate_a_enabled():
+            append_gate_a_record(
+                "checkpoint_inventory",
+                global_step=int(self.global_steps),
+                inventory=checkpoint_inventory(local_global_step_folder),
+            )
+
     def _audit_gate_a_weight_sync(self, *, global_step: int, actor_version: int, sync_kind: str) -> None:
         from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
 
