@@ -118,26 +118,43 @@ def _mic_generation_protocol_evidence(
             "n": 1, "do_sample": False,
         },
     }
-    if projection["recurrent"].get("enable") != "memory" \
-            or {key: recurrent_config.get(key) for key in (
-                "chunk_size", "max_chunks", "max_prompt_length",
-                "max_memorization_length", "max_final_response_length",
-            )} != {
-                "chunk_size": 5000, "max_chunks": 8, "max_prompt_length": 1024,
-                "max_memorization_length": 1024, "max_final_response_length": 1024,
-            } \
-            or projection["data"] != expected_data \
-            or projection["model"] != {
-                "path": expected_model, "use_remove_padding": True,
-            } \
-            or projection["rollout"] != expected_rollout \
-            or projection["reward_manager"] != "naive" \
-            or projection["custom_reward_function"] != {
-                "path": os.path.join(repo_dir, "recurrent/research/hotpotqa_dense_reward.py"),
-                "name": "compute_score",
-                "reward_kwargs": {"f1_weight": 0.95, "grounded_box_bonus": 0.05},
-            }:
-        raise RuntimeError("MIC_NO_GO: strict fixed-S128 generation contract drifted")
+    expected = {
+        "recurrent_enable": "memory",
+        "recurrent_config": {
+            "chunk_size": 5000, "max_chunks": 8, "max_prompt_length": 1024,
+            "max_memorization_length": 1024, "max_final_response_length": 1024,
+        },
+        "data": expected_data,
+        "model": {"path": expected_model, "use_remove_padding": True},
+        "rollout": expected_rollout,
+        "reward_manager": "naive",
+        "custom_reward_function": {
+            "path": os.path.join(repo_dir, "recurrent/research/hotpotqa_dense_reward.py"),
+            "name": "compute_score",
+            "reward_kwargs": {"f1_weight": 0.95, "grounded_box_bonus": 0.05},
+        },
+    }
+    actual = {
+        "recurrent_enable": projection["recurrent"].get("enable"),
+        "recurrent_config": {key: recurrent_config.get(key) for key in (
+            "chunk_size", "max_chunks", "max_prompt_length",
+            "max_memorization_length", "max_final_response_length",
+        )},
+        "data": projection["data"],
+        "model": projection["model"],
+        "rollout": projection["rollout"],
+        "reward_manager": projection["reward_manager"],
+        "custom_reward_function": projection["custom_reward_function"],
+    }
+    mismatches = {
+        key: {"actual": actual[key], "expected": expected[key]}
+        for key in expected if actual[key] != expected[key]
+    }
+    if mismatches:
+        raise RuntimeError(
+            "MIC_NO_GO: strict fixed-S128 generation contract drifted: "
+            + json.dumps(mismatches, sort_keys=True, separators=(",", ":"))
+        )
     def projection_sha(value) -> str:
         encoded = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -615,6 +632,7 @@ class RayPPOTrainer:
         self._stable_eval_actor_checkpoint_load_acks = None
         self._mic_eval_actor_checkpoint_load_acks = None
         self._mic_eval_actor_checkpoint_inventory = None
+        self._mic_eval_generation_protocol_evidence = None
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -635,7 +653,34 @@ class RayPPOTrainer:
             raise NotImplementedError
 
         self._validate_config()
+        # MemoryDataset intentionally expands data.max_prompt_length in place to
+        # expose the recurrent context.  Attest the immutable launch contract
+        # before that dataset-side runtime mutation occurs.
+        self._initialize_mic_read_only_eval_contract()
         self._create_dataloader()
+
+    def _initialize_mic_read_only_eval_contract(self) -> None:
+        if str(self.config.trainer.get("resume_mode", "")) != "mic_actor_only_eval":
+            return
+        from recurrent.research.gate_a_execution import gate_a_enabled
+
+        if gate_a_enabled():
+            raise RuntimeError(
+                "MIC_NO_GO: read-only Method evaluation refuses the training evidence writer"
+            )
+        if not self.config.trainer.get("mic_eval_identity_path", None) \
+                or not self.config.trainer.get("mic_eval_summary_path", None) \
+                or re.fullmatch(r"[0-9a-f]{64}", str(
+                    self.config.trainer.get("mic_eval_training_audit_sha256", "")
+                )) is None:
+            raise RuntimeError("MIC_NO_GO: read-only Method evaluation binding missing")
+        self._mic_eval_generation_protocol_evidence = (
+            _mic_generation_protocol_evidence(
+                self.config,
+                str(self.config.trainer.mic_eval_original_protocol_sha256),
+                str(self.config.trainer.mic_eval_original_reward_code_sha256),
+            )
+        )
 
     def _validate_config(self):
         config = self.config
@@ -1868,25 +1913,10 @@ class RayPPOTrainer:
             "mic_actor_only_eval"
         )
         if mic_read_only_eval:
-            from recurrent.research.gate_a_execution import gate_a_enabled
-
-            if gate_a_enabled():
+            if not self._mic_eval_generation_protocol_evidence:
                 raise RuntimeError(
-                    "MIC_NO_GO: read-only Method evaluation refuses the training evidence writer"
+                    "MIC_NO_GO: pre-dataloader generation protocol evidence missing"
                 )
-            if not self.config.trainer.get("mic_eval_identity_path", None) \
-                    or not self.config.trainer.get("mic_eval_summary_path", None) \
-                    or re.fullmatch(r"[0-9a-f]{64}", str(
-                        self.config.trainer.get("mic_eval_training_audit_sha256", "")
-                    )) is None:
-                raise RuntimeError("MIC_NO_GO: read-only Method evaluation binding missing")
-            self._mic_eval_generation_protocol_evidence = (
-                _mic_generation_protocol_evidence(
-                    self.config,
-                    str(self.config.trainer.mic_eval_original_protocol_sha256),
-                    str(self.config.trainer.mic_eval_original_reward_code_sha256),
-                )
-            )
         stable_eval_weight_before = None
         if strict_eval_identity or mic_read_only_eval:
             stable_eval_weight_before = self._stable_eval_weight_snapshot(

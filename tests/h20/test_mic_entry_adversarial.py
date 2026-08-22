@@ -65,6 +65,54 @@ def test_mic_ray_task_environment_is_explicit_and_fail_closed(monkeypatch):
         _task_runner_runtime_env()
 
 
+def test_mic_protocol_attestation_precedes_dataset_config_mutation():
+    trainer = (REPO / "verl/trainer/ppo/ray_trainer.py").read_text()
+    constructor = trainer[trainer.index("class RayPPOTrainer"):trainer.index(
+        "    def _validate_config", trainer.index("class RayPPOTrainer")
+    )]
+    assert constructor.index("self._initialize_mic_read_only_eval_contract()") \
+        < constructor.index("self._create_dataloader()")
+
+    fit = trainer[trainer.index("    def fit(self):"):]
+    assert "_mic_generation_protocol_evidence(" not in fit
+    assert "pre-dataloader generation protocol evidence missing" in fit
+
+    memory_dataset = (REPO / "recurrent/impls/memory.py").read_text()
+    assert "data_config.max_prompt_length=" in memory_dataset
+
+
+def test_mic_protocol_evidence_is_frozen_before_later_config_mutation(monkeypatch):
+    from omegaconf import OmegaConf
+    from recurrent.research import gate_a_execution
+    from verl.trainer.ppo import ray_trainer
+
+    trainer = object.__new__(ray_trainer.RayPPOTrainer)
+    trainer.config = OmegaConf.create({
+        "data": {"max_prompt_length": 8192},
+        "trainer": {
+            "resume_mode": "mic_actor_only_eval",
+            "mic_eval_identity_path": "/frozen/identity.jsonl",
+            "mic_eval_summary_path": "/frozen/summary.json",
+            "mic_eval_training_audit_sha256": "a" * 64,
+            "mic_eval_original_protocol_sha256": "b" * 64,
+            "mic_eval_original_reward_code_sha256": "c" * 64,
+        },
+    })
+    trainer._mic_eval_generation_protocol_evidence = None
+    monkeypatch.setattr(gate_a_execution, "gate_a_enabled", lambda: False)
+    monkeypatch.setattr(
+        ray_trainer,
+        "_mic_generation_protocol_evidence",
+        lambda config, *_: {"attested_max_prompt_length": config.data.max_prompt_length},
+    )
+
+    trainer._initialize_mic_read_only_eval_contract()
+    trainer.config.data.max_prompt_length = 40000
+    assert trainer._mic_eval_generation_protocol_evidence == {
+        "attested_max_prompt_length": 8192,
+    }
+
+
 @pytest.mark.parametrize("extra,code,message", [
     ({"MEMAGENT_MIC_ENABLE": "0", "RUN_SEED": "2026"}, 60, "inactive method"),
     ({"MEMAGENT_MIC_ENABLE": "1", "RUN_SEED": "7"}, 61, "trajectory seed"),
