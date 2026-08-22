@@ -6,6 +6,27 @@ presence of launch code is not authorization to bypass a failed gate.
 
 ## Evidence inputs
 
+The canonical read-only sources shared by every method branch are:
+
+- Original S128 curve: `/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821`.
+  Its certified final report is the only authority for the absolute artifact
+  paths and file SHA-256 values for `I`, `Original5`, `Original10`,
+  `Original15`, `Original20`, and `Original25`. The published per-interface
+  canonical-row digests in the method manifest are not file hashes.
+- Original training protocol: `/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821`.
+  Protocol equality binds its `certificates/p0_resolved_manifest.json`, not the
+  S128 curve resolved manifest. Its exact resolved SHA must be frozen from the
+  read-only H20 artifact before release; it must not be guessed.
+- Fixed-S128 identity: `/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2`.
+
+There is no certified standalone baseline inventory yet. It must be
+materialized from the certified S128 final-report inventory, then MIC must
+independently recompute EM, token-F1, and format success from all 128 rows.
+The materialized inventory SHA must be certified out-of-band before P0. Do not
+infer paths, scores, or hashes from aggregate fields. Original actual-loss
+rank ledgers were never collected; their status is
+`PENDING_ACTUAL_LOSS_LEDGER` and they must not be synthesized or rerun.
+
 The H20 host must already contain the certified Original evidence. Do not rerun
 Original. Create a read-only JSON inventory with `files` (every consumed file's
 absolute path and SHA-256) and `prediction_files` for exactly `I`, `Original5`,
@@ -29,7 +50,7 @@ export MEMAGENT_MIC_REPO_DIR=/data/cw/memagent_work/code/MemAgent-MIC
 export MEMAGENT_MIC_EXPECTED_COMMIT=<RELEASE_SHA_FROM_HANDOFF>
 export MEMAGENT_MIC_GPU_PAIR=2,7
 export MEMAGENT_MIC_RUN_ID=mic-main-v1-seed2026
-export MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/evidence/original/resolved_manifest.json
+export MEMAGENT_MIC_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json
 export MEMAGENT_MIC_BASELINE_INVENTORY=/data/cw/memagent_work/evidence/original/baseline_inventory.json
 export MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256=<CERTIFIED_OUT_OF_BAND_INVENTORY_SHA256>
 export MEMAGENT_MIC_E1_BUNDLE=/data/cw/memagent_work/evidence/mic/e1_frozen_original_trajectories.json
