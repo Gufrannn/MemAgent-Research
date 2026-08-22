@@ -21,10 +21,10 @@ mkdir -p "$EVAL_ROOT"
 export CUDA_VISIBLE_DEVICES=$GPU_PAIR
 "$HDR_PYTHON" "$HDR_REPO/tools/h20/run_hdr_strict_vllm_eval.py" \
   --suite "$SUITE_ROOT/fixed_s128_all_horizons.parquet" --model "$MERGED" \
-  --output "$EVAL_ROOT/t${HDR_ANCHOR}_horizons.json" --seed 2026 --tensor-parallel-size 2
+  --output "$EVAL_ROOT/t${HDR_ANCHOR}_horizons.json" --ledger "$HDR_LEDGER" --seed 2026 --tensor-parallel-size 2
 "$HDR_PYTHON" "$HDR_REPO/tools/h20/run_hdr_strict_vllm_eval.py" \
   --suite "$SUITE_ROOT/fixed_s128_nominal_h8.parquet" --model "$MERGED" \
-  --output "$EVAL_ROOT/t${HDR_ANCHOR}_s128_nominal.json" --seed 2026 --tensor-parallel-size 2
+  --output "$EVAL_ROOT/t${HDR_ANCHOR}_s128_nominal.json" --ledger "$HDR_LEDGER" --seed 2026 --tensor-parallel-size 2
 UNIFORM_ARGS=()
 if [[ $HDR_VARIANT == dro && $HDR_ANCHOR -eq 25 && -n ${HDR_UNIFORM_RUN_ID:-} ]]; then
   UNIFORM_HEALTH=$MEMAGENT_HDR_WORK_ROOT/logs/hdr_memrl/$HDR_UNIFORM_RUN_ID/certificates/t25_health.json

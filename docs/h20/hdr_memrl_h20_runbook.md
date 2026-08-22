@@ -76,7 +76,7 @@ $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py e0 \
 CUDA_VISIBLE_DEVICES=$GPU_PAIR $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/run_hdr_strict_vllm_eval.py \
   --suite "$HDR_ROOT/e0/horizon_suite.parquet" \
   --model "$MEMAGENT_HDR_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
-  --output "$HDR_ROOT/e1/frozen_predictions_scored.json" --seed 2026 --tensor-parallel-size 2
+  --output "$HDR_ROOT/e1/frozen_predictions_scored.json" --ledger "$HDR_LEDGER" --seed 2026 --tensor-parallel-size 2
 
 $MEMAGENT_HDR_WORK_ROOT/.venv/bin/python tools/h20/hdr_memrl_control.py e1 \
   --manifest manifests/h20/qwen25_7b_hdr_memrl_seed2026.json \

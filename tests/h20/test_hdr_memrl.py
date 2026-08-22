@@ -1,11 +1,158 @@
 import json, os, subprocess, sys
 from pathlib import Path
 import pytest
-
 ROOT=Path(__file__).resolve().parents[2]
+
+
+def test_strict_vllm_evaluator_serializes_numpy_and_writes_atomic_snapshot(tmp_path):
+    import importlib.util
+    import numpy as np
+
+    script = ROOT / "tools/h20/run_hdr_strict_vllm_eval.py"
+    spec = importlib.util.spec_from_file_location("hdr_strict_eval", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    output = tmp_path / "rows.json.partial"
+    module._write_snapshot(
+        output,
+        [{"gold": np.asarray(["answer"]), "score": np.float64(0.5), "index": np.int64(7)}],
+    )
+    assert json.loads(output.read_text()) == [
+        {"gold": ["answer"], "index": 7, "score": 0.5}
+    ]
+    assert not output.with_name(output.name + ".tmp").exists()
+    with pytest.raises(SystemExit, match="partial_snapshot_metric_mismatch:0"):
+        module._verify_metrics({}, {"token_f1": 0.5}, 0)
+    with pytest.raises(SystemExit, match="partial_snapshot_metric_mismatch:0"):
+        module._verify_metrics({"token_f1": "nan"}, {"token_f1": 0.5}, 0)
+
+
+def test_hdr_eval_progress_record_conforms_to_ledger_schema(tmp_path):
+    import importlib.util
+    import jsonschema
+
+    script = ROOT / "tools/h20/run_hdr_strict_vllm_eval.py"
+    spec = importlib.util.spec_from_file_location("hdr_strict_eval_schema", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    snapshot = tmp_path / "rows.json.partial"
+    module._write_snapshot(snapshot, [{"stable_id": "a" * 64 + ":h2"}])
+    ledger = tmp_path / "ledger.jsonl"
+    module._append_progress(ledger, snapshot, [{}], "b" * 64, str(tmp_path / "model"), 2026)
+    record = json.loads(ledger.read_text())
+    schema = json.loads((ROOT / "hdr_execution_ledger.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(record)
+
 sys.path.insert(0,str(ROOT))
 from recurrent.research.hdr_memrl import *
 from tools.h20.hdr_memrl_control import assert_suite_row_identity
+
+
+def test_strict_vllm_real_main_smoke_serializes_and_resumes(monkeypatch, tmp_path):
+    import importlib.util
+    import shutil
+    import types
+    import numpy as np
+    import pandas as pd
+    import transformers
+
+    script = ROOT / "tools/h20/run_hdr_strict_vllm_eval.py"
+    spec = importlib.util.spec_from_file_location("hdr_strict_eval_main", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs): return cls()
+        def encode(self, text, add_special_tokens=False):
+            return [i + 1 for i, _ in enumerate(str(text))] or [1]
+        def decode(self, tokens, skip_special_tokens=False): return "chunk"
+        def apply_chat_template(self, messages, **_kwargs): return messages[-1]["content"]
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs): self.kwargs = kwargs
+
+    class FakeLLM:
+        generate_calls = 0
+        def __init__(self, **_kwargs): pass
+        def generate(self, *_args, **_kwargs):
+            type(self).generate_calls += 1
+            answer = types.SimpleNamespace(text="\\boxed{answer}", finish_reason="stop")
+            return [types.SimpleNamespace(outputs=[answer])]
+
+    rid = "a" * 64
+    base_row = {
+        "prompt": np.asarray([{"content": "question"}], dtype=object),
+        "context": "abcdefgh",
+        "extra_info": {"index": 0},
+        "stable_root_id_receipt": rid,
+        "source_order_index": 0,
+        "raw_row_position": 0,
+        "identity_resolved_sha256": None,
+        "ground_truth_hash": None,
+        "reward_model": {"ground_truth": np.asarray(["answer"])},
+    }
+    frame = pd.DataFrame([{**base_row, "horizon_id": 2}, {**base_row, "horizon_id": 4}])
+    suite_path = tmp_path / "suite.parquet"
+    suite_path.write_bytes(b"entry-smoke-suite")
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    output = tmp_path / "result.json"
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setattr(pd, "read_parquet", lambda _path: frame)
+    monkeypatch.setattr(transformers, "AutoTokenizer", FakeTokenizer)
+    monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=FakeLLM, SamplingParams=FakeSamplingParams))
+    monkeypatch.setitem(sys.modules, "recurrent.impls.memory", types.SimpleNamespace(
+        TEMPLATE="Q={prompt} M={memory} C={chunk}",
+        TEMPLATE_FINAL_BOXED="Q={prompt} M={memory}",
+    ))
+    monkeypatch.setitem(sys.modules, "recurrent.utils", types.SimpleNamespace(
+        chat_template=lambda _tokenizer: "{message}",
+    ))
+    monkeypatch.setattr(module.subprocess, "check_output", lambda *_a, **_k: "")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "6,7")
+    monkeypatch.setenv("MEMAGENT_HDR_WORK_ROOT", str(tmp_path))
+    argv = [str(script), "--suite", str(suite_path), "--model", str(model_path), "--output", str(output), "--ledger", str(ledger)]
+    monkeypatch.setattr(sys, "argv", argv)
+    module.main()
+    saved = json.loads(output.read_text())
+    assert saved[0]["gold"] == ["answer"]
+    assert saved[0]["stable_id"] == f"{rid}:h2"
+    assert len(saved) == 2
+
+    partial = output.with_name(output.name + ".partial")
+    module._write_snapshot(partial, saved[:1])
+    first_progress = ledger.read_text().splitlines()[0]
+    ledger.write_text(first_progress + "\n")
+    output.unlink()
+    FakeLLM.generate_calls = 0
+    module.main()
+    assert json.loads(output.read_text()) == saved
+    assert FakeLLM.generate_calls == 5
+    assert not partial.exists()
+
+    for field, value, error in [
+        ("stable_id", "forged:h2", "partial_snapshot_identity_mismatch:0"),
+        ("gold", ["forged"], "partial_snapshot_identity_mismatch:0"),
+        ("total_input_tokens", 1, "partial_snapshot_control_mismatch:0"),
+        ("token_f1", 0.123, "partial_snapshot_metric_mismatch:0"),
+        ("token_f1", "nan", "partial_snapshot_metric_mismatch:0"),
+    ]:
+        tampered = [dict(saved[0])]
+        tampered[0][field] = value
+        module._write_snapshot(partial, tampered)
+        ledger.write_text(first_progress + "\n")
+        if output.exists(): output.unlink()
+        with pytest.raises(SystemExit, match="partial_snapshot_ledger_mismatch"): module.main()
+
+    missing_metric = [dict(saved[0])]
+    del missing_metric[0]["token_f1"]
+    module._write_snapshot(partial, missing_metric)
+    module._append_progress(ledger, partial, missing_metric, saved[0]["suite_sha256"], saved[0]["model_path"], saved[0]["seed"])
+    with pytest.raises(SystemExit, match="partial_snapshot_metric_mismatch:0"): module.main()
 
 def suite(hs=(2,4), roots=3):
     out=[]

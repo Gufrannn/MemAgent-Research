@@ -4,9 +4,21 @@
   "type": "object",
   "required": ["record_type"],
   "properties": {
-    "record_type": {"enum": ["p0", "e0", "e1", "baseline_import", "launch", "dro_update", "checkpoint", "evaluation", "audit", "failure"]},
+    "record_type": {"enum": ["p0", "e0", "e1", "baseline_import", "launch", "dro_update", "checkpoint", "evaluation", "hdr_eval_progress", "audit", "failure"]},
     "global_step": {"type": "integer", "minimum": 0},
-    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+    "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "output_path": {"type": "string", "pattern": "^/"},
+    "snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "completed_rows": {"type": "integer", "minimum": 1},
+    "suite_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "model_path": {"type": "string", "pattern": "^/"},
+    "seed": {"type": "integer"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"record_type": {"const": "hdr_eval_progress"}}, "required": ["record_type"]},
+      "then": {"required": ["output_path", "snapshot_sha256", "completed_rows", "suite_sha256", "model_path", "seed"]}
+    }
+  ],
   "additionalProperties": true
 }
