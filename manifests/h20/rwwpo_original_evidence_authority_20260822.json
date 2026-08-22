@@ -8,6 +8,14 @@
     "resolved": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json",
     "ledger": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/original_s128_curve_execution_ledger.jsonl",
     "required_final_status": "PASS",
+    "authenticated_interface_roots": {
+      "I": "/data/cw/memagent_work/logs/s128_it_original_t25_frozen_20260821/interface_i_base",
+      "Original5": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/interface_original_step5",
+      "Original10": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/interface_original_step10",
+      "Original15": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/interface_original_step15",
+      "Original20": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/interface_original_step20",
+      "Original25": "/data/cw/memagent_work/logs/s128_it_original_t25_frozen_20260821/interface_t25_original"
+    },
     "canonical_metric_row_digests": {
       "I": "fd4c6763c8d8a6caa0389082f1fa838dc510d872b99e6283c1483c4427336c64",
       "Original5": "58b01ad5e523ee8853c05af691a65948a0d905d22f2c6ffb0590484c5a38a30d",

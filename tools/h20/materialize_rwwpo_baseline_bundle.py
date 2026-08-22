@@ -42,7 +42,8 @@ def main():
  ledger_lines=[x for x in ledger.read_bytes().splitlines(keepends=True) if x.strip()]
  if not ledger_lines or hashlib.sha256(ledger_lines[-1]).hexdigest()!=a.ledger_tail_sha256: raise SystemExit("RWWPO_BASELINE_NO_GO:ledger tail")
  authority=json.loads(authority_path.read_text()); curve=authority["original_s128_curve"]
- allowed_roots=(curve["root"],authority["original_t25_training"]["root"],authority["fixed_s128_identity"]["root"])
+ interface_roots=curve["authenticated_interface_roots"]
+ if set(interface_roots)!=set(INTERFACES): raise SystemExit("RWWPO_BASELINE_NO_GO:authority interface roots")
  if str(final)!=curve["final_report"] or str(resolved_path)!=curve["resolved"] or str(ledger)!=curve["ledger"]: raise SystemExit("RWWPO_BASELINE_NO_GO:authority path drift")
  report=json.loads(final.read_text()); resolved=validate_resolved_manifest(json.loads(resolved_path.read_text()))
  if report.get("status")!="PASS" or report.get("decision")!="ORIGINAL_S128_CURVE_PASS": raise SystemExit("RWWPO_BASELINE_NO_GO:source final report")
@@ -53,7 +54,9 @@ def main():
  out.mkdir(parents=True); (out/"RUN_ID_CONSUMED").write_text(f"commit={head}\ncreated={int(time.time())}\n")
  interfaces={}; files=[]; key_inventory=None
  for name in INTERFACES:
-  evidence=report["evidence"]["interfaces"][name]; source_root=authenticated_root(evidence["root"],allowed_roots); terminal_rel=next((x for x in evidence["artifacts"] if x.startswith("terminal/")),None)
+  evidence=report["evidence"]["interfaces"][name]; source_root=authenticated_root(evidence["root"],[interface_roots[name]])
+  if source_root!=Path(interface_roots[name]).resolve(): raise ValueError(f"{name}:interface root drift")
+  terminal_rel=next((x for x in evidence["artifacts"] if x.startswith("terminal/")),None)
   if terminal_rel is None: raise ValueError(f"{name}:missing terminal inventory")
   authenticated={}
   for rel,artifact in evidence["artifacts"].items():

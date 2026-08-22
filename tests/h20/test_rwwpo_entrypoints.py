@@ -97,6 +97,13 @@ def test_original5_authority_digest_matches_h20_final_report_readback():
     authority=json.loads((ROOT/"manifests/h20/rwwpo_original_evidence_authority_20260822.json").read_text())
     assert authority["original_s128_curve"]["canonical_metric_row_digests"]["Original5"] == "58b01ad5e523ee8853c05af691a65948a0d905d22f2c6ffb0590484c5a38a30d"
 
+def test_authority_pins_all_h20_interface_roots():
+    authority=json.loads((ROOT/"manifests/h20/rwwpo_original_evidence_authority_20260822.json").read_text())
+    roots=authority["original_s128_curve"]["authenticated_interface_roots"]
+    assert set(roots)=={"I","Original5","Original10","Original15","Original20","Original25"}
+    assert roots["I"].endswith("/s128_it_original_t25_frozen_20260821/interface_i_base")
+    assert roots["Original25"].endswith("/s128_it_original_t25_frozen_20260821/interface_t25_original")
+
 def test_method_runtime_has_fail_closed_numeric_health_checks():
     text=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
     assert "non-finite policy loss" in text

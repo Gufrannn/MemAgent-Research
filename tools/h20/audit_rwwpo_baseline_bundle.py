@@ -31,7 +31,8 @@ def main():
  bundle_path=Path(a.bundle).resolve(); root=bundle_path.parent.resolve()
  if sha(bundle_path)!=a.bundle_sha256: raise SystemExit("RWWPO_BASELINE_AUDIT_NO_GO:bundle bytes")
  material=json.loads(Path(a.materialization_report).read_text()); bundle=json.loads(bundle_path.read_text()); final=json.loads(Path(a.final_report).read_text()); resolved=validate_resolved_manifest(json.loads(Path(a.resolved_manifest).read_text())); authority=json.loads(Path(a.authority).read_text()); curve=authority["original_s128_curve"]
- allowed_roots=(curve["root"],authority["original_t25_training"]["root"],authority["fixed_s128_identity"]["root"])
+ interface_roots=curve["authenticated_interface_roots"]
+ if set(interface_roots)!=set(INTERFACES): raise SystemExit("RWWPO_BASELINE_AUDIT_NO_GO:authority interface roots")
  if not canonical_receipt(material) or material.get("decision")!="RWWPO_BASELINE_MATERIALIZATION_PASS" or material.get("bundle_sha256")!=a.bundle_sha256 or material.get("authority_sha256")!=sha(CANONICAL_AUTHORITY): raise SystemExit("RWWPO_BASELINE_AUDIT_NO_GO:materialization receipt")
  if str(Path(a.final_report).resolve())!=curve["final_report"] or str(Path(a.resolved_manifest).resolve())!=curve["resolved"] or material.get("source_final_sha256")!=sha(a.final_report) or material.get("source_resolved_sha256")!=sha(a.resolved_manifest): raise SystemExit("RWWPO_BASELINE_AUDIT_NO_GO:source binding")
  if bundle.get("authority_sha256")!=sha(a.authority): raise SystemExit("RWWPO_BASELINE_AUDIT_NO_GO:authority bytes")
@@ -47,7 +48,9 @@ def main():
   reject_symlink_chain(path)
   if path.resolve().parent!=root or not path.is_file() or sha(path)!=item["sha256"]: raise SystemExit(f"RWWPO_BASELINE_AUDIT_NO_GO:{name}:path/bytes")
   raw=json.loads(path.read_text()); rows=raw.get("rows") if isinstance(raw,dict) else None
-  source_evidence=final["evidence"]["interfaces"][name]; source_root=authenticated_root(source_evidence["root"],allowed_roots); terminal_rel=next((x for x in source_evidence["artifacts"] if x.startswith("terminal/")),None); terminal=safe_file(source_root/terminal_rel,source_root); terminal_meta=source_evidence["artifacts"][terminal_rel]
+  source_evidence=final["evidence"]["interfaces"][name]; source_root=authenticated_root(source_evidence["root"],[interface_roots[name]])
+  if source_root!=Path(interface_roots[name]).resolve(): raise SystemExit(f"RWWPO_BASELINE_AUDIT_NO_GO:{name}:interface root drift")
+  terminal_rel=next((x for x in source_evidence["artifacts"] if x.startswith("terminal/")),None); terminal=safe_file(source_root/terminal_rel,source_root); terminal_meta=source_evidence["artifacts"][terminal_rel]
   if terminal.is_symlink() or not terminal.is_file() or sha(terminal)!=terminal_meta["sha256"] or terminal.stat().st_size!=int(terminal_meta["size"]): raise SystemExit(f"RWWPO_BASELINE_AUDIT_NO_GO:{name}:raw terminal")
   source_rows=[json.loads(x) for x in terminal.read_text().splitlines() if x.strip()]
   if not isinstance(rows,list) or len(rows)!=128 or [x.get("source_order_index") for x in rows]!=list(range(128)): raise SystemExit(f"RWWPO_BASELINE_AUDIT_NO_GO:{name}:coverage/order")
