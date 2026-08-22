@@ -2347,8 +2347,31 @@ class RayPPOTrainer:
                         metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
+                        if self.use_prd_prior and self.global_steps == 5:
+                            numeric = {key: float(value) for key, value in metrics.items()
+                                       if isinstance(value, (int, float, np.number)) and not isinstance(value, bool)}
+                            nonfinite = sorted(key for key, value in numeric.items() if not np.isfinite(value))
+                            gradient_metrics = {key: value for key, value in numeric.items() if "grad" in key.lower() and "norm" in key.lower()}
+                            if nonfinite or not gradient_metrics or any(value <= 0 for value in gradient_metrics.values()):
+                                raise RuntimeError(f"PRD T5 numerical health NO-GO: nonfinite={nonfinite}, gradients={gradient_metrics}")
                         with _timer("save_checkpoint", timing_raw):
                             self._save_checkpoint()
+                        if self.use_prd_prior and self.global_steps == 5:
+                            from pathlib import Path
+                            from tools.h20.prd_memrl_orchestrator import validate_checkpoint
+                            from tools.h20.prd_memrl_ledger import append_record
+                            checkpoint = Path(self.config.trainer.default_local_dir) / "global_step_5"
+                            validate_checkpoint(checkpoint, 5, float(self.config.prd_memrl.capacity_nats),
+                                                os.environ["PRD_GIT_COMMIT"], os.environ["PRD_RUN_ID"])
+                            health_path = checkpoint.parents[1] / "t5_health.json"
+                            health = {"schema_version": 1, "status": "PASS", "decision": "PRD_T5_HEALTH_PASS",
+                                      "global_step": 5, "frontier_id": os.environ["PRD_FRONTIER_ID"],
+                                      "git_commit": os.environ["PRD_GIT_COMMIT"], "nonfinite_metrics": [],
+                                      "gradient_metrics": gradient_metrics}
+                            with health_path.open("x", encoding="utf-8") as stream:
+                                json.dump(health, stream, indent=2, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+                            append_record(Path(os.environ["PRD_EXECUTION_LEDGER"]), os.environ["PRD_RUN_ID"],
+                                          "T5_HEALTH", os.environ["PRD_GIT_COMMIT"], health)
 
                 # training metrics
                 metrics.update(

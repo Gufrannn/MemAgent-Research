@@ -61,15 +61,15 @@ class OrchestrationTests(unittest.TestCase):
         for cap in orch.CAPACITIES:
             self.assertTrue((self.root/"run"/"frontier"/f"c{int(cap)}").is_dir())
 
-    def test_t5_rejects_warmstart_and_capacity_drift(self):
-        common = dict(run_root=str(self.root/"run"), run_id=self.run_id, commit=self.commit, stage="t5")
+    def test_full_run_rejects_warmstart_and_capacity_drift(self):
+        common = dict(run_root=str(self.root/"run"), run_id=self.run_id, commit=self.commit, stage="full")
         self.assertNoGo(lambda: orch.command_stage(type("A",(),dict(**common,capacity="64",resume=None))), "capacity")
         self.assertNoGo(lambda: orch.command_stage(type("A",(),dict(**common,capacity="128",resume="/tmp/step3"))), "warm-start")
 
     def test_continuation_rejects_foreign_resume(self):
         args=type("A",(),dict(run_root=str(self.root/"run"),run_id=self.run_id,commit=self.commit,
              stage="continue",capacity="128",resume=str(self.root/"foreign")))
-        self.assertNoGo(lambda: orch.command_stage(args), "t5_gate.json")
+        self.assertNoGo(lambda: orch.command_stage(args), "t5_health.json")
 
     def test_checkpoint_rejects_method_identity_and_sync_tamper(self):
         cp=self.root/"cp"; components={"actor","actor_optimizer","actor_scheduler","prior","prior_optimizer",
@@ -137,6 +137,9 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("flock -n 8",common)
         self.assertIn("selected GPU pair is occupied; no process was changed",common)
         self.assertIn("PRD_PRIOR_MODEL must be explicit", entry)
+        self.assertIn("FRESH_TOTAL_STEPS=25", entry)
+        self.assertIn("train-t25|recover-from-t5", entry)
+        self.assertNotIn("t5-gate)", entry)
         self.assertIn("experiments/7b_gate_a/run_gate_a.sh", entry)
         self.assertLess(entry.index("prd_acquire_gpu_locks"), entry.index("experiments/7b_gate_a/run_gate_a.sh"))
 
@@ -144,6 +147,14 @@ class OrchestrationTests(unittest.TestCase):
         common=(REPO/"scripts/h20/prd_memrl_common.sh").read_text()
         for guard in ("wrong branch", "wrong exact commit", "dirty worktree"):
             self.assertIn(guard,common)
+
+    def test_t5_health_is_inline_and_s128_free(self):
+        trainer=(REPO/"verl/trainer/ppo/ray_trainer.py").read_text()
+        self.assertIn('self.global_steps == 5',trainer)
+        self.assertIn('PRD_T5_HEALTH_PASS',trainer)
+        block=trainer[trainer.index('PRD T5 numerical health NO-GO'):trainer.index('PRD_T5_HEALTH_PASS')]
+        self.assertNotIn('_validate()',block)
+        self.assertNotIn('fixed_s128',block)
 
 
 if __name__ == "__main__": unittest.main()

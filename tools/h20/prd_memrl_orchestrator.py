@@ -145,16 +145,16 @@ def command_stage(args: argparse.Namespace) -> None:
     cid = capacity_id(cap)
     if run["run_id"] != args.run_id or run["git_commit"] != args.commit:
         fail("resolved run identity drift")
-    if args.stage == "t5":
+    if args.stage == "full":
         if args.resume:
-            fail("fresh T5 forbids any resume/warm-start checkpoint")
-        start, target = 0, 5
+            fail("fresh T25 run forbids any resume/warm-start checkpoint")
+        start, target = 0, 25
     else:
         if not args.resume:
             fail("continuation requires exact checkpoint")
-        gate = load(Path(args.run_root) / "certificates" / "t5_gate.json")
-        if gate.get("status") != "PASS" or gate.get("decision") != "PRD_T5_GATE_PASS":
-            fail("continuation requires T5 gate PASS")
+        gate = load(Path(args.run_root) / "frontier" / cid / "t5_health.json")
+        if gate.get("status") != "PASS" or gate.get("decision") != "PRD_T5_HEALTH_PASS":
+            fail("recovery requires T5 health PASS")
         checkpoint = Path(args.resume).resolve()
         expected = (Path(args.run_root) / "frontier" / cid / "checkpoints" / "global_step_5").resolve()
         if checkpoint != expected:
@@ -168,7 +168,7 @@ def command_stage(args: argparse.Namespace) -> None:
         "resume": str(Path(args.resume).resolve()) if args.resume else None,
         "output_root": str(output.resolve()), "gpu_pair": run["gpu_pair"],
         "prior_model": run["prior_model"],
-        "fresh_base": args.stage == "t5", "update1_enabled": True})
+        "fresh_base": args.stage == "full", "update1_enabled": True})
     print(launch)
 
 
@@ -239,18 +239,26 @@ def command_t5_gate(args: argparse.Namespace) -> None:
 
 def command_audit(args: argparse.Namespace) -> None:
     run_root = Path(args.run_root); run = load(run_root / "resolved_run.json")
-    failures = []
+    failures = []; comparisons = {}
     try:
         if digest(Path(run["baseline_path"])) != run["baseline_sha256"]: fail("baseline drift")
-        gate = load(run_root / "certificates" / "t5_gate.json")
-        if gate.get("status") != "PASS" or gate.get("decision") != "PRD_T5_GATE_PASS": fail("T5 gate is not PASS")
         for cap in CAPACITIES:
             cid = capacity_id(cap)
+            health = load(run_root / "frontier" / cid / "t5_health.json")
+            if health.get("status") != "PASS" or health.get("decision") != "PRD_T5_HEALTH_PASS": fail(f"T5 health is not PASS for {cid}")
             validate_checkpoint(run_root / "frontier" / cid / "checkpoints" / "global_step_25", 25, cap, run["git_commit"], run["run_id"])
             domains = []
             for anchor in ANCHORS:
                 summary = load(run_root / "frontier" / cid / f"fixed_s128_anchor_{anchor}.json")
                 domains.append(set(summary.get("stable_keys", [])))
+                original = load(Path(run["baseline_path"]))["recomputed"][str(anchor)]
+                method = summary["metrics"]
+                comparisons.setdefault(cid, {})[str(anchor)] = {
+                    "method": method, "original": original,
+                    "method_minus_original": {key: float(method[key]) - float(original[key])
+                        for key in ("normalized_exact_match", "token_f1", "format_success")},
+                    "interpretation": "paired descriptive difference on the same frozen S128; not causal or population inference",
+                }
             if not domains[0] or any(keys != domains[0] for keys in domains[1:]): fail("incomplete or drifting anchor cohort")
     except SystemExit as exc: failures.append(str(exc))
     ledger = Path(args.ledger)
@@ -265,8 +273,10 @@ def command_audit(args: argparse.Namespace) -> None:
                 cid=capacity_id(cap)
                 updates={int(r["payload"]["global_step"]) for r in records if r["event"]=="UPDATE" and r["payload"].get("frontier_id")==cid}
                 checkpoints={int(r["payload"]["global_step"]) for r in records if r["event"]=="CHECKPOINT" and r["payload"].get("frontier_id")==cid}
+                health=[r for r in records if r["event"]=="T5_HEALTH" and r["payload"].get("frontier_id")==cid]
                 if not set(range(1,26)).issubset(updates): failures.append(f"incomplete UPDATE ledger for {cid}")
                 if not set(ANCHORS).issubset(checkpoints): failures.append(f"incomplete CHECKPOINT ledger for {cid}")
+                if len(health)!=1 or health[0]["payload"].get("decision")!="PRD_T5_HEALTH_PASS": failures.append(f"invalid T5 health ledger for {cid}")
                 for record in records:
                     if record["event"]=="CHECKPOINT" and record["payload"].get("frontier_id")==cid:
                         step=int(record["payload"]["global_step"])
@@ -275,7 +285,8 @@ def command_audit(args: argparse.Namespace) -> None:
                             failures.append(f"checkpoint ledger SHA mismatch for {cid} step {step}")
     output = Path(args.output)
     exclusive(output, {"schema_version": 1, "status": "PASS" if not failures else "FAIL",
-        "decision": "PRD_FINAL_AUDIT_PASS" if not failures else "PRD_FINAL_AUDIT_NO_GO", "failures": failures})
+        "decision": "PRD_FINAL_AUDIT_PASS" if not failures else "PRD_FINAL_AUDIT_NO_GO",
+        "paired_descriptive_comparisons": comparisons, "failures": failures})
     output.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
     if failures: raise SystemExit(8)
 
@@ -285,7 +296,7 @@ def main() -> None:
     b = sub.add_parser("bind")
     for x in ("run-root", "run-id", "commit", "gpu-pair", "baseline", "p0"): b.add_argument("--"+x, required=True)
     b.set_defaults(func=command_bind)
-    s = sub.add_parser("stage"); s.add_argument("stage", choices=("t5", "continue"))
+    s = sub.add_parser("stage"); s.add_argument("stage", choices=("full", "continue"))
     for x in ("run-root", "run-id", "commit", "capacity"): s.add_argument("--"+x, required=True)
     s.add_argument("--resume"); s.set_defaults(func=command_stage)
     e = sub.add_parser("evaluate"); e.add_argument("--run-root", required=True); e.add_argument("--capacity", required=True); e.add_argument("--input-template", required=True); e.add_argument("--anchors", default="5,10,15,20,25"); e.set_defaults(func=command_evaluate)

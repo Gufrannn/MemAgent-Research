@@ -53,14 +53,15 @@ $PRD_PYTHON tools/h20/import_prd_original_baseline.py \
 scripts/h20/run_qwen25_7b_prd_memrl.sh bind
 
 for capacity in 128.0 256.0 512.0; do
-  CAPACITY_NATS=$capacity scripts/h20/run_qwen25_7b_prd_memrl.sh prepare-t5
+  CAPACITY_NATS=$capacity scripts/h20/run_qwen25_7b_prd_memrl.sh prepare-run
+  CAPACITY_NATS=$capacity scripts/h20/run_qwen25_7b_prd_memrl.sh train-t25
 done
 ```
 
-After a reviewed production trainer creates all three complete step-5 checkpoints and raw fixed-S128
-terminal rows, run `evaluate` for each capacity with `EVAL_ANCHORS=5` (the evaluator independently
-recomputes EM/token-F1/format), then `t5-gate`. Only a three-capacity PASS
-permits `prepare-continuation`; each continuation must name its own exact
-`frontier/cN/checkpoints/global_step_5` and reach anchors 10, 15, 20, and 25 without overwriting T5.
-After reevaluation of every anchor, run `final-audit`. Failed runs and certificates are retained under
-their unique `RUN_ID`; revisions require a new run/variant identity.
+Each capacity is one fresh-base process through step 25, saving 5/10/15/20/25. At step 5 the trainer
+performs only the cheap numerical/checkpoint/ledger/weight-sync health check and immediately continues;
+it does not run S128 or wait for Original analysis. After T25, generate fixed-S128 terminal rows for all
+five Method checkpoints and call `evaluate` once per capacity with `EVAL_ANCHORS=5,10,15,20,25`, then
+run `final-audit`. `prepare-continuation`/`recover-from-t5` is disaster recovery only and requires that
+capacity's authenticated T5 health certificate and exact checkpoint. Failed runs remain under their
+unique `RUN_ID`; a scientific revision requires a new variant identity.

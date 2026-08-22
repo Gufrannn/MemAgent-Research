@@ -75,8 +75,9 @@
     "e0_required": true,
     "e1_required": true,
     "paper_framing_review_required": true,
-    "t5_before_continuation": true,
-    "t5_max_f1_degradation": 0.02,
+    "single_fresh_run_to_t25": true,
+    "t5_health_only": ["finite_loss", "finite_nonzero_gradient", "checkpoint_inventory", "ledger", "weight_sync"],
+    "fixed_s128_evaluation_after_t25_only": true,
     "minimum_frontier_points": 3,
     "one_revision_only": true
   }
