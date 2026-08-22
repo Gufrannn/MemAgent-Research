@@ -103,8 +103,18 @@ def audit(paths, require_method=True):
         if next(iter(decisions)) != expected_accept: raise ValueError(f"accepted decision is not certified by post statistics for {key}")
         pre_pass=all(s[1]>=next(iter(q_values)) and s[3]<=next(iter(caps)) for s in reconstruct("prefix_rows"))
         if any(bool(row["constraint_pass"])!=pre_pass for row in group): raise ValueError(f"pre-step constraint decision mismatch for {key}")
-    active = any(any(abs(c-o) > 1e-10 for old, cur in zip(row["old_log_prob"], row["current_log_prob"])
-                     for o, c in zip(old, cur)) for row in rows)
+    # On-policy behavior-point closure requires current == old before the
+    # optimizer step; using that equality's violation as an activity signal
+    # incorrectly rejects a healthy on-policy run.  Method activity is instead
+    # certified by a non-zero proposed post-step movement that survived the
+    # distributed trust-region acceptance decision.
+    behavior_point_max_delta = max(abs(c-o) for row in rows
+        for old,cur in zip(row["old_log_prob"],row["current_log_prob"])
+        for o,c in zip(old,cur))
+    active = any(bool(group[0]["accepted"]) and
+        any(abs(p-c) > 1e-10 for row in group
+            for post,cur in zip(row["proposed_post_log_prob"],row["current_log_prob"])
+            for p,c in zip(post,cur)) for group in groups.values())
     if require_method and not active:
         raise ValueError("RWWPO_METHOD_INACTIVE")
     step_summaries={}
@@ -115,6 +125,7 @@ def audit(paths, require_method=True):
             "max_proposed_update":max(abs(p-c) for r in selected for post,cur in zip(r["proposed_post_log_prob"],r["current_log_prob"]) for p,c in zip(post,cur))}
     return {"status": "PASS", "decision": "RWWPO_ACTUAL_LOSS_LEDGER_PASS",
             "record_count": len(rows), "method_active": active,
+            "behavior_point_max_delta": behavior_point_max_delta,
             "modes": sorted({row["mode"] for row in rows}),
             "min_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["prefix_stats"]),
             "min_post_prefix_ess": min(s["ess_fraction"] for r in rows for s in r["post_prefix_stats"]),

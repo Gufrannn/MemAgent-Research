@@ -115,3 +115,16 @@ def test_rwwpo_runtime_does_not_append_gpu_minibatch_as_metrics():
     marker='append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),'
     tail=text.split(marker,1)[1].split("continue",1)[0]
     assert "data = {}" in tail
+
+def test_activity_audit_uses_accepted_post_step_movement_not_behavior_drift():
+    text=(ROOT/"tools/h20/audit_rwwpo_actual_loss.py").read_text()
+    active=text.split("active =",1)[1].split("if require_method",1)[0]
+    assert 'group[0]["accepted"]' in active
+    assert 'row["proposed_post_log_prob"]' in active
+    assert 'row["current_log_prob"]' in active
+    assert 'row["old_log_prob"]' not in active
+
+def test_target_anchor_acceptance_gate_remains_fail_closed():
+    text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
+    assert 'target_actual.get("accepted_fraction",0) <= 0' in text
+    assert 'target_actual.get("max_proposed_update",0) <= 1e-10' in text
