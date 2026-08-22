@@ -146,11 +146,22 @@ for STEP in 5 10 15 20 25; do
     --resolved-manifest "$RWWPO_EVAL_RESOLVED_MANIFEST" \
     --expected-manifest-sha256 "$RWWPO_EVAL_RESOLVED_SHA256" \
     --output "$RWWPO_CERT_ROOT/t${STEP}_s128.json"
-  "$RWWPO_PYTHON" tools/h20/compare_rwwpo_anchor.py \
+done
+
+COMPARE_FAILURE=0
+for STEP in 5 10 15 20 25; do
+  if ! "$RWWPO_PYTHON" tools/h20/compare_rwwpo_anchor.py \
     --method "$RWWPO_CERT_ROOT/t${STEP}_s128.json" --baseline-import "$RWWPO_BASELINE" \
     --step "$STEP" --expected-commit "$RWWPO_EXPECTED_COMMIT" \
-    --output "$RWWPO_CERT_ROOT/t${STEP}_compare.json"
+    --output "$RWWPO_CERT_ROOT/t${STEP}_compare.json"; then
+    COMPARE_FAILURE=1
+  fi
 done
+
+if (( COMPARE_FAILURE != 0 )); then
+  echo 'TF_RWWPO_FINAL_NO_GO: at least one preregistered anchor comparison failed' >&2
+  exit 1
+fi
 
 "$RWWPO_PYTHON" tools/h20/audit_rwwpo_five_anchor.py \
   --certificate-root "$RWWPO_CERT_ROOT" --baseline-import "$RWWPO_BASELINE" \
