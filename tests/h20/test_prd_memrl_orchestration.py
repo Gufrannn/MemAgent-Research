@@ -24,7 +24,10 @@ class OrchestrationTests(unittest.TestCase):
         self.commit = "a" * 40; self.run_id = "prd-test-0001"
         self.base = self.root / "baseline.json"; self.p0 = self.root / "p0.json"
         dump(self.base, {"status":"PASS", "decision":"PRD_ORIGINAL_BASELINE_IMPORT_PASS",
-             "recomputed":{"5":{"token_f1":.5}}})
+             "stable_resolved_sha256":"6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411",
+             "original_training_resolved_sha256":"b"*64,
+             "actual_loss_status":"PENDING_ACTUAL_LOSS_LEDGER",
+             "recomputed":{str(anchor):{"token_f1":.5} for anchor in (0,5,10,15,20,25)}})
         self.prior = self.root / "prior"
         self.prior.mkdir()
         prior_config = self.prior / "config.json"
@@ -92,6 +95,16 @@ class OrchestrationTests(unittest.TestCase):
         resolved=json.loads((self.root/"run"/"resolved_run.json").read_text())
         self.base.write_text("{}\n")
         self.assertNotEqual(orch.digest(self.base),resolved["baseline_sha256"])
+
+    def test_bind_rejects_incomplete_or_proxy_baseline(self):
+        bad=self.root/"bad-baseline.json"; payload={"status":"PASS","decision":"PRD_ORIGINAL_BASELINE_IMPORT_PASS",
+            "stable_resolved_sha256":"6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411",
+            "original_training_resolved_sha256":"b"*64,"actual_loss_status":"INFERRED_FROM_AGGREGATE",
+            "recomputed":{str(anchor):{} for anchor in (0,5,10,15,20)}}
+        dump(bad,payload)
+        args=type("A",(),dict(run_root=str(self.root/"bad-run"),run_id="bad",commit=self.commit,
+            gpu_pair="2,7",baseline=str(bad),p0=str(self.p0)))
+        self.assertNoGo(lambda:orch.command_bind(args),"six-anchor")
 
     def test_ledger_rejects_identity_drift(self):
         ledger=self.root/"ledger.jsonl"; payload=self.root/"payload.json"; dump(payload,{"ok":True})

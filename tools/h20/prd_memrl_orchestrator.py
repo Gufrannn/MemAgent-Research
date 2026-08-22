@@ -59,6 +59,14 @@ def command_bind(args: argparse.Namespace) -> None:
     p0 = load(Path(args.p0).resolve())
     if baseline.get("status") != "PASS" or baseline.get("decision") != "PRD_ORIGINAL_BASELINE_IMPORT_PASS":
         fail("certified Original baseline import is not PASS")
+    if baseline.get("stable_resolved_sha256") != "6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411":
+        fail("baseline stable-S128 binding mismatch")
+    if set(baseline.get("recomputed", {})) != {"0", "5", "10", "15", "20", "25"}:
+        fail("baseline does not contain the complete six-anchor curve")
+    if baseline.get("actual_loss_status") != "PENDING_ACTUAL_LOSS_LEDGER":
+        fail("baseline actual-loss boundary missing")
+    if not baseline.get("original_training_resolved_sha256"):
+        fail("Original training protocol resolved manifest is unbound")
     if p0.get("status") != "PASS" or p0.get("decision") != "PRD_P0_PASS":
         fail("P0 is not PASS")
     if p0.get("evidence", {}).get("git_commit") != args.commit:
