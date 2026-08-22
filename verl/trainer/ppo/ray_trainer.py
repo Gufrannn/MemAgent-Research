@@ -1478,6 +1478,15 @@ class RayPPOTrainer:
         non_tensor_keys = [
             "uid", "trajectory_seed", "trajectory_id", "dataset_index", "request_seed",
         ]
+        missing_identity = [
+            key for key in non_tensor_keys
+            if key not in materialized.non_tensor_batch
+        ]
+        if missing_identity:
+            raise RuntimeError(
+                "CORAL_E1_NO_GO: materialized branch is missing row identity "
+                f"{missing_identity}"
+            )
         nonfinal_source = nonfinal_source.select(
             batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_keys,
         )
@@ -2315,6 +2324,7 @@ class RayPPOTrainer:
                             # padding and dispatch then keep these columns aligned with the tensors they describe.
                             source_rows = sample_index.detach().cpu().numpy()
                             source_uids = np.asarray(batch.non_tensor_batch["uid"], dtype=object)
+                            gen_batch_output.non_tensor_batch["uid"] = source_uids[source_rows]
                             gen_batch_output.batch["sample_index"] = sample_index.to(
                                 gen_batch_output.batch["responses"].device
                             )

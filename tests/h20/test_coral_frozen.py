@@ -179,9 +179,9 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("torch.distributed.run",entry)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
-        self.assertIn("coral_e1_seed2026_v6",entry)
+        self.assertIn("coral_e1_seed2026_v7",entry)
         self.assertIn(
-            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5",
+            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6",
             entry,
         )
         self.assertIn("_coral_e1_resample_terminal",trainer)
@@ -193,13 +193,21 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertNotIn("MEASUREMENT_ROOT",entry)
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
-        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v6",runbook)
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v7",runbook)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
         clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
         self.assertIn("sys.path.insert(0, str(ROOT))",clone_oracle)
         self.assertLess(
             clone_oracle.index("sys.path.insert(0, str(ROOT))"),
             clone_oracle.index("from verl import DataProto"),
+        )
+        self.assertIn(
+            'gen_batch_output.non_tensor_batch["uid"] = source_uids[source_rows]',
+            trainer,
+        )
+        self.assertIn(
+            "CORAL_E1_NO_GO: materialized branch is missing row identity",
+            trainer,
         )
 
     def test_trainer_wires_role_phase_without_fictitious_anchor(self):
