@@ -539,6 +539,12 @@ class DataParallelPPOActor(BasePPOActor):
                     })
                     append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),
                                              "rwwpo/update_accepted": float(accepted)})
+                    # The legacy non-RWWPO path appends its final scalar metric
+                    # dictionary once more after the minibatch loop.  Do not let
+                    # that epilogue see this branch's GPU minibatch container:
+                    # doing so leaks CUDA tensors into reduce_metrics/NumPy after
+                    # an otherwise successful optimizer update.
+                    data = {}
                     continue
 
                 for data in micro_batches:

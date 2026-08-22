@@ -109,3 +109,9 @@ def test_method_runtime_has_fail_closed_numeric_health_checks():
     assert "non-finite policy loss" in text
     assert "non-finite active-token log probability" in text
     assert "non-finite gradient norm" in text
+
+def test_rwwpo_runtime_does_not_append_gpu_minibatch_as_metrics():
+    text=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
+    marker='append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),'
+    tail=text.split(marker,1)[1].split("continue",1)[0]
+    assert "data = {}" in tail
