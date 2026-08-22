@@ -1,0 +1,16 @@
+{
+  "blockers": [
+    "E0 must pass before GPU execution",
+    "authenticated on-policy Method E1 must pass before any conditional-rate or information-bottleneck claim",
+    "Original has no rate ledger and may only be used as a performance comparator",
+    "rate reduction must be compared with fresh instrumented Method controls, never unaudited Original"
+  ],
+  "decision": "REFRAME_GO_E0_METHOD",
+  "mechanism_claim_pending_e1": true,
+  "paper_sha256": "9bcfc7753e7dfc66f072e1d5159dc2d25179f9f78ce53105cb4f7fac8ed84532",
+  "rationale": "The evidence-timing reframe is honest and preserves a potentially publishable contribution only if posthoc Method E1 distinguishes conditional rate from length and fixed-reference KL and the preregistered capacity frontier is non-degenerate. Task performance alone cannot establish the mechanism.",
+  "review_scope": "Independent scientific framing review; not code correctness, E0, E1, T5, or release certification.",
+  "reviewed_source_commit": "be4d01bcc6a3671f0eac05f349df58d26233a0c7",
+  "schema_version": 1,
+  "source_audit_sha256": "ed13e2217b66efcb6ee5055abd987f297cad20d2bbb5a1aba80e233d8d5dc96a"
+}

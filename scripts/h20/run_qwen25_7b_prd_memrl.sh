@@ -82,7 +82,9 @@ case "$ACTION" in
       reward_model.reward_manager=naive trainer.logger='["console"]' trainer.project_name=prd_memrl_s128 trainer.experiment_name="${RUN_ID}_${cid}_a${ANCHOR}" \
       trainer.n_gpus_per_node=2 trainer.nnodes=1 trainer.val_before_train=True +trainer.val_only=True trainer.validation_data_dir="$tmp/generated" \
       trainer.save_freq=-1 trainer.test_freq=-1 trainer.total_epochs=1 trainer.total_training_steps=1 trainer.default_hdfs_dir=null trainer.default_local_dir="$tmp/no_checkpoint" \
-      trainer.resume_mode=actor_only_eval trainer.resume_from_path="$checkpoint" ray_init.num_cpus=64
+      trainer.resume_mode=prd_actor_only_eval trainer.resume_from_path="$checkpoint" \
+      +trainer.prd_eval.expected_global_step="$ANCHOR" +trainer.prd_eval.capacity_nats="$CAPACITY_NATS" \
+      +trainer.prd_eval.git_commit="$EXPECTED_COMMIT" +trainer.prd_eval.run_id="$RUN_ID" ray_init.num_cpus=64
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/materialize_prd_s128_rows.py" --input "$tmp/generated/$ANCHOR.jsonl" \
       --output "$PRD_RUN_ROOT/frontier/$cid/raw_terminal/anchor_$ANCHOR.jsonl" \
       --stable-resolved /data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json \

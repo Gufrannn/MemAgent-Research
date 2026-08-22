@@ -73,6 +73,8 @@ def command_bind(args: argparse.Namespace) -> None:
         fail("Original training P0/protocol resolved manifest is unbound")
     if p0.get("status") != "PASS" or p0.get("decision") != "PRD_P0_PASS":
         fail("P0 is not PASS")
+    if p0.get("evidence", {}).get("original_training_resolved", {}).get("sha256") != baseline.get("original_training_resolved_sha256"):
+        fail("P0/baseline Original training resolved binding mismatch")
     if p0.get("evidence", {}).get("git_commit") != args.commit:
         fail("P0 commit drift")
     payload = {

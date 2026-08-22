@@ -1,9 +1,12 @@
 # Paper IV Draft — Conditional Innovation Rate for Recurrent Text Memory
 
-**Scientific status (2026-08-22): REFRAME-GO for gated Method execution.** This document states a
+**Scientific status (2026-08-22): REFRAME-GO for E0-gated exploratory Method
+execution; mechanism claims remain pending posthoc E1.** This document states a
 falsifiable paper program, not a result claim. Bracketed entries are experiment
-placeholders. A failure of the Original rate-not-length audit, prior coding-gain
-gate, or three-point frontier gate changes the status to NO-GO.
+placeholders. Original has no authenticated actor/prior log-probability ledger,
+so it cannot support a conditional-rate audit. Failure of authenticated Method
+E1 or the three-point frontier gate disables the conditional-rate claim even if
+task performance improves.
 
 The reframe is substantive: “innovation” is defined only for a source-isolated
 writer whose non-memory input at turn `t` is newly arriving evidence `E_t` plus
@@ -102,27 +105,26 @@ obtainable at each auditable communication rate. If this distinction does not
 produce a non-degenerate frontier or predictive-sufficiency behavior beyond
 length matching, the paper hypothesis fails.
 
-The empirical strategy begins before method training. On frozen Original
-trajectories we fit only the legal history-blind coding prior and test three
-facts: rate must not be perfectly ordered by token length; the learned prior
-must code better than unigram and turn-only controls without reconstructing the
-current evidence; and successive rewrite rates must expose variation associated
-with later retention failures. These tests guard against calling length an
-information rate or introducing an expensive prior that adds no explanatory
-power. A synthetic channel separately checks the variational bound and dual
-dynamics, while static and dynamic taint tests mutate forbidden evidence fields
-and require invariant prior inputs and outputs.
+The empirical strategy separates performance from mechanism evidence. The
+certified Original bundle contains predictions and task metrics but no
+authenticated actor/prior log-probabilities; reconstructing them after the fact
+would not recover the behavior channel and is prohibited. Original is therefore
+only the read-only performance comparator. After E0 validates the estimator and
+source firewall, fresh Method training emits authenticated on-policy rows from
+update 1. Posthoc E1 tests rate versus length, legal-prior coding gain, and
+successive-rate association with later retention. E1 does not block launching
+the instrumented run, but it gates every information-rate mechanism claim.
 
-If these gates pass, fresh Qwen2.5-7B training starts from the same base as the
+If E0 passes, fresh Qwen2.5-7B training starts from the same base as the
 certified Original at update 1. Data order, effective batch, rollout count,
 reward, tokenizer, evaluator, update budget, and GPU count remain identical.
 The first comparison is Method-T5 against certified Original-T5; continuation
 to later anchors requires mechanism health, capacity attainability, and no more
-than two token-F1 points of degradation. The primary T25 test asks whether the
-frontier dominates Original at equal or lower measured rate/token compute, or
-achieves comparable F1 with at least 20% lower conditional rate. All claims are
-conditional on multiple capacity points; no post-hoc single point may stand in
-for a frontier.
+than two token-F1 points of degradation. Because Original rate is unavailable,
+no equal-rate comparison to Original is claimed. Performance compares every
+capacity to Original at identical task budget. Rate comparisons are internal to
+fresh instrumented Method and ablation runs at matched token/rollout compute.
+All mechanism claims require multiple capacity points.
 
 The intended contributions are fourfold, pending evidence:
 
@@ -252,7 +254,8 @@ becomes NO-GO or MERGE with the relevant neighboring line.
 
 ### Independent framing review checkpoint
 
-**Decision: REFRAME, then conditional GO to E0/E1; not yet GO to H20 T5.** The
+**Decision: REFRAME, then conditional GO after E0 to exploratory fresh Method;
+paper-mechanism GO remains pending authenticated posthoc E1.** The
 broad “minimal sufficient memory” story overclaims what a variational upper
 bound plus terminal score identifies. The defensible paper is a source-isolated
 *conditional evidence-rate frontier* for recurrent text-state transitions. It
@@ -270,15 +273,16 @@ RL cover every generic component. Framing is therefore GO only if:
 1. The production writer's complete input is proven to be `(E_t,M_t,t)`.
 2. E0 verifies normalization/support, the finite-channel decomposition, dual
    direction, and the behavior/current-policy estimator boundary.
-3. Posthoc E1 uses authenticated on-policy Method rows to test legal-prior
+3. Posthoc E1 uses authenticated on-policy Method rows from update 1 onward to test legal-prior
    coding gain and rate variation unexplained by length, turn, entropy, or KL.
 4. At least three preregistered capacities yield distinct realized rates.
 5. Predictive probes plus deletion/injection interventions locate where lower
    rate preserves or destroys future-useful information.
 
-Failure of (1) or (2) requires an estimand pivot, not tuning. Failure of (3)–(5)
-means `NO-GO_PRD` or merger into a length/CMI line; token count may not be renamed
-as information rate.
+Failure of (1) or (2) blocks GPU execution and requires an estimand pivot, not
+tuning. Failure of (3)–(5) does not invalidate task-performance measurement but
+means `NO-GO_PRD_CLAIM` or merger into a length/CMI line; token count may not be
+renamed as information rate.
 
 ## 4. Experiments, tables, and falsification plan
 
@@ -292,7 +296,12 @@ as information rate.
 | Dynamic taint | mutate evidence/gold/future with fixed legal context | prior input hash and logits bitwise/tolerance invariant | leakage; blocker |
 | Checkpoint round trip | actor, prior, both optimizers/schedulers, dual, RNG, step, frontier ID | exact restart receipt | experiments non-recoverable |
 
-### E1 — posthoc authenticated Method trajectories
+### E1 — posthoc authenticated on-policy Method trajectories
+
+E1 starts with update-1 rows and must be issued before interpreting T5. It is
+not a launch prerequisite because only the newly instrumented Method carries
+the required probabilities. This changes evidence timing, not the threshold:
+E1 failure forbids rate/IB conclusions and frontier selection.
 
 **Table 1: Rate is not length.** Per-turn and per-trajectory Kendall/Spearman;
 discordant-pair fraction; regression `rate ~ tokens + turn`; residual variance;
@@ -331,9 +340,10 @@ non-degenerate, and at least one matched point is within 2pp F1.
 anchor; hypervolume and monotonicity reported with uncertainty. No “best point”
 table without the full frontier.
 
-**Table 6: T25 matched comparisons.** Original, token-length dual, fixed KL to
-base, unconditional/turn-only prior, legal conditional prior, evidence-leaking
-oracle (diagnostic only), fixed-beta/no-dual, and single-turn accounting.
+**Table 6: T25 matched comparisons.** Original (performance columns only),
+token-length dual, fixed KL to base, unconditional/turn-only prior, legal
+conditional prior, evidence-leaking oracle (diagnostic only), fixed-beta/no-dual,
+and single-turn accounting. Only fresh instrumented rows enter rate columns.
 
 **Table 7: Predictive sufficiency.** Freeze memories, train/evaluate identical
 future-answer and future-evidence probes; report correctness versus rate and
@@ -345,14 +355,19 @@ terminal query during ingestion. Report frontier shift, not only accuracy.
 
 ### Failure criteria and boundaries
 
-- `NO-GO_E1`: rate is a deterministic ordering of length, legal prior has no
-  coding gain, or taint/inventory evidence is incomplete.
+- `NO-GO_E1_CLAIM`: rate is a deterministic ordering of length, legal prior has
+  no coding gain, or taint/inventory evidence is incomplete. Training artifacts
+  remain reportable, but no conditional-rate mechanism claim survives.
 - `NO-GO_T5`: after at most one preregistered prior-capacity or dual-timescale
   correction, frontier collapses, all points violate capacity, or all legal
   matched points lose more than 2pp token-F1.
-- Main T25 success: at equal/lower conditional rate and token cost, F1 improves
-  by at least 2pp; or at F1 within 1pp, conditional rate falls at least 20%, with
-  stable five-anchor ordering.
+- Main T25 performance success: a preregistered capacity improves F1 over
+  Original by at least 2pp at the same task/update budget. This alone is not a
+  conditional-rate result.
+- Main mechanism success: relative to a fresh instrumented unconstrained or
+  fixed-penalty Method control, F1 remains within 1pp while conditional rate
+  falls at least 20%, with at least three frozen capacities and stable
+  five-anchor behavior. Unaudited Original is never the rate comparator.
 - Scope boundary: a gain explainable by shorter strings alone supports a length
   regularization paper, not this paper. A gain from intrinsic CMI reward supports
   merger with CMI-style memory valuation, not PRD. A frontier visible only when

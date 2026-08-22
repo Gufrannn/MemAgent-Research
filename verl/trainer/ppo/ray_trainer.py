@@ -1554,6 +1554,23 @@ class RayPPOTrainer:
         )
 
     def _load_checkpoint(self):
+        if self.config.trainer.resume_mode == "prd_actor_only_eval":
+            global_step_folder = os.path.realpath(str(self.config.trainer.resume_from_path))
+            expected_step = int(self.config.trainer.prd_eval.expected_global_step)
+            if os.path.basename(global_step_folder) != f"global_step_{expected_step}":
+                raise ValueError("PRD actor-only evaluation checkpoint step mismatch")
+            from pathlib import Path
+            from tools.h20.prd_memrl_orchestrator import validate_checkpoint
+            validate_checkpoint(Path(global_step_folder), expected_step,
+                float(self.config.trainer.prd_eval.capacity_nats),
+                str(self.config.trainer.prd_eval.git_commit), str(self.config.trainer.prd_eval.run_id))
+            actor_path = os.path.join(global_step_folder, "actor")
+            acknowledgements = self.actor_rollout_wg.load_model_checkpoint_only(actor_path, del_local_after_load=False)
+            if not isinstance(acknowledgements, list) or not acknowledgements:
+                raise RuntimeError("PRD actor-only load returned no worker acknowledgements")
+            self._stable_eval_actor_checkpoint_load_acks = acknowledgements
+            self.global_steps = expected_step
+            return self.global_steps
         if self.config.trainer.resume_mode == "actor_only_eval":
             eval_identity_config = self.config.trainer.get("eval_identity", None)
             if not (

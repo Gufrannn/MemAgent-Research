@@ -47,6 +47,7 @@ class OrchestrationTests(unittest.TestCase):
                 },
                 "base_model":{"id":"Qwen/Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28",
                     "path":"/data/cw/memagent_work/models/Qwen2.5-7B-Instruct","files":[]},
+                "original_training_resolved":{"path":"/data/cw/original/resolved.json","sha256":"b"*64},
             },
         })
         args = type("A", (), dict(run_root=str(self.root/"run"), run_id=self.run_id,
@@ -173,6 +174,11 @@ class OrchestrationTests(unittest.TestCase):
         self.assertNotIn('(Path(args.e1), "PRD_E1_PASS")',gate)
         for path in ("materialize_prd_prior.py","issue_prd_paper_review.py","materialize_prd_s128_rows.py"):
             self.assertTrue((REPO/"tools/h20"/path).is_file())
+        prior=(REPO/"tools/h20/materialize_prd_prior.py").read_text()
+        self.assertIn("hf_hub_download",prior); self.assertIn("official revision byte mismatch",prior)
+        trainer=(REPO/"verl/trainer/ppo/ray_trainer.py").read_text()
+        self.assertIn('resume_mode == "prd_actor_only_eval"',trainer)
+        self.assertIn("validate_checkpoint(Path(global_step_folder)",trainer)
 
 
 if __name__ == "__main__": unittest.main()
