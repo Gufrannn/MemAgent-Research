@@ -2262,6 +2262,32 @@ class RayPPOTrainer:
                         with _timer("save_checkpoint", timing_raw):
                             self._save_checkpoint()
 
+                    # Cheap in-training T5 mechanism gate.  It uses no S128
+                    # performance and therefore cannot select the method by eval.
+                    rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
+                    if bool(rwwpo_cfg.get("enable", False)) and str(
+                        rwwpo_cfg.get("controller_variant", "hard_rollback")) == "feasible_backtracking":
+                        if not hasattr(self, "_rwwpo_t5_alpha_history"):
+                            self._rwwpo_t5_alpha_history=[]
+                        self._rwwpo_t5_alpha_history.append(float(metrics.get("rwwpo/alpha_committed",0.0)))
+                        if self.global_steps <= 5:
+                            if float(metrics.get("rwwpo/post_min_prefix_ess",0.0)) < 0.5:
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:POST_PREFIX_ESS")
+                            if float(metrics.get("rwwpo/post_max_abs_prefix_log_ratio",float("inf"))) > float(
+                                rwwpo_cfg.get("writer_log_ratio_cap",4.0)):
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:PREFIX_CAP")
+                            if float(metrics.get("rwwpo/behavior_point_max_delta",1.0)) > 1e-7:
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:BEHAVIOR_POINT_IDENTITY")
+                        if self.global_steps == 5:
+                            import statistics
+                            nonzero=[alpha for alpha in self._rwwpo_t5_alpha_history if alpha>0]
+                            if len(nonzero)<4:
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:NONZERO_COMMIT_COUNT")
+                            if statistics.median(nonzero)<0.125:
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:MEDIAN_ALPHA")
+                            if sum(alpha<=1/32 for alpha in nonzero)>len(nonzero)/2:
+                                raise RuntimeError("RWWPO_T5_HEALTH_NO_GO:PSEUDO_ACTIVITY")
+
                 # training metrics
                 metrics.update(
                     {

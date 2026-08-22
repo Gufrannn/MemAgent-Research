@@ -625,6 +625,8 @@ class DataParallelPPOActor(BasePPOActor):
                                           if self.actor_lr_scheduler is not None else digest(None),
                                           "scaler": "not_applicable_bfloat16",
                                           "rng": digest(rng_snapshot())}
+                        if not accepted and commit_digests != pre_digests:
+                            raise RuntimeError("RWWPO_TRANSACTION_ROLLBACK_DIGEST_MISMATCH")
                     else:
                         with torch.no_grad():
                             post_log_prob = torch.cat([
@@ -700,6 +702,9 @@ class DataParallelPPOActor(BasePPOActor):
                     append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),
                                              "rwwpo/update_accepted": float(accepted),
                                              "rwwpo/alpha_committed": float(alpha_committed),
+                                             "rwwpo/post_min_prefix_ess": min(row["ess_fraction"] for row in post_prefix_stats),
+                                             "rwwpo/post_max_abs_prefix_log_ratio": max(row["max_abs_log_ratio"] for row in post_prefix_stats),
+                                             "rwwpo/behavior_point_max_delta": float((current_log_prob-old_log_prob)[response_mask].abs().max().item()),
                                              "rwwpo/scheduler_managed_transactionally": 1.0})
                     # The legacy non-RWWPO path appends its final scalar metric
                     # dictionary once more after the minibatch loop.  Do not let

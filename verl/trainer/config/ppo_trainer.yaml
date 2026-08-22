@@ -59,6 +59,7 @@ actor_rollout_ref:
       ledger_dir: null
       q_min: 0.5
       writer_log_ratio_cap: 4.0
+      max_trial_forward_wall_seconds: 600.0
       alpha_grid: [1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125]
       optimizer_semantics: damped_adam_displacement_committed_moments
       attempt_id: null
