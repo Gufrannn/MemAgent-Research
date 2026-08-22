@@ -308,6 +308,29 @@ def innovation_ledger(oof: Mapping[str, Any], outcomes: Mapping[str, float],
     }
 
 
+def select_trajectory_ledger(ledger: Mapping[str, Any],
+                             trajectory_ids: Sequence[str]) -> dict[str, Any]:
+    """Select one on-policy step from a cumulative critic ledger."""
+    requested = [str(value) for value in trajectory_ids]
+    if not requested or len(set(requested)) != len(requested):
+        raise ValueError("MIC_NO_GO: current trajectory IDs are empty or duplicated")
+    rows = ledger.get("trajectories", [])
+    by_id = {str(row.get("trajectory_id")): dict(row) for row in rows}
+    if len(by_id) != len(rows) or not set(requested) <= set(by_id):
+        raise ValueError("MIC_NO_GO: current trajectories absent from cumulative ledger")
+    selected = [by_id[trajectory_id] for trajectory_id in requested]
+    maximum = max(abs(float(row.get("closure_error", math.inf))) for row in selected)
+    tolerance = float(ledger.get("tolerance", 1e-12))
+    if not math.isfinite(maximum) or maximum > tolerance:
+        raise ValueError("MIC_NO_GO: selected trajectory closure drift")
+    return {
+        "schema": SCHEMA, "kind": "innovation_ledger_step_view",
+        "tolerance": tolerance, "maximum_closure_error": maximum,
+        "trajectories": selected, "ledger_sha256": sha256_json(selected),
+        "cumulative_ledger_sha256": str(ledger.get("ledger_sha256", "")),
+    }
+
+
 def calibration_report(ledger: Mapping[str, Any]) -> dict[str, float]:
     trajectories = ledger.get("trajectories", [])
     if len(trajectories) < 2:

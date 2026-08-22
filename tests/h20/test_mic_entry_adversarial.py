@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from recurrent.research.mic import (
-    CriticCheckpoint, append_jsonl_new, calibration_report, sha256_file,
+    CriticCheckpoint, append_jsonl_new, calibration_report, cross_fitted_values,
+    innovation_ledger, sha256_file,
 )
 from recurrent.research.gate_a_execution import append_jsonl
 
@@ -143,6 +144,42 @@ def _valid_advantage_row(checkpoint, digest):
     }
 
 
+def _real_checkpoint_and_advantage(tmp_path, *, degenerate=False):
+    states, outcomes = [], {}
+    for index in range(8):
+        trajectory, root = f"audit-t{index}", f"audit-r{index}"
+        outcome = 0.0 if degenerate else (1.0 if index % 2 else -1.0)
+        outcomes[trajectory] = outcome
+        common = {"stable_example_id": f"audit-e{index}", "stable_root_id": root,
+                  "trajectory_id": trajectory, "question": "q"}
+        states.extend([
+            {**common, "turn_index": 0, "visible_chunks": [],
+             "materialized_memory": "", "materialized_memory_history": [],
+             "is_prewrite": True},
+            {**common, "turn_index": 1, "visible_chunks": ["good" if outcome > 0 else "bad"],
+             "materialized_memory": "good" if outcome > 0 else "bad",
+             "materialized_memory_history": ["good" if outcome > 0 else "bad"],
+             "is_prewrite": False},
+        ])
+    oof = cross_fitted_values(states, outcomes, fold_count=4, dimension=8)
+    cumulative = innovation_ledger(oof, outcomes)
+    checkpoint = tmp_path / "critic.json"
+    digest = CriticCheckpoint("a" * 40, oof["bundle_sha256"], "c" * 64, {
+        "oof": oof, "history_states": states, "history_outcomes": outcomes,
+        "parent_checkpoint_sha256": None,
+    }).write_new(checkpoint)
+    advantage = _valid_advantage_row(checkpoint, digest)
+    advantage.update({
+        "oof_bundle_sha256": oof["bundle_sha256"],
+        "current_trajectory_ids": list(outcomes),
+        "innovation_ledger_sha256": cumulative["ledger_sha256"],
+        "cumulative_innovation_ledger_sha256": cumulative["ledger_sha256"],
+        "maximum_closure_error": cumulative["maximum_closure_error"],
+        "calibration": calibration_report(cumulative),
+    })
+    return checkpoint, digest, advantage
+
+
 def _valid_gradient_row():
     return {"record_type": "mic_actual_gradient_delivery", "global_step": 5,
             "role_metrics": {
@@ -188,12 +225,8 @@ def test_ledger_tamper_rejected_through_real_audit_entry(tmp_path):
 
 def test_weight_sync_tamper_rejected_through_real_audit_entry(tmp_path):
     args = _audit_fixture(tmp_path)
-    checkpoint = tmp_path / "critic.json"
-    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
-        "oof": {}, "history_states": [], "history_outcomes": {},
-        "parent_checkpoint_sha256": None,
-    }).write_new(checkpoint)
-    append_jsonl_new(args.ledger, _valid_advantage_row(checkpoint, digest))
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    append_jsonl_new(args.ledger, advantage)
     append_jsonl_new(args.ledger, _valid_gradient_row())
     Path(args.weight_ledger).write_text(json.dumps({
         "record_index": 0, "previous_record_sha256": "0" * 64,
@@ -210,12 +243,8 @@ def test_weight_sync_tamper_rejected_through_real_audit_entry(tmp_path):
 ])
 def test_unhealthy_actual_gradient_rejected_through_audit(tmp_path, field, value, message):
     args = _audit_fixture(tmp_path)
-    checkpoint = tmp_path / "critic.json"
-    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
-        "oof": {}, "history_states": [], "history_outcomes": {},
-        "parent_checkpoint_sha256": None,
-    }).write_new(checkpoint)
-    append_jsonl_new(args.ledger, _valid_advantage_row(checkpoint, digest))
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    append_jsonl_new(args.ledger, advantage)
     gradient = _valid_gradient_row(); gradient["role_metrics"][field] = value
     append_jsonl_new(args.ledger, gradient)
     with pytest.raises(ValueError, match=message):
@@ -224,13 +253,7 @@ def test_unhealthy_actual_gradient_rejected_through_audit(tmp_path, field, value
 
 def test_degenerate_on_policy_signal_rejected_through_audit(tmp_path):
     args = _audit_fixture(tmp_path)
-    checkpoint = tmp_path / "critic.json"
-    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
-        "oof": {}, "history_states": [], "history_outcomes": {},
-        "parent_checkpoint_sha256": None,
-    }).write_new(checkpoint)
-    advantage = _valid_advantage_row(checkpoint, digest)
-    advantage["calibration"]["writer_innovation_variance"] = 0.0
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path, degenerate=True)
     append_jsonl_new(args.ledger, advantage)
     append_jsonl_new(args.ledger, _valid_gradient_row())
     with pytest.raises(ValueError, match="writer innovation is degenerate"):
@@ -239,21 +262,9 @@ def test_degenerate_on_policy_signal_rejected_through_audit(tmp_path):
 
 def test_real_calibration_producer_flows_through_real_audit(tmp_path):
     args = _audit_fixture(tmp_path)
-    checkpoint = tmp_path / "critic.json"
-    digest = CriticCheckpoint("a" * 40, "b" * 64, "c" * 64, {
-        "oof": {}, "history_states": [], "history_outcomes": {},
-        "parent_checkpoint_sha256": None,
-    }).write_new(checkpoint)
-    mechanism_ledger = {"trajectories": [
-        {"values": [0.5], "outcome": 1.0, "writer_innovations": [0.5],
-         "answer_residual": 0.5},
-        {"values": [-0.5], "outcome": -1.0, "writer_innovations": [-0.5],
-         "answer_residual": -0.5},
-    ]}
-    calibration = calibration_report(mechanism_ledger)
-    assert calibration["mae"] == pytest.approx(0.5)
-    advantage = _valid_advantage_row(checkpoint, digest)
-    advantage["calibration"] = calibration
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    calibration = advantage["calibration"]
+    assert calibration["mae"] >= 0
     append_jsonl_new(args.ledger, advantage)
     append_jsonl_new(args.ledger, _valid_gradient_row())
     append_jsonl(args.weight_ledger, {
@@ -263,7 +274,9 @@ def test_real_calibration_producer_flows_through_real_audit(tmp_path):
     })
     report = PIPELINE.audit(args)
     assert report["decision"] == "MIC_T5_AUDIT_PASS"
-    assert report["on_policy_health"][5]["calibration"]["mae"] == pytest.approx(0.5)
+    assert report["on_policy_health"][5]["calibration"]["mae"] == pytest.approx(
+        calibration["mae"]
+    )
 
 
 def test_source_firewall_real_entry_passes():

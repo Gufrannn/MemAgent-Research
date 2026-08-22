@@ -5,7 +5,8 @@ import pytest
 
 from recurrent.research.mic import (
     CriticCheckpoint, append_jsonl_new, cross_fitted_values, innovation_ledger,
-    route_role_advantages, sha256_json, stable_fold_assignments, stable_source_identities,
+    route_role_advantages, select_trajectory_ledger, sha256_json,
+    stable_fold_assignments, stable_source_identities,
     validate_admissible_state,
 )
 
@@ -78,6 +79,31 @@ def test_oof_receipts_exclude_held_roots_and_close():
     ledger = innovation_ledger(oof, outcomes)
     assert ledger["maximum_closure_error"] <= 1e-12
     assert len(ledger["trajectories"]) == 8
+
+
+def test_cumulative_critic_ledger_selects_only_current_on_policy_step():
+    first_rows, first_outcomes = fixture_rows(8)
+    second_rows, second_outcomes = fixture_rows(8)
+    for row in second_rows:
+        suffix = row["trajectory_id"].split("-")[-1]
+        row["trajectory_id"] = f"step2-trajectory-{suffix}"
+        row["stable_root_id"] = f"step2-root-{suffix}"
+        row["stable_example_id"] = f"step2-root-{suffix}-example"
+    second_outcomes = {
+        f"step2-trajectory-{key.split('-')[-1]}": value
+        for key, value in second_outcomes.items()
+    }
+    combined_rows = [*first_rows, *second_rows]
+    combined_outcomes = {**first_outcomes, **second_outcomes}
+    cumulative = innovation_ledger(
+        cross_fitted_values(combined_rows, combined_outcomes, fold_count=4, dimension=8),
+        combined_outcomes,
+    )
+    current_ids = list(second_outcomes)
+    current = select_trajectory_ledger(cumulative, current_ids)
+    assert [row["trajectory_id"] for row in current["trajectories"]] == current_ids
+    assert len(current["trajectories"]) == 8
+    assert current["cumulative_ledger_sha256"] == cumulative["ledger_sha256"]
 
 
 def test_outcome_coverage_and_duplicate_root_errors():

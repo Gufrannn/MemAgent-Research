@@ -2159,7 +2159,8 @@ class RayPPOTrainer:
                                 from recurrent.research.mic import (
                                     CriticCheckpoint, append_jsonl_new, calibration_report,
                                     cross_fitted_values, innovation_ledger,
-                                    route_role_advantages, sha256_json, stable_source_identities,
+                                    route_role_advantages, select_trajectory_ledger,
+                                    sha256_json, stable_source_identities,
                                 )
 
                                 if "mic_materialized_memory" not in batch.non_tensor_batch \
@@ -2275,12 +2276,15 @@ class RayPPOTrainer:
                                     oof, combined_outcomes,
                                     tolerance=float(mic_config.get("closure_tolerance", 1e-12)),
                                 )
+                                current_mic_ledger = select_trajectory_ledger(
+                                    mic_ledger, base_trajectory_ids
+                                )
                                 advantages, delivery = route_role_advantages(
                                     sample_index=sample_index,
                                     final_mask=batch.batch["final_mask"],
                                     turn_index=batch.batch["mic_turn_index"],
                                     response_mask=eos_mask,
-                                    ledger_rows=mic_ledger["trajectories"],
+                                    ledger_rows=current_mic_ledger["trajectories"],
                                     trajectory_ids=base_trajectory_ids,
                                 )
                                 batch.batch["mic_writer_mask"] = (
@@ -2306,7 +2310,7 @@ class RayPPOTrainer:
                                     },
                                 )
                                 checkpoint_sha = checkpoint.write_new(checkpoint_path)
-                                report = calibration_report(mic_ledger)
+                                report = calibration_report(current_mic_ledger)
                                 append_jsonl_new(str(ledger_path), {
                                     "schema": "memagent.mic.training-ledger.v1",
                                     "record_type": "mic_advantage_delivery",
@@ -2315,8 +2319,10 @@ class RayPPOTrainer:
                                     "critic_checkpoint_sha256": checkpoint_sha,
                                     "parent_critic_checkpoint_sha256": parent_checkpoint_sha,
                                     "oof_bundle_sha256": oof["bundle_sha256"],
-                                    "innovation_ledger_sha256": mic_ledger["ledger_sha256"],
-                                    "maximum_closure_error": mic_ledger["maximum_closure_error"],
+                                    "current_trajectory_ids": base_trajectory_ids,
+                                    "innovation_ledger_sha256": current_mic_ledger["ledger_sha256"],
+                                    "cumulative_innovation_ledger_sha256": mic_ledger["ledger_sha256"],
+                                    "maximum_closure_error": current_mic_ledger["maximum_closure_error"],
                                     "calibration": report, "delivery": delivery,
                                 })
                                 metrics.update({f"mic/{key}": value for key, value in report.items()})

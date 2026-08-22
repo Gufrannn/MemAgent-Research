@@ -441,7 +441,10 @@ def import_baseline(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def audit(args: argparse.Namespace) -> dict[str, Any]:
-    from recurrent.research.mic import CriticCheckpoint
+    from recurrent.research.mic import (
+        CriticCheckpoint, calibration_report, innovation_ledger,
+        select_trajectory_ledger,
+    )
     from recurrent.research.gate_a_execution import validate_jsonl_chain
     required = {
         "p0": "MIC_P0_PASS", "e0": "MIC_E0_PASS",
@@ -485,8 +488,28 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
                     ) != previous_critic:
                 raise ValueError("MIC_NO_GO: critic resume chain mismatch")
             previous_critic = checkpoint_payload["checkpoint_sha256"]
+            critic_payload = checkpoint_payload.get("critic_payload", {})
+            reconstructed_cumulative = innovation_ledger(
+                critic_payload.get("oof", {}), critic_payload.get("history_outcomes", {}),
+                tolerance=1e-12,
+            )
+            current_ids = row.get("current_trajectory_ids")
+            if not isinstance(current_ids, list):
+                raise ValueError("MIC_NO_GO: current trajectory IDs missing from ledger")
+            reconstructed_current = select_trajectory_ledger(
+                reconstructed_cumulative, [str(value) for value in current_ids]
+            )
+            if reconstructed_cumulative["ledger_sha256"] != \
+                    row.get("cumulative_innovation_ledger_sha256") \
+                    or reconstructed_current["ledger_sha256"] != \
+                    row.get("innovation_ledger_sha256"):
+                raise ValueError("MIC_NO_GO: innovation ledger digest binding mismatch")
+            if sha256_json(calibration_report(reconstructed_current)) != \
+                    sha256_json(row.get("calibration", {})):
+                raise ValueError("MIC_NO_GO: on-policy calibration binding mismatch")
             closure = float(row["maximum_closure_error"])
-            if not math.isfinite(closure) or closure > 1e-12:
+            if not math.isfinite(closure) or closure > 1e-12 \
+                    or closure != reconstructed_current["maximum_closure_error"]:
                 raise ValueError("MIC_NO_GO: training closure drift")
             calibration = row.get("calibration", {})
             required_calibration = (
