@@ -113,14 +113,18 @@ def test_eval_all_parent_exports_baseline_authority_to_final_entry(tmp_path):
     fake_python = tmp_path / "fake-python"
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ ${1:-} == -c ]]; then echo " + "a" * 64 + "; exit 0; fi\n"
+        "if [[ ${1:-} == -c ]]; then\n"
+        "  if [[ $2 == *inventory_path* ]]; then echo "
+        + str(tmp_path / "baseline_inventory.json") + "; else echo "
+        + "a" * 64 + "; fi\n"
+        "  exit 0\n"
+        "fi\n"
         "printf '%s\\n%s\\n' \"${MEMAGENT_MIC_BASELINE_INVENTORY:-}\" "
         "\"${MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256:-}\" >\"$CAPTURE\"\n"
     )
     fake_python.chmod(0o755)
     (script_dir / "mic_common.sh").write_text("\n".join([
         f"MIC_PYTHON={fake_python}", f"MIC_P0={p0}",
-        f"MIC_BASELINE_INVENTORY={tmp_path / 'baseline_inventory.json'}",
         f"MIC_BASELINE={tmp_path / 'baseline.json'}", f"MIC_CERT={tmp_path / 'cert'}",
         f"MIC_ROOT={tmp_path / 'root'}", f"MIC_OUTPUT={tmp_path / 'output'}",
         f"MIC_CHECKPOINT_AUTHORITY={tmp_path / 'authority.json'}",
@@ -164,6 +168,28 @@ printf '%s\n%s\n' "$first" "$second"
         str(tmp_path / "work/logs/mic_frozen_20260822/retry-test/"
             "eval_t10_attempts/attempt_0002"),
     ]
+
+
+def test_partial_baseline_materialization_is_preserved_and_retry_allocates_new_directory(
+        tmp_path):
+    env = {**os.environ,
+           "MEMAGENT_MIC_WORK_ROOT": str(tmp_path / "work"),
+           "MEMAGENT_MIC_REPO_DIR": str(REPO),
+           "MEMAGENT_MIC_EXPECTED_COMMIT": "a" * 40,
+           "MEMAGENT_MIC_GPU_PAIR": "1,3", "MEMAGENT_MIC_RUN_ID": "baseline-retry"}
+    command = f'''source "{REPO / 'scripts/h20/mic_common.sh'}"
+mkdir -p "$MIC_BASELINE_ATTEMPTS/attempt_0001/rows"
+retry=$(mic_next_baseline_attempt)
+test -d "$MIC_BASELINE_ATTEMPTS/attempt_0001/rows"
+printf '%s\n' "$retry"
+'''
+    result = subprocess.run(["bash", "-c", command], env=env, text=True,
+                            capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(
+        tmp_path / "work/logs/mic_frozen_20260822/baseline-retry/"
+        "baseline_materialization_attempts/attempt_0002"
+    )
 
 
 def test_completed_anchor_is_reauthenticated_before_skip(tmp_path):
@@ -766,12 +792,11 @@ def _stub_prepare_baseline_authority(monkeypatch, args, identity_path):
 
 
 def test_permuted_generation_real_prepare_eval_exact_joins(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
     generations.reverse()
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
     monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
     args = _prepare_eval_args(tmp_path, identity_path, generation_path)
@@ -782,13 +807,20 @@ def test_permuted_generation_real_prepare_eval_exact_joins(tmp_path, monkeypatch
     assert rows[0]["stable_key"] == "key-0" and rows[0]["output"] == "prediction-0"
 
 
+def test_parquet_ground_truth_normalizes_numpy_arrays_to_certified_json_lists():
+    np = pytest.importorskip("numpy")
+    source = {"reward_model": {"ground_truth": np.asarray(["alpha", "beta"])}}
+    ground_truth = PIPELINE._parquet_ground_truth(source, row=0)
+    assert ground_truth == ["alpha", "beta"]
+    assert canonical_sha256(ground_truth) == canonical_sha256(["alpha", "beta"])
+
+
 def test_generation_identity_tamper_real_prepare_eval_rejection(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
     generations[0]["source_question_sha256"] = "f" * 64
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
     monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
     args = _prepare_eval_args(tmp_path, identity_path, generation_path)
@@ -798,12 +830,11 @@ def test_generation_identity_tamper_real_prepare_eval_rejection(tmp_path, monkey
 
 
 def test_validation_ground_truth_tamper_real_prepare_eval_rejection(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
     sources[0]["reward_model"]["ground_truth"] = "tampered"
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
     monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
     args = _prepare_eval_args(tmp_path, identity_path, generation_path)
@@ -813,11 +844,10 @@ def test_validation_ground_truth_tamper_real_prepare_eval_rejection(tmp_path, mo
 
 
 def test_original_method_generation_protocol_mismatch_is_rejected(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
     monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
     args = _prepare_eval_args(tmp_path, identity_path, generation_path)
@@ -830,11 +860,10 @@ def test_original_method_generation_protocol_mismatch_is_rejected(tmp_path, monk
 
 
 def test_checkpoint_drift_real_prepare_eval_rejection(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
     monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
     args = _prepare_eval_args(tmp_path, identity_path, generation_path)
@@ -953,7 +982,6 @@ def test_evaluation_entry_is_read_only_and_attested():
 
 
 def _baseline_materialization_fixture(tmp_path, monkeypatch):
-    pd = pytest.importorskip("pandas")
     validation = tmp_path / "validation.parquet"
     validation.write_bytes(b"frozen-s128")
     sources, frozen_rows = [], []
@@ -968,7 +996,7 @@ def _baseline_materialization_fixture(tmp_path, monkeypatch):
             "source_context_hash": hashlib.sha256(f"c-{index}".encode()).hexdigest(),
             "ground_truth_hash": canonical_sha256(ground_truth),
         })
-    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "_load_parquet_rows", lambda _: sources)
     identity_payload = {
         "source_dataset": {"parquet_sha256": hashlib.sha256(validation.read_bytes()).hexdigest()},
         "rows": frozen_rows,

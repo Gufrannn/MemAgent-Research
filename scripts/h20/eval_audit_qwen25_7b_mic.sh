@@ -6,15 +6,22 @@ case "$STEP" in 5|10|15|20|25) ;; *) echo 'MIC_NO_GO: invalid anchor' >&2; exit 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/mic_common.sh"
 mic_require_checkout; mic_require_training_gates
-if [[ ! -e $MIC_BASELINE_INVENTORY ]]; then
+if [[ -e $MIC_BASELINE ]]; then
+  BASELINE_INVENTORY=$(
+    "$MIC_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_path"])' \
+      "$MIC_BASELINE"
+  )
+else
+  BASELINE_ATTEMPT=$(mic_next_baseline_attempt)
+  BASELINE_INVENTORY=$BASELINE_ATTEMPT/baseline_inventory.json
   "$MIC_PYTHON" "$MEMAGENT_MIC_REPO_DIR/tools/h20/mic_pipeline.py" materialize-baseline \
     --p0 "$MIC_P0" --curve-report "$MEMAGENT_MIC_ORIGINAL_CURVE_REPORT" \
     --curve-resolved "$MIC_CURVE_RESOLVED" --search-root "$MEMAGENT_MIC_WORK_ROOT/logs" \
     --validation "$MEMAGENT_MIC_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
     --curve-authority "$MIC_CURVE_AUTHORITY" \
-    --output-root "$MIC_BASELINE_ROOT/rows" --output "$MIC_BASELINE_INVENTORY"
+    --output-root "$BASELINE_ATTEMPT/rows" --output "$BASELINE_INVENTORY"
 fi
-export MEMAGENT_MIC_BASELINE_INVENTORY=$MIC_BASELINE_INVENTORY
+export MEMAGENT_MIC_BASELINE_INVENTORY=$BASELINE_INVENTORY
 export MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256
 MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256=$(
   "$MIC_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["original_curve_report_sha256"])' "$MIC_P0"

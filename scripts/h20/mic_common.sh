@@ -25,8 +25,7 @@ readonly MIC_P0=$MIC_CERT/p0.json
 readonly MIC_E0=$MIC_CERT/e0.json
 readonly MIC_E1=$MIC_CERT/e1.json
 readonly MIC_BASELINE=$MIC_CERT/baseline_import.json
-readonly MIC_BASELINE_ROOT=$MIC_ROOT/baseline_materialized
-readonly MIC_BASELINE_INVENTORY=$MIC_BASELINE_ROOT/baseline_inventory.json
+readonly MIC_BASELINE_ATTEMPTS=$MIC_ROOT/baseline_materialization_attempts
 readonly MIC_CHECKPOINT_AUTHORITY=$MEMAGENT_MIC_REPO_DIR/manifests/h20/qwen25_7b_mic_checkpoint_authority.json
 readonly MIC_CURVE_AUTHORITY=$MEMAGENT_MIC_REPO_DIR/manifests/h20/qwen25_7b_mic_original_curve_authority.json
 readonly MIC_CHECKPOINT_AUTHORITY_CERT=$MIC_CERT/checkpoint_authority.json
@@ -86,6 +85,19 @@ mic_next_eval_attempt() {
   mkdir -p "$container"
   while :; do
     candidate=$(printf '%s/attempt_%04d' "$container" "$index")
+    if mkdir "$candidate" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+}
+
+mic_next_baseline_attempt() {
+  local index=1 candidate
+  mkdir -p "$MIC_BASELINE_ATTEMPTS"
+  while :; do
+    candidate=$(printf '%s/attempt_%04d' "$MIC_BASELINE_ATTEMPTS" "$index")
     if mkdir "$candidate" 2>/dev/null; then
       printf '%s\n' "$candidate"
       return 0

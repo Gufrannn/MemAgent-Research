@@ -575,6 +575,7 @@ def import_baseline(args: argparse.Namespace) -> dict[str, Any]:
     if len(validation_items) != 1:
         raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: validation authority")
     report = {"schema": SCHEMA, "status": "PASS", "decision": "MIC_BASELINE_IMPORT_PASS",
+              "inventory_path": str(inventory_path.resolve()),
               "inventory_sha256": sha256_file(inventory_path),
               "curve_report_sha256": authority_sha,
               "curve_resolved_path": str(curve_resolved_path.resolve()),
@@ -599,7 +600,27 @@ def _parquet_ground_truth(source: dict[str, Any], *, row: int) -> Any:
         reward_model = json.loads(reward_model)
     if not isinstance(reward_model, dict) or "ground_truth" not in reward_model:
         raise ValueError(f"ORIGINAL_BASELINE_PROTOCOL_MISMATCH: row {row} has no ground truth")
-    return reward_model["ground_truth"]
+    return _json_native(reward_model["ground_truth"])
+
+
+def _json_native(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_native(item) for item in value]
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _json_native(tolist())
+    item = getattr(value, "item", None)
+    if callable(item):
+        return _json_native(item())
+    return value
+
+
+def _load_parquet_rows(path: str | Path) -> list[dict[str, Any]]:
+    import pyarrow.parquet as parquet
+
+    return parquet.read_table(Path(path)).to_pylist()
 
 
 def _actor_model_inventory(output_root: str | Path, steps: tuple[int, ...]) -> list[dict[str, Any]]:
@@ -743,7 +764,6 @@ def verify_checkpoint_authority(
 
 def materialize_baseline(args: argparse.Namespace) -> dict[str, Any]:
     """Materialize normalized S128 rows from final-report-authenticated terminals."""
-    import pandas as pd
     from recurrent.research.stable_eval_identity import canonical_sha256, stable_key
 
     p0_value = read_json(args.p0)
@@ -774,7 +794,7 @@ def materialize_baseline(args: argparse.Namespace) -> dict[str, Any]:
     expected_parquet_sha = identity_payload.get("source_dataset", {}).get("parquet_sha256")
     if expected_parquet_sha != sha256_file(validation_path):
         raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: frozen S128 parquet digest")
-    frame = pd.read_parquet(validation_path)
+    frame = _load_parquet_rows(validation_path)
     if len(frame) != 128:
         raise ValueError("ORIGINAL_BASELINE_PROTOCOL_MISMATCH: validation parquet is not S128")
     frozen_by_order = {int(row["source_order_index"]): row for row in frozen_rows}
@@ -859,7 +879,7 @@ def materialize_baseline(args: argparse.Namespace) -> dict[str, Any]:
                         f"ORIGINAL_BASELINE_PROTOCOL_MISMATCH: {interface} identity {field} row {order}"
                     )
             raw_position = int(frozen["raw_row_position"])
-            source = frame.iloc[raw_position].to_dict()
+            source = frame[raw_position]
             ground_truth = _parquet_ground_truth(source, row=order)
             if canonical_sha256(ground_truth) != terminal.get("ground_truth_hash"):
                 raise ValueError(
@@ -1408,7 +1428,6 @@ def _verify_training_weight_prefix(
 
 
 def prepare_eval(args: argparse.Namespace) -> dict[str, Any]:
-    import pandas as pd
     from recurrent.research.stable_eval_identity import canonical_sha256
 
     summary = read_json(args.execution_summary)
@@ -1506,7 +1525,7 @@ def prepare_eval(args: argparse.Namespace) -> dict[str, Any]:
         encoding="utf-8").splitlines() if line]
     baseline = [json.loads(line) for line in Path(args.identity_source).read_text(
         encoding="utf-8").splitlines() if line]
-    frame = pd.read_parquet(args.validation)
+    frame = _load_parquet_rows(args.validation)
     if len(generated) != 128 or len(baseline) != 128 or len(frame) < 128:
         raise ValueError("MIC_NO_GO: evaluation producer inputs lack S128 coverage")
     baseline.sort(key=lambda row: int(row.get("source_order_index", row.get("source_repeated_row", -1))))
@@ -1527,7 +1546,7 @@ def prepare_eval(args: argparse.Namespace) -> dict[str, Any]:
         raw_position = int(identity["raw_row_position"])
         if raw_position < 0 or raw_position >= len(frame):
             raise ValueError(f"MIC_NO_GO: validation raw row {raw_position} is invalid")
-        source = frame.iloc[raw_position].to_dict()
+        source = frame[raw_position]
         ground_truth = _parquet_ground_truth(source, row=index)
         if canonical_sha256(ground_truth) != canonical_sha256(identity.get("ground_truth")):
             raise ValueError(f"MIC_NO_GO: frozen ground truth mismatch at row {index}")

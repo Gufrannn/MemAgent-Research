@@ -26,7 +26,12 @@ report: terminal artifacts are located by the report's certified file SHA,
 joined to the frozen S128 identity/parquet, and accepted only when an
 independent recomputation exactly reproduces every certified canonical
 metric-row digest. The generated inventory is not a trust root and cannot
-self-authenticate. Do not infer paths, scores, or hashes from aggregate fields.
+self-authenticate. Baseline construction uses the same PyArrow `to_pylist()`
+row semantics as the certified identity producer and writes append-only
+`baseline_materialization_attempts/attempt_KKKK` directories. A partial attempt
+is never reused or removed; a successful import certificate binds the one
+inventory subsequently reauthenticated by every anchor and the final audit.
+Do not infer paths, scores, or hashes from aggregate fields.
 Original actual-loss
 rank ledgers were never collected; their status is
 `PENDING_ACTUAL_LOSS_LEDGER` and they must not be synthesized or rerun.
