@@ -109,6 +109,10 @@ class CoralBaselineMaterializationTests(unittest.TestCase):
             "forbid_metric_as_loss": True,
             "forbid_original_rerun": True,
         })
+        self.assertEqual(
+            manifest["evidence_authority"]["original_training"]["ledger_sha256"],
+            "3bc94a6796d84ea1c297271f1d7cde0b38dc805293e3c7164b6cadeb31495d47",
+        )
 
 
 if __name__ == "__main__":
