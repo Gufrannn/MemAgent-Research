@@ -37,5 +37,9 @@ fi
   --baseline-import "$HDR_AUTHORITY_CERT/baseline_import.json" \
   --method-s128 "$EVAL_ROOT/t${HDR_ANCHOR}_s128_nominal.json" \
   --method-horizons "$EVAL_ROOT/t${HDR_ANCHOR}_horizons.json" \
+  --method-suite "$SUITE_ROOT/fixed_s128_nominal_h8.parquet" \
+  --method-receipts "$SUITE_ROOT/fixed_s128_nominal_receipts.json" \
+  --stable-resolved /data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json \
+  --validation-parquet "$MEMAGENT_HDR_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
   --model-path "$MERGED" --seed 2026 --nominal 8 --unseen 10 24 \
   "${UNIFORM_ARGS[@]}" --output "$HDR_CERT/t${HDR_ANCHOR}_health.json" --ledger "$HDR_LEDGER"

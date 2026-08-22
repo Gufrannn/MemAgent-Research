@@ -28,10 +28,13 @@ def main():
   tokens=tok.encode(str(row["context"]),add_special_tokens=False)
   if len(tokens)>40000: continue
   if not tokens: raise SystemExit("HDR_NO_GO:empty_effective_evidence")
-  roots.append(rid); source_order=int(selected[source_pos]["source_order_index"]) if selected else len(roots)-1
+  roots.append(rid); identity_row=selected[source_pos] if selected else None; source_order=int(identity_row["source_order_index"]) if identity_row else len(roots)-1
   for horizon in a.horizons:
    receipt=build_horizon_receipt(rid,query,tokens,horizon); receipts.append(receipt)
-   item=row.to_dict(); item["horizon_id"]=horizon; item["stable_root_id_receipt"]=rid; item["source_order_index"]=source_order; out.append(item)
+   item=row.to_dict(); item["horizon_id"]=horizon; item["stable_root_id_receipt"]=rid; item["source_order_index"]=source_order
+   if identity_row:
+    item["raw_row_position"]=int(identity_row["raw_row_position"]); item["ground_truth_hash"]=identity_row["ground_truth_hash"]; item["identity_resolved_sha256"]=a.identity_resolved_sha256
+   out.append(item)
  validate_evidence_equated(receipts,a.horizons)
  if len(set(roots)) != a.count: raise SystemExit(f"HDR_NO_GO:only_{len(set(roots))}_nontruncated_roots")
  Path(a.output_parquet).parent.mkdir(parents=True,exist_ok=True); pd.DataFrame(out).to_parquet(a.output_parquet,index=False)

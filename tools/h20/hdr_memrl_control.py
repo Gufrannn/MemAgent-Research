@@ -243,7 +243,8 @@ def train_health(a):
     failures=validate_jsonl_chain(sync)
     if failures: raise HDRContractError(f"weight-sync ledger invalid: {failures}")
     relevant=[r for r in sync if int(r.get("global_step",-1))<=a.anchor]
-    if not relevant or any(r.get("status") not in (None,"PASS") for r in relevant):
+    post={int(r["global_step"]) for r in relevant if r.get("record_type")=="weight_sync_summary" and r.get("sync_kind")=="post_actor_update"}
+    if post!=set(range(1,a.anchor+1)) or any(r.get("status") not in (None,"PASS") for r in relevant):
         raise HDRContractError("missing or failed weight-sync evidence")
     report={"status":"PASS","decision":f"HDR_T{a.anchor}_TRAIN_HEALTH_PASS",
             "anchor":a.anchor,"git_commit":git("rev-parse","HEAD"),
@@ -293,12 +294,44 @@ def final_audit(a):
         failures += validate_jsonl_chain(sync)
         got={int(r["global_step"]) for r in sync if r.get("record_type")=="weight_sync_summary" and r.get("sync_kind")=="post_actor_update"}
         if got!=set(range(1,26)): failures.append(f"weight-sync steps mismatch: {sorted(got)}")
-    for name,decision in (("p0.json","HDR_P0_PASS"),("e0.json","HDR_E0_PASS"),("e1.json","HDR_E1_PASS"),("baseline_import.json","ORIGINAL_BASELINE_IMPORT_PASS"),("paper_review.json","PAPER_FRAMING_GO")):
+    for name,decision in (("p0.json","HDR_P0_PASS"),("e0.json","HDR_E0_PASS"),("e1.json","HDR_E1_PASS"),("baseline_import.json","ORIGINAL_BASELINE_IMPORT_PASS"),("paper_review.json","PAPER_FRAMING_GO"),("t5_train_health.json","HDR_T5_TRAIN_HEALTH_PASS")):
         p=root/"certificates"/name
         if not p.is_file() or load(p).get("decision")!=decision: failures.append(f"invalid gate {name}")
+    # Every locally produced certificate must be the unique payload committed
+    # to the append-only root ledger; a free-standing PASS JSON is insufficient.
+    baseline_path=root/"certificates/baseline_import.json"
+    if root_ledger.is_file():
+        type_for={"p0.json":"p0","e0.json":"e0","e1.json":"e1","baseline_import.json":"baseline_import","t5_train_health.json":"train_health"}
+        for name,record_type in type_for.items():
+            p=root/"certificates"/name
+            if not p.is_file(): continue
+            cert=load(p); hits=[r for r in rr if r.get("record_type")==record_type and all(r.get(k)==v for k,v in cert.items())]
+            if len(hits)!=1: failures.append(f"certificate/root-ledger binding mismatch: {name}")
+        review=root/"certificates/paper_review.json"; expected_review=os.environ.get("MEMAGENT_HDR_REVIEW_SHA256","")
+        if not HEX64.fullmatch(expected_review) or (review.is_file() and digest(review)!=expected_review): failures.append("paper review external SHA authority mismatch")
+        if baseline_path.is_file():
+            baseline=load(baseline_path); materialized=Path(baseline.get("materialized_metric_rows",""))
+            if set(baseline.get("canonical_metric_rows_sha256",{}))!={"I","Original5","Original10","Original15","Original20","Original25"}: failures.append("baseline canonical anchor closure mismatch")
+            if not materialized.is_file() or digest(materialized)!=baseline.get("materialized_metric_rows_sha256"): failures.append("baseline materialized rows SHA mismatch")
     for step in (5,10,15,20,25):
         p=root/"certificates"/f"t{step}_health.json"
-        if not p.is_file() or load(p).get("decision")!=f"HDR_T{step}_HEALTH_PASS": failures.append(f"missing anchor health {step}")
+        if not p.is_file() or load(p).get("decision")!=f"HDR_T{step}_HEALTH_PASS": failures.append(f"missing anchor health {step}"); continue
+        cert=load(p)
+        if root_ledger.is_file():
+            hits=[r for r in rr if r.get("record_type")=="audit" and r.get("anchor")==step and all(r.get(k)==v for k,v in cert.items())]
+            if len(hits)!=1: failures.append(f"anchor health/root-ledger binding mismatch {step}")
+        for field in ("checkpoint_binding_sha256","merge_receipt_sha256","method_s128_sha256","method_horizons_sha256","method_suite_sha256","method_receipts_sha256","stable_resolved_sha256","validation_parquet_sha256","baseline_import_sha256"):
+            if not HEX64.fullmatch(str(cert.get(field,""))): failures.append(f"anchor health missing input SHA {step}/{field}")
+        if cert.get("stable_resolved_sha256")!="6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411" or cert.get("validation_parquet_sha256")!="54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6": failures.append(f"anchor frozen S128 authority mismatch {step}")
+        if baseline_path.is_file() and digest(baseline_path)!=cert.get("baseline_import_sha256"): failures.append(f"anchor baseline import SHA mismatch {step}")
+        bp=output/f"global_step_{step}/hdr_checkpoint_binding.json"
+        if bp.is_file() and digest(bp)!=cert.get("checkpoint_binding_sha256"): failures.append(f"anchor checkpoint/health SHA mismatch {step}")
+        eval_root=root/"eval"
+        for path,field in ((eval_root/f"t{step}_merge_receipt.json","merge_receipt_sha256"),(eval_root/f"t{step}_s128_nominal.json","method_s128_sha256"),(eval_root/f"t{step}_horizons.json","method_horizons_sha256")):
+            if not path.is_file() or digest(path)!=cert.get(field): failures.append(f"anchor health input tamper {step}/{path.name}")
+        suite_root=root/"eval"
+        for path,field in ((suite_root/"fixed_s128_nominal_h8.parquet","method_suite_sha256"),(suite_root/"fixed_s128_nominal_receipts.json","method_receipts_sha256")):
+            if not path.is_file() or digest(path)!=cert.get(field): failures.append(f"anchor frozen suite tamper {step}/{path.name}")
     report={"status":"FAIL" if failures else "PASS","decision":"HDR_FINAL_AUDIT_FAIL" if failures else "HDR_FINAL_AUDIT_PASS","failures":failures,"git_commit":git("rev-parse","HEAD")}
     write_json(a.report,report); print(json.dumps(report,sort_keys=True))
     if failures: raise SystemExit(3)
@@ -319,7 +352,31 @@ def health_gate(a):
         p=Path(a.model_path)/item["path"]
         if not p.is_file() or digest(p)!=item["sha256"] or p.stat().st_size!=item["size"]: raise HDRContractError("merged model inventory tamper")
     if anchor not in baseline.get("recomputed_aggregates",{}): raise HDRContractError("baseline anchor absent")
-    method_rows=load(a.method_s128); method=aggregate_predictions(method_rows)
+    method_rows=load(a.method_s128)
+    if digest(a.stable_resolved)!="6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411": raise HDRContractError("health stable-S128 authority drift")
+    stable=load(a.stable_resolved); identity=stable.get("identity_payload",{}).get("rows",[])
+    if len(identity)!=128: raise HDRContractError("health stable-S128 denominator drift")
+    import pandas as pd
+    from recurrent.research.s128_hotpot_metrics import score_terminal_output
+    from recurrent.research.stable_eval_identity import canonical_sha256
+    raw=pd.read_parquet(a.validation_parquet); by_order={int(x["source_order_index"]):x for x in identity}
+    suite=pd.read_parquet(a.method_suite); suite_sha=digest(a.method_suite)
+    suite_by_order={int(r["source_order_index"]):r for _,r in suite.iterrows()}
+    receipt_rows=load(a.method_receipts); receipt_by_key={(str(x["root_id"]),int(x["horizon"])):x for x in receipt_rows}
+    if len(suite_by_order)!=128 or len(receipt_rows)!=128: raise HDRContractError("nominal suite/receipt fixed-S128 closure mismatch")
+    for row in method_rows:
+        order=int(row.get("source_order_index",-1)); ident=by_order.get(order); sr=suite_by_order.get(order)
+        if ident is None or sr is None or int(row.get("raw_row_position",-1))!=int(ident["raw_row_position"]) or int(sr["raw_row_position"])!=int(ident["raw_row_position"]): raise HDRContractError("method Stable-S128 row identity mismatch")
+        if row.get("identity_resolved_sha256")!=digest(a.stable_resolved) or row.get("suite_sha256")!=suite_sha or sr.get("identity_resolved_sha256")!=digest(a.stable_resolved): raise HDRContractError("method suite/identity SHA mismatch")
+        reward=raw.iloc[int(ident["raw_row_position"])]["reward_model"]
+        if isinstance(reward,str): reward=json.loads(reward)
+        truth=reward["ground_truth"]
+        if canonical_sha256(truth)!=ident["ground_truth_hash"] or row.get("gold")!=truth: raise HDRContractError("method fixed-S128 ground truth mismatch")
+        key=(str(row["root_id"]),int(row["horizon"])); expected_receipt=receipt_by_key.get(key)
+        if expected_receipt is None or row.get("receipt")!=expected_receipt: raise HDRContractError("method nominal receipt authority mismatch")
+        scored=score_terminal_output(row["prediction"],truth)
+        if any(abs(float(row[k])-float(scored[v]))>1e-12 for k,v in (("em","exact_match"),("token_f1","token_f1"),("format","format_success"))): raise HDRContractError("method metric recomputation mismatch")
+    method=aggregate_predictions(method_rows)
     if method["count"]!=128: raise HDRContractError("fixed-S128 method evaluation must contain exactly 128 unique rows")
     materialized=Path(baseline.get("materialized_metric_rows",""))
     if not materialized.is_file() or digest(materialized)!=baseline.get("materialized_metric_rows_sha256"): raise HDRContractError("materialized Original rows authority mismatch")
@@ -357,7 +414,7 @@ def health_gate(a):
         if float(heval["worst"]["token_f1"]) < float(uniform_eval["worst"]["token_f1"])+.02: failures.append("uniform_erm_worst_gain")
         if float(method["token_f1"]) < float(original["token_f1"])-.01: failures.append("t25_nominal_one_point_floor")
     prefix="HDR" if a.variant=="dro" else "UNIFORM"
-    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"paired_descriptive_method_minus_original":paired,"method_horizons":heval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"merge_receipt_sha256":digest(a.merge_receipt),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
+    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"paired_descriptive_method_minus_original":paired,"method_horizons":heval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"merge_receipt_sha256":digest(a.merge_receipt),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"method_suite_sha256":digest(a.method_suite),"method_receipts_sha256":digest(a.method_receipts),"stable_resolved_sha256":digest(a.stable_resolved),"validation_parquet_sha256":digest(a.validation_parquet),"baseline_import_sha256":digest(a.baseline_import),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
     write_json(a.output,report); append(a.ledger,{"record_type":"audit",**report})
     if failures: raise SystemExit(4)
 
@@ -370,7 +427,7 @@ def main():
     q=s.add_parser("train-health"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--output-root",required=True); q.add_argument("--weight-sync-ledger",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=train_health)
     q=s.add_parser("evaluate"); q.add_argument("--rows",required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.set_defaults(fn=ev)
     q=s.add_parser("final-audit"); q.add_argument("--run-root",required=True); q.add_argument("--output-root",required=True); q.add_argument("--report",required=True); q.set_defaults(fn=final_audit)
-    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--merge-receipt",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
+    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--merge-receipt",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--method-suite",required=True); q.add_argument("--method-receipts",required=True); q.add_argument("--stable-resolved",required=True); q.add_argument("--validation-parquet",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
     a=p.parse_args()
     try: a.fn(a)
     except HDRContractError as e: print(f"HDR_NO_GO:{e}",file=sys.stderr); raise SystemExit(2)
