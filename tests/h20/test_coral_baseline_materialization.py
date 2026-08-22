@@ -113,6 +113,18 @@ class CoralBaselineMaterializationTests(unittest.TestCase):
             manifest["evidence_authority"]["original_training"]["ledger_sha256"],
             "3bc94a6796d84ea1c297271f1d7cde0b38dc805293e3c7164b6cadeb31495d47",
         )
+        self.assertEqual(
+            manifest["evidence_authority"]["original_s128_curve"]
+            ["canonical_metric_row_digests"],
+            {
+                "I": "fd4c6763c8d8a6caa0389082f1fa838dc510d872b99e6283c1483c4427336c64",
+                "Original5": "58b01ad5e523ee8853c05af691a65948a0d905d22f2c6ffb0590484c5a38a30d",
+                "Original10": "bc5c29e7e6f163828758cb68dca1237f9d970af24217f60e272ba2945017b4a4",
+                "Original15": "3e8ae48f4a092ec136c568397037b9f270532bb0ab92a6b976c4de66c2c02b2f",
+                "Original20": "8a831d5d96c4f963f53a6a8d2c01a6a1414724a8a189a05f5a89c68d56494cd8",
+                "Original25": "4db791e409edeb269b56b1633b07c272ef04abf8b15da5c479a1e7822a93b2d6",
+            },
+        )
 
 
 if __name__ == "__main__":
