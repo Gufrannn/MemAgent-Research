@@ -24,11 +24,13 @@ def append(path, rec):
     append_jsonl(path,rec)
 def git(*a): return subprocess.check_output(["git","-C",str(ROOT),*a],text=True).strip()
 
-def assert_suite_row_identity(row, suite_row, identity_row):
+def assert_suite_row_identity(row, suite_row, identity_row, stable_resolved_sha256=None):
     if str(suite_row["stable_root_id_receipt"])!=str(row["root_id"]): raise HDRContractError("method Stable-S128 root/order permutation")
     if int(suite_row["horizon_id"])!=int(row["horizon"]): raise HDRContractError("method Stable-S128 horizon permutation")
     if row.get("stable_id")!=f"{row['root_id']}:h{row['horizon']}": raise HDRContractError("method Stable-S128 stable_id mismatch")
     if suite_row.get("ground_truth_hash")!=identity_row["ground_truth_hash"]: raise HDRContractError("method Stable-S128 ground-truth identity mismatch")
+    if int(suite_row.get("raw_row_position",-1))!=int(identity_row["raw_row_position"]): raise HDRContractError("method Stable-S128 raw-position permutation")
+    if stable_resolved_sha256 is not None and suite_row.get("identity_resolved_sha256")!=stable_resolved_sha256: raise HDRContractError("method Stable-S128 suite identity SHA mismatch")
 
 def manifest_checked(path):
     m=load(path)
@@ -373,7 +375,7 @@ def health_gate(a):
     for row in method_rows:
         order=int(row.get("source_order_index",-1)); ident=by_order.get(order); sr=suite_by_order.get(order)
         if ident is None or sr is None or int(row.get("raw_row_position",-1))!=int(ident["raw_row_position"]) or int(sr["raw_row_position"])!=int(ident["raw_row_position"]): raise HDRContractError("method Stable-S128 row identity mismatch")
-        assert_suite_row_identity(row,sr,ident)
+        assert_suite_row_identity(row,sr,ident,digest(a.stable_resolved))
         if row.get("identity_resolved_sha256")!=digest(a.stable_resolved) or row.get("suite_sha256")!=suite_sha or sr.get("identity_resolved_sha256")!=digest(a.stable_resolved): raise HDRContractError("method suite/identity SHA mismatch")
         reward=raw.iloc[int(ident["raw_row_position"])]["reward_model"]
         if isinstance(reward,str): reward=json.loads(reward)
@@ -410,9 +412,14 @@ def health_gate(a):
         order=int(row.get("source_order_index",-1)); ident=by_order.get(order)
         sr=horizon_suite_map.get((order,int(row["horizon"])))
         if ident is None or sr is None or int(row.get("raw_row_position",-1))!=int(ident["raw_row_position"]) or row.get("identity_resolved_sha256")!=digest(a.stable_resolved) or row.get("suite_sha256")!=horizon_suite_sha: raise HDRContractError("method horizon Stable-S128 identity mismatch")
-        assert_suite_row_identity(row,sr,ident)
+        assert_suite_row_identity(row,sr,ident,digest(a.stable_resolved))
         if row.get("receipt")!=horizon_receipt_map.get((str(row["root_id"]),int(row["horizon"]))): raise HDRContractError("method horizon receipt authority mismatch")
-        if "prediction" in row: row.update(prediction_metrics(str(row["prediction"]),str(row["gold"])))
+        reward=raw.iloc[int(ident["raw_row_position"])]["reward_model"]
+        if isinstance(reward,str): reward=json.loads(reward)
+        truth=reward["ground_truth"]
+        if canonical_sha256(truth)!=ident["ground_truth_hash"] or row.get("gold")!=truth: raise HDRContractError("method horizon ground truth mismatch")
+        if "prediction" in row:
+            scored=score_terminal_output(row["prediction"],truth); row.update(em=scored["exact_match"],token_f1=scored["token_f1"],format=scored["format_success"])
     heval=evaluate_horizons(hrows,a.nominal,a.unseen)
     method_by_order={int(x["source_order_index"]):x for x in method_rows}; original_by_order={int(x["source_order_index"]):x for x in authority_rows}
     paired={}

@@ -117,10 +117,22 @@ def test_runbook_trains_once_then_evaluates_all_anchors():
     assert text.index("HDR_TARGET_STEP=25") < text.index("baseline-import") < text.index("for HDR_ANCHOR")
 
 def test_health_rejects_authorized_root_swap_between_source_orders():
-    identity={"ground_truth_hash":"a"*64}
-    suite_row={"stable_root_id_receipt":"1"*64,"horizon_id":8,"ground_truth_hash":"a"*64}
+    identity={"ground_truth_hash":"a"*64,"raw_row_position":7}
+    suite_row={"stable_root_id_receipt":"1"*64,"horizon_id":8,"ground_truth_hash":"a"*64,"raw_row_position":7,"identity_resolved_sha256":"b"*64}
     honest={"root_id":"1"*64,"horizon":8,"stable_id":f"{'1'*64}:h8"}
-    assert_suite_row_identity(honest,suite_row,identity)
+    assert_suite_row_identity(honest,suite_row,identity,"b"*64)
     swapped={"root_id":"2"*64,"horizon":8,"stable_id":f"{'2'*64}:h8"}
     with pytest.raises(HDRContractError,match="root/order permutation"):
-        assert_suite_row_identity(swapped,suite_row,identity)
+        assert_suite_row_identity(swapped,suite_row,identity,"b"*64)
+
+def test_health_rejects_all_horizon_suite_raw_position_swap():
+    identity={"ground_truth_hash":"a"*64,"raw_row_position":7}
+    suite_row={"stable_root_id_receipt":"1"*64,"horizon_id":8,"ground_truth_hash":"a"*64,"raw_row_position":9,"identity_resolved_sha256":"b"*64}
+    row={"root_id":"1"*64,"horizon":8,"stable_id":f"{'1'*64}:h8"}
+    with pytest.raises(HDRContractError,match="raw-position permutation"):
+        assert_suite_row_identity(row,suite_row,identity,"b"*64)
+
+def test_all_horizon_metrics_use_frozen_ground_truth_not_row_gold():
+    text=(ROOT/"tools/h20/hdr_memrl_control.py").read_text()
+    assert 'row.get("gold")!=truth' in text
+    assert 'score_terminal_output(row["prediction"],truth)' in text
