@@ -17,6 +17,6 @@
   "gpu": {"count": 2, "dynamic_explicit_pair": true, "canonical_ascending": true,
     "lock_template": "locks/memagent_h20_gpu_N.lock"},
   "backend": {"rollout": "vllm", "strict": true, "hf_fallback": false},
-  "gates": {"e0_required": "RWWPO_E0_PASS", "e1_required": "RWWPO_E1_PASS",
+  "gates": {"e0_required": "RWWPO_E0_PASS", "original_actual_loss_e1": "OPTIONAL_DIAGNOSTIC_NOT_TRAINING_GATE",
     "t5_f1_noninferiority_floor": -0.02, "t25_f1_gain": 0.02, "five_anchor_mean_gain": 0.01}
 }

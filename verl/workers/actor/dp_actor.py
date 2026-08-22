@@ -440,6 +440,10 @@ class DataParallelPPOActor(BasePPOActor):
                         policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_loss_coef
+                    if not torch.isfinite(policy_loss):
+                        raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite policy loss")
+                    if not torch.isfinite(current_log_prob[response_mask]).all():
+                        raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite active-token log probability")
                     def build_global_stats(prefix_rows):
                         if torch.distributed.is_initialized():
                             gathered = [None] * torch.distributed.get_world_size()
@@ -468,6 +472,8 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss.backward()
                     snapshot = self._snapshot_local_optimizer_step() if rwwpo_enabled else None
                     grad_norm = self._optimizer_step()
+                    if not torch.isfinite(grad_norm):
+                        raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite gradient norm")
                     post_log_prob = current_log_prob.detach()
                     post_prefix_stats = global_prefix_stats
                     post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]

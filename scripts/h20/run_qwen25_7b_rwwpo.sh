@@ -2,9 +2,9 @@
 set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/rwwpo_common.sh"
-[[ ${RWWPO_PHASE:-} == t5 || ${RWWPO_PHASE:-} == continue ]] || { echo 'RWWPO_NO_GO:RWWPO_PHASE=t5|continue' >&2; exit 74; }
+[[ ${RWWPO_PHASE:-} == full || ${RWWPO_PHASE:-} == t5 || ${RWWPO_PHASE:-} == continue ]] || { echo 'RWWPO_NO_GO:RWWPO_PHASE=full|t5|continue' >&2; exit 74; }
 rwwpo_require_checkout
-PREFLIGHT=("$RWWPO_PYTHON" "$RWWPO_REPO_DIR/tools/h20/preflight_rwwpo.py" --manifest "$RWWPO_MANIFEST" --expected-commit "$RWWPO_EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$RWWPO_E0" --e1 "$RWWPO_E1" --baseline-import "$RWWPO_BASELINE" --original-resolved-manifest "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256" --phase "$RWWPO_PHASE")
+PREFLIGHT=("$RWWPO_PYTHON" "$RWWPO_REPO_DIR/tools/h20/preflight_rwwpo.py" --manifest "$RWWPO_MANIFEST" --expected-commit "$RWWPO_EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$RWWPO_E0" --baseline-import "$RWWPO_BASELINE" --original-resolved-manifest "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256" --phase "$RWWPO_PHASE")
 if [[ $RWWPO_PHASE == continue ]]; then
   [[ ${RWWPO_RESUME_STEP:-} =~ ^(5|10|15|20)$ ]] || { echo 'RWWPO_NO_GO:RWWPO_RESUME_STEP must be prior anchor' >&2; exit 75; }
   [[ ${RWWPO_TARGET_STEP:-} =~ ^(10|15|20|25)$ && $RWWPO_TARGET_STEP -gt $RWWPO_RESUME_STEP ]] || { echo 'RWWPO_NO_GO:invalid target anchor' >&2; exit 76; }
@@ -23,9 +23,10 @@ rwwpo_acquire_gpu_locks
 rwwpo_require_idle
 rwwpo_export_runtime
 mkdir -p "$(dirname "$RWWPO_LOG")"
-if [[ $RWWPO_PHASE == t5 ]]; then
+if [[ $RWWPO_PHASE == full || $RWWPO_PHASE == t5 ]]; then
   [[ ! -e $RWWPO_OUTPUT ]] || { echo 'RWWPO_NO_GO:T5 output exists; choose a new semantic run id' >&2; exit 77; }
-  PHASE=fresh FRESH_TOTAL_STEPS=5
+  PHASE=fresh
+  if [[ $RWWPO_PHASE == full ]]; then FRESH_TOTAL_STEPS=25; else FRESH_TOTAL_STEPS=5; fi
   EXTRA=()
   RWWPO_ATTEMPT_ID=${RWWPO_ATTEMPT_ID:-t5_primary}
 else

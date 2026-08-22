@@ -1,14 +1,14 @@
 # Paper I working draft — RWWPO
 
-**Scientific status (2026-08-22): PAPER-FRAMING GO; empirical GO remains conditional on E1.** Sequence-level and
+**Scientific status (2026-08-22): PAPER-FRAMING GO; empirical claims remain conditional on Method evidence.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
 GSsPO. “Use a joint ratio for a writer response” is therefore not a sufficient
 novelty claim. The viable residual is narrower and harder: a free-text writer
 action becomes the next observation, so the relevant change of measure is the
 *trajectory prefix of materialized state rewrites*, while the terminal answer is
 not a state transition and should retain the accepted Original token objective.
-The empirical program is GO only if E1 shows a recurrent-prefix collapse phenomenon that
-single-response GSPO/GSsPO and token diagnostics do not explain.
+The mechanism claim is retained only if Method actual-loss evidence shows a
+recurrent-prefix phenomenon beyond single-response and token diagnostics.
 
 ## Tentative title
 
@@ -34,12 +34,13 @@ merely proportional—to Original PPO; only higher-order update geometry changes
 RWWPO pairs this surrogate with per-turn prefix ESS, an absolute prefix-log-ratio
 cap, and chi-square certificates
 computed from the actual loss tensors. The empirical claim is deliberately
-conditional: on a frozen Qwen2.5-7B recurrent-memory workload, we will first test
-whether prefix collapse exists beyond token KL, clipping, and length. Only if
-that gate passes will same-budget fresh training compare RWWPO with Original,
-GSPO-style, sub-sequence, and matched-trust-region baselines at five checkpoints,
-followed by a variable-tracking stress test. Negative feasibility or training
-results are specified as falsification outcomes rather than hidden tuning.
+conditional. We train once from the same fresh Qwen2.5-7B base through T25,
+retain five checkpoints, and use the Method's actual-loss ledger to test whether
+prefix behavior adds information beyond token KL, clipping, and length. After
+training, all five checkpoints are evaluated under one frozen protocol and
+compared with the certified read-only Original curve and matched granularity
+ablations. A missing mechanism signal or negative training result is a
+falsification outcome rather than hidden tuning.
 
 ## 1. Introduction
 
@@ -111,13 +112,14 @@ set, and existing Capture32 evidence concerns a different same-candidate
 mechanism. Neither contains actual-loss current log-probabilities across PPO
 epochs. We therefore do not claim that RWWPO improves performance, or even that
 the target phenomenon occurs. E0 tests exact gradients, mask closure, and the
-disabled-path equivalence. E1 is a read-only feasibility study on frozen
-Original actual-loss tensors. If those tensors are unavailable, the only valid
-deliverable is a collection closure for a future Original-style audit—not a
-fabricated statistic and not a rerun of the accepted Original curve.
+disabled-path equivalence. Original actual-loss tensors do not exist and are not
+a main-experiment prerequisite. Prefix diagnostics are computed from the
+Method's own append-only on-policy actual-loss ledger. An independently
+authorized Original collection-only run may be reported as a finite diagnostic,
+but never as the certified Original baseline.
 
-If E1 passes, the empirical study starts both methods from the identical fresh
-Qwen2.5-7B base, enables RWWPO at update 1, and holds data order, rollout seeds,
+The empirical study starts Method from the same fresh Qwen2.5-7B base used by
+Original, enables RWWPO at update 1, and holds data order, rollout seeds,
 reward, tokenizer, effective batch, trajectory budget, and evaluation protocol
 fixed. We compare five anchors (T5/10/15/20/25), test joint-only and matched
 trust-region alternatives, and evaluate a small RULER Variable Tracking suite as
@@ -202,7 +204,7 @@ that token acceptance alone does not control prefix occupancy.
 materialized free-text state rewrite, (ii) cumulative recurrent writer-prefix
 ratio rather than response/sub-sequence ratio, (iii) asymmetric preservation of
 Original answer-token PPO, (iv) exact—not scaled—behavior-point writer gradient,
-and (v) actual-loss prefix ESS/chi-square identification. If E1 shows no
+and (v) actual-loss prefix ESS/chi-square identification. If Method ledgers show no
 incremental signal beyond GSPO/GSsPO, token KL, and length, status becomes NO-GO
 or MERGE into a broader structure-aware policy-optimization study.
 
@@ -213,8 +215,8 @@ or MERGE into a broader structure-aware policy-optimization study.
 | Artifact | Rows / curves | Columns / axes | Claim tested |
 |---|---|---|---|
 | E0 table | Original, RWWPO, RWWPO-off | loss, gradient max error, cosine, mask closure, finite difference | exact first order and off equivalence |
-| E1 frozen-ledger table | turns 1..T; length bins | ESS, chi-square, token KL, clipfrac, joint aperture | phenomenon exists beyond length/local diagnostics |
-| E1 predictive table | nested models | held-out collapse prediction / partial R² | prefix statistic adds information |
+| Method mechanism table | turns 1..T; length bins | ESS, chi-square, token KL, clipfrac, joint aperture | phenomenon exists beyond length/local diagnostics |
+| Method predictive table | held-out update groups | collapse prediction / partial R² | prefix statistic adds information |
 | Main curve | Original, RWWPO | S128 EM/F1/format at T0/5/10/15/20/25 | same-budget performance |
 | Mechanism curve | methods × anchors | ESS quantiles, saturation, writer grad, aperture | method active, not frozen |
 | Matched baselines | Original, GSPO-style, GSsPO/per-write, joint-only, token-KL matched | T5/T25 and mechanism | isolate recurrent prefix constraint |
@@ -232,17 +234,13 @@ three fresh seeds and an untouched confirmation run under separate authorization
   dtype-specific tolerance; closure of response = writer disjoint-union answer;
   RWWPO disabled follows byte-for-byte Original control flow and passes relevant
   regressions.
-- **E1 PASS:** actual-loss frozen Original ledger exists; prefix statistic is not
-  a pure length proxy; token KL/clip statistics do not completely predict prefix
-  collapse; nonzero feasible update aperture exists.
-- **T5 PASS:** infrastructure and ledger health; constraint not always saturated;
-  writer gradients nonzero; S128 token-F1 no worse than accepted Original-T5 by
-  more than 0.02.
+- **T5 health PASS:** finite loss/gradients, complete checkpoint, valid
+  append-only Method ledger and weight sync; no S128 pause is required.
 - **T25 success:** T25 F1 +0.02 and five-anchor mean +0.01, with no anchor worse
   than Original by more than 0.02.
-- **Immediate NO-GO:** E1 incremental signal absent; method stable only at
-  effectively zero writer step; missing actual-loss tensors presented as
-  evidence; second T5 failure after the one preregistered failure-class revision.
+- **Immediate NO-GO:** Method prefix diagnostics add no signal beyond local
+  diagnostics; method is stable only at effectively zero writer step; missing
+  tensors are presented as evidence; or a numeric/contract failure occurs.
 
 ## References / primary links reviewed
 

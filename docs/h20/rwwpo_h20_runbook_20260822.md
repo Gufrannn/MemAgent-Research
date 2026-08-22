@@ -2,12 +2,11 @@
 
 ## Scientific state
 
-`PAPER-FRAMING GO / PENDING_BASELINE_BUNDLE_MATERIALIZATION /
-PENDING_ACTUAL_LOSS_LEDGER`. The code is train-capable but the GPU
-entry is deliberately locked until independently generated E0 and frozen
-Original actual-loss E1 receipts both PASS. Existing Original S128 curve and
-Capture32 evidence do not contain the required current-policy loss tensors and
-cannot be used to manufacture E1.
+`PAPER-FRAMING GO / PENDING_BASELINE_BUNDLE_MATERIALIZATION`. Original
+actual-loss is an optional, separately authorized diagnostic and is not a Method
+training gate. The main experiment uses the existing read-only Original curve,
+starts Method once from the same fresh base, trains continuously through T25,
+and saves T5/T10/T15/T20/T25.
 
 ## Required checkout and immutable bindings
 
@@ -30,7 +29,7 @@ it is not a random UUID. Each physical card is locked independently at
 `locks/memagent_h20_gpu_N.lock`. Occupied cards or lock conflicts cause NO-GO;
 the scripts never kill a process.
 
-## Read-only baseline import, E0, and E1
+## Read-only baseline import and E0
 
 The unified read-only authority is
 `manifests/h20/rwwpo_original_evidence_authority_20260822.json`. The certified
@@ -48,9 +47,39 @@ aggregates. The importer copies no predictions.
 
 ```bash
 mkdir -p "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates"
+export RWWPO_CURVE_ROOT=/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821
+export RWWPO_CURVE_FINAL=$RWWPO_CURVE_ROOT/certificates/original_s128_curve_final_report.json
+export RWWPO_CURVE_RESOLVED=$RWWPO_CURVE_ROOT/certificates/p0_resolved_manifest.json
+export RWWPO_CURVE_LEDGER=$RWWPO_CURVE_ROOT/original_s128_curve_execution_ledger.jsonl
+export RWWPO_CURVE_FINAL_SHA256=$(sha256sum "$RWWPO_CURVE_FINAL" | awk '{print $1}')
+export RWWPO_CURVE_RESOLVED_SHA256=$(sha256sum "$RWWPO_CURVE_RESOLVED" | awk '{print $1}')
+export RWWPO_CURVE_LEDGER_SHA256=$(sha256sum "$RWWPO_CURVE_LEDGER" | awk '{print $1}')
+export RWWPO_CURVE_LEDGER_TAIL_SHA256=$(tail -n 1 "$RWWPO_CURVE_LEDGER" | sha256sum | awk '{print $1}')
+export RWWPO_BASELINE_ROOT=$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/baseline_materialization
+
+"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/materialize_rwwpo_baseline_bundle.py \
+  --final-report "$RWWPO_CURVE_FINAL" --final-report-sha256 "$RWWPO_CURVE_FINAL_SHA256" \
+  --resolved-manifest "$RWWPO_CURVE_RESOLVED" --resolved-sha256 "$RWWPO_CURVE_RESOLVED_SHA256" \
+  --execution-ledger "$RWWPO_CURVE_LEDGER" --ledger-sha256 "$RWWPO_CURVE_LEDGER_SHA256" \
+  --ledger-tail-sha256 "$RWWPO_CURVE_LEDGER_TAIL_SHA256" \
+  --validation "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --validation-sha256 54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6 \
+  --authority manifests/h20/rwwpo_original_evidence_authority_20260822.json \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" --output-root "$RWWPO_BASELINE_ROOT"
+
+export RWWPO_BASELINE_BUNDLE=$RWWPO_BASELINE_ROOT/baseline_bundle.json
+export RWWPO_BASELINE_BUNDLE_SHA256=$(sha256sum "$RWWPO_BASELINE_BUNDLE" | awk '{print $1}')
+export RWWPO_BASELINE_BUNDLE_AUDIT=$RWWPO_BASELINE_ROOT/bundle_audit.json
+"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_baseline_bundle.py \
+  --bundle "$RWWPO_BASELINE_BUNDLE" --bundle-sha256 "$RWWPO_BASELINE_BUNDLE_SHA256" \
+  --materialization-report "$RWWPO_BASELINE_ROOT/materialization_report.json" \
+  --final-report "$RWWPO_CURVE_FINAL" --resolved-manifest "$RWWPO_CURVE_RESOLVED" \
+  --authority manifests/h20/rwwpo_original_evidence_authority_20260822.json \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" --output "$RWWPO_BASELINE_BUNDLE_AUDIT"
+
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/import_rwwpo_original_baseline.py \
-  --bundle "$RWWPO_BASELINE_BUNDLE" \
-  --bundle-sha256 <AUTHORITY_PUBLISHED_BUNDLE_SHA256> \
+  --bundle "$RWWPO_BASELINE_BUNDLE" --bundle-sha256 "$RWWPO_BASELINE_BUNDLE_SHA256" \
+  --bundle-audit "$RWWPO_BASELINE_BUNDLE_AUDIT" \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/baseline_import.json"
 
@@ -58,17 +87,11 @@ mkdir -p "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates"
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/e0.json"
 
-"$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/run_rwwpo_e1.py \
-  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
-  --original-ledger "$RWWPO_ORIGINAL_LEDGER_RANK0" \
-  --original-ledger "$RWWPO_ORIGINAL_LEDGER_RANK1" \
-  --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/e1.json"
 ```
 
-If those Original actual-loss ledgers do not exist, stop at
-`PENDING_ACTUAL_LOSS_LEDGER`. A future collection-only Original audit may be run
-under separate authorization, but the certified Original curve must not be
-rerun.
+The importer requires an independently audited bundle receipt. Original
+actual-loss ledgers do not exist and are not required here. Never synthesize
+them or rerun the certified Original curve.
 
 The collection closure is already wired into the accepted trainer entry: set
 `RWWPO_COLLECT_ORIGINAL=1`, an absolute `RWWPO_LEDGER_DIR`, `RWWPO_Q_MIN`, and a
@@ -77,10 +100,10 @@ only appends actual-loss tensors; it is mutually exclusive with
 `RWWPO_ENABLE=1`. It is intentionally not invoked by this runbook because the
 accepted Original curve is read-only and no new collection run is authorized.
 
-## Fresh-base T5 and audit
+## One fresh-base Method run through T25
 
 ```bash
-RWWPO_PHASE=t5 bash scripts/h20/run_qwen25_7b_rwwpo.sh
+RWWPO_PHASE=full bash scripts/h20/run_qwen25_7b_rwwpo.sh
 
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_run.py \
   --run-root "$RWWPO_WORK_ROOT/logs/memory_agent/qwen25_7b_rwwpo_seed2026_${RWWPO_RUN_ID}" \
@@ -91,10 +114,10 @@ RWWPO_PHASE=t5 bash scripts/h20/run_qwen25_7b_rwwpo.sh
 ```
 
 Method starts at the same fresh Qwen2.5-7B base and RWWPO is enabled at update
-1. No Original step-3 checkpoint is accepted. Run the repository's frozen S128
-evaluator on Method-T5, recompute row metrics, and compare only to the imported
-certified Original-T5. Continue only when health and the `-0.02` token-F1
-non-inferiority gate pass.
+1. No Original checkpoint is accepted. Runtime finite-loss/gradient, ledger,
+checkpoint, and weight-sync assertions are the cheap T5 health gate. Unless a
+numeric or contract failure aborts the process, training continues without an
+S128 pause to T25 and retains all five anchors.
 
 The concrete fixed-S128 entry and read-only metric audit are:
 
@@ -117,11 +140,10 @@ RWWPO_EVAL_STEP=5 bash scripts/h20/run_rwwpo_s128_anchor.sh
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/t5_compare.json"
 ```
 
-## T10/T15/T20/T25 continuation
+## Legacy recovery-only continuation
 
-Repeat the following for `5→10`, `10→15`, `15→20`, and `20→25`; do not skip an
-anchor. Each resume verifies the complete prior checkpoint and reuses the same
-run identity and append-only ledgers.
+The commands below are recovery-only after an infrastructure interruption and
+require a new authorized attempt identity. They are not the default main run.
 
 ```bash
 RWWPO_PHASE=continue RWWPO_RESUME_STEP=5 RWWPO_TARGET_STEP=10 \
@@ -151,9 +173,9 @@ Original by more than `0.02`.
 - Do not overwrite, delete, or reuse failed outputs.
 
 Expected wall time is hardware- and queue-dependent. Based on the accepted
-two-H20 configuration, reserve roughly 1–2 hours for preflight/E0/E1 and T5
-health, then several hours per five-update continuation plus fixed-S128
-evaluation. These are planning estimates, not claims of a local H20 run.
+two-H20 configuration, reserve several hours for the continuous T25 training,
+then additional time for five fixed-S128 evaluations. These are planning
+estimates, not claims of a local H20 run.
 
 ## Final five-anchor audit
 

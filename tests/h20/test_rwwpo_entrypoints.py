@@ -1,5 +1,8 @@
 import hashlib, json, os, subprocess
 from pathlib import Path
+import pytest
+from tools.h20.materialize_rwwpo_baseline_bundle import authenticated_root,safe_file
+from tools.h20.audit_rwwpo_baseline_bundle import safe_file as audit_safe_file
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -51,3 +54,47 @@ def test_compare_rejects_forged_receipt(tmp_path):
     (tmp_path/"method.json").write_text(json.dumps(method)); (tmp_path/"base.json").write_text(json.dumps(base))
     result=run(ROOT/"tools/h20/compare_rwwpo_anchor.py","--method",tmp_path/"method.json","--baseline-import",tmp_path/"base.json","--step",5,"--expected-commit",head,"--output",tmp_path/"out.json")
     assert result.returncode != 0 and "receipt" in result.stderr
+
+def test_baseline_materializer_rejects_path_escape_and_symlink(tmp_path):
+    root=tmp_path/"source"; root.mkdir(); outside=tmp_path/"outside.json"; outside.write_text("{}")
+    with pytest.raises(ValueError,match="escape"):
+        safe_file(outside,root)
+    link=root/"terminal.jsonl"; link.symlink_to(outside)
+    with pytest.raises(ValueError,match="symlink"):
+        safe_file(link,root)
+
+def test_baseline_materializer_rejects_unauthorized_curve_root(tmp_path):
+    authority=tmp_path/"authority"; authority.mkdir()
+    outside=tmp_path/"outside"; outside.mkdir()
+    with pytest.raises(ValueError,match="unauthorized"):
+        authenticated_root(outside,[authority])
+
+def test_baseline_audit_rejects_dotdot_terminal_escape(tmp_path):
+    root=tmp_path/"authority"; (root/"terminal").mkdir(parents=True)
+    outside=tmp_path/"outside.jsonl"; outside.write_text("{}\n")
+    with pytest.raises(SystemExit,match="escape"):
+        audit_safe_file(root/"terminal"/".."/".."/"outside.jsonl",root)
+
+def test_full_launcher_is_single_fresh_t25_run():
+    text=(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh").read_text()
+    assert "RWWPO_PHASE == full" in text
+    assert "FRESH_TOTAL_STEPS=25" in text
+    assert "--e1" not in text.split("PREFLIGHT=",1)[1].split("if [[",1)[0]
+
+def test_importer_requires_independent_bundle_audit():
+    text=(ROOT/"tools/h20/import_rwwpo_original_baseline.py").read_text()
+    assert 'add_argument("--bundle-audit",required=True)' in text
+    assert "RWWPO_BASELINE_BUNDLE_AUDIT_PASS" in text
+    assert "authority_chain" in text
+
+def test_materializer_and_auditor_pin_repository_authority():
+    for name in ("materialize_rwwpo_baseline_bundle.py","audit_rwwpo_baseline_bundle.py"):
+        text=(ROOT/"tools/h20"/name).read_text()
+        assert "CANONICAL_AUTHORITY" in text
+        assert "noncanonical authority" in text
+
+def test_method_runtime_has_fail_closed_numeric_health_checks():
+    text=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
+    assert "non-finite policy loss" in text
+    assert "non-finite active-token log probability" in text
+    assert "non-finite gradient norm" in text
