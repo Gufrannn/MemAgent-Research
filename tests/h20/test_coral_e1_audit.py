@@ -33,7 +33,7 @@ def clone_oracle_report():
 
 def oracle_report():
     value = {
-        "schema": "memagent.coral.e1-fsdp-sketch-oracle.v3",
+        "schema": "memagent.coral.e1-fsdp-sketch-oracle.v4",
         "status": "PASS",
         "decision": "CORAL_E1_SKETCH_ORACLE_PASS",
         "world_size": 2,
@@ -55,6 +55,9 @@ def oracle_report():
         "two_rank_local_denominators": [5, 7],
         "denominator_gradient_closure_max_abs_error": 1e-8,
         "denominator_gradient_closure_aperture": 1e-6,
+        "ordinal_calibration_parameters": 64,
+        "ordinal_calibration_max_abs_error": 0.0,
+        "ordinal_calibration_error_aperture": 1e-12,
     }
     value["report_sha256"] = canonical_sha256(value)
     return value
@@ -161,7 +164,7 @@ class CoralE1AuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
                     validate_dataproto_clone_oracle_report(value)
 
-    def test_complete_v2_oracle_contract_and_forged_old_pass_rejection(self):
+    def test_complete_v4_oracle_contract_and_forged_old_pass_rejection(self):
         validate_fsdp_sketch_oracle_report(oracle_report())
         old_forged = {
             "status": "PASS",
@@ -204,6 +207,14 @@ class CoralE1AuditTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
             validate_fsdp_sketch_oracle_report(assembly_over_aperture)
+        ordinal_over_aperture = oracle_report()
+        ordinal_over_aperture["ordinal_calibration_max_abs_error"] = 1.01e-12
+        ordinal_over_aperture["report_sha256"] = canonical_sha256({
+            key: item for key, item in ordinal_over_aperture.items()
+            if key != "report_sha256"
+        })
+        with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
+            validate_fsdp_sketch_oracle_report(ordinal_over_aperture)
 
     def test_trainer_produced_root_cluster_evidence_passes(self):
         rows, proposal_mean, passed = validate_proposal(proposal(1), 1, COMMIT)

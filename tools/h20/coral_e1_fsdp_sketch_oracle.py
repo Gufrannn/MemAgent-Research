@@ -22,7 +22,9 @@ def main():
     import torch
     import torch.distributed as dist
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-    from recurrent.research.coral_e1 import fixed_count_sketch
+    from recurrent.research.coral_e1 import (
+        SKETCH_SPEC, fixed_count_sketch, sketch_bucket_and_sign,
+    )
 
     dist.init_process_group("nccl")
     rank = dist.get_rank()
@@ -142,6 +144,35 @@ def main():
         dense_projected_norm - dense_exact_norm
     ) / max(dense_exact_norm, 1e-30)
 
+    # Exercise real-model parameter ordinals.  The tiny FSDP module above has
+    # only one flat parameter and therefore cannot detect Python-int products
+    # that overflow when converted to a signed-int64 tensor offset.
+    ordinal_parameters = 64
+    ordinal_named_gradients = []
+    ordinal_values = []
+    for ordinal in range(ordinal_parameters):
+        holder = DenseHolder()
+        value = float(1 + ordinal + rank * ordinal_parameters)
+        holder.grad = torch.tensor([value], device=device, dtype=torch.float64)
+        ordinal_named_gradients.append((f"ordinal_probe_{ordinal:03d}", holder))
+        ordinal_values.append(value)
+    ordinal_sketch, _ = fixed_count_sketch(
+        ordinal_named_gradients, rank, world,
+    )
+    ordinal_reference = torch.zeros_like(ordinal_sketch)
+    for ordinal, value in enumerate(ordinal_values):
+        for basis in range(SKETCH_SPEC["independent_bases"]):
+            bucket, sign = sketch_bucket_and_sign(0, ordinal, rank, basis)
+            ordinal_reference[
+                basis * SKETCH_SPEC["buckets_per_basis"] + bucket
+            ] += value * sign
+    ordinal_reference.div_(math.sqrt(SKETCH_SPEC["independent_bases"]))
+    dist.all_reduce(ordinal_sketch, op=dist.ReduceOp.SUM)
+    dist.all_reduce(ordinal_reference, op=dist.ReduceOp.SUM)
+    ordinal_calibration_max_abs_error = float(
+        (ordinal_sketch - ordinal_reference).abs().max().item()
+    )
+
     if rank == 0:
         reference = torch.nn.Linear(17, 13, bias=False, device=device)
         with torch.no_grad():
@@ -181,9 +212,10 @@ def main():
             and projection_relative_norm_error <= 0.10
             and dense_projection_relative_norm_error <= 0.10
             and denominator_closure_error <= 1e-6
+            and ordinal_calibration_max_abs_error <= 1e-12
         )
         report = {
-            "schema": "memagent.coral.e1-fsdp-sketch-oracle.v3",
+            "schema": "memagent.coral.e1-fsdp-sketch-oracle.v4",
             "status": "PASS" if passed else "FAIL",
             "decision": "CORAL_E1_SKETCH_ORACLE_PASS" if passed
                         else "CORAL_E1_SKETCH_ORACLE_NO_GO",
@@ -207,6 +239,9 @@ def main():
             "two_rank_local_denominators": [5, 7],
             "denominator_gradient_closure_max_abs_error": denominator_closure_error,
             "denominator_gradient_closure_aperture": 1e-6,
+            "ordinal_calibration_parameters": ordinal_parameters,
+            "ordinal_calibration_max_abs_error": ordinal_calibration_max_abs_error,
+            "ordinal_calibration_error_aperture": 1e-12,
         }
         report["report_sha256"] = canonical_sha256(report)
         output = Path(args.output)

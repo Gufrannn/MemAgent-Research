@@ -177,11 +177,15 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("validate_dataproto_clone_oracle_report",sealer)
         self.assertIn("coral_e1_fsdp_sketch_oracle.py",entry)
         self.assertIn("torch.distributed.run",entry)
+        sketch_oracle=(ROOT/"tools/h20/coral_e1_fsdp_sketch_oracle.py").read_text()
+        self.assertIn("memagent.coral.e1-fsdp-sketch-oracle.v4",sketch_oracle)
+        self.assertIn("ordinal_parameters = 64",sketch_oracle)
+        self.assertIn("ordinal_calibration_max_abs_error",sketch_oracle)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
-        self.assertIn("coral_e1_seed2026_v8",entry)
+        self.assertIn("coral_e1_seed2026_v9",entry)
         self.assertIn(
-            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7",
+            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8",
             entry,
         )
         self.assertIn("_coral_e1_resample_terminal",trainer)
@@ -193,7 +197,7 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertNotIn("MEASUREMENT_ROOT",entry)
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
-        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v8",runbook)
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v9",runbook)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
         clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
         self.assertIn("sys.path.insert(0, str(ROOT))",clone_oracle)

@@ -12,8 +12,21 @@ except ModuleNotFoundError:
 class CoralPureContractTests(unittest.TestCase):
     def test_count_sketch_bases_have_distinct_collision_and_sign_maps(self):
         from recurrent.research.coral_e1 import (
-            SKETCH_SPEC, sketch_bucket_and_sign,
+            SKETCH_SPEC, sketch_bucket_and_sign, sketch_coordinate_offset,
         )
+        mask = (1 << 63) - 1
+        for ordinal in (0, 7, 63, 10_000):
+            for rank in range(2):
+                for basis in range(4):
+                    offset = sketch_coordinate_offset(ordinal, rank, basis)
+                    expected = (
+                        ordinal * SKETCH_SPEC["parameter_multiplier"]
+                        + rank * SKETCH_SPEC["rank_multiplier"]
+                        + basis * SKETCH_SPEC["basis_multiplier"]
+                    ) & mask
+                    self.assertEqual(offset, expected)
+                    self.assertGreaterEqual(offset, 0)
+                    self.assertLessEqual(offset, mask)
         coordinates = range(10000)
         mappings = [
             [sketch_bucket_and_sign(i, i % 17, i % 2, basis)

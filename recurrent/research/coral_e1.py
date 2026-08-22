@@ -47,7 +47,9 @@ ORACLE_REPORT_FIELDS = {
     "collision_calibration_relative_norm_error",
     "collision_calibration_error_aperture", "two_rank_local_denominators",
     "denominator_gradient_closure_max_abs_error",
-    "denominator_gradient_closure_aperture", "report_sha256",
+    "denominator_gradient_closure_aperture",
+    "ordinal_calibration_parameters", "ordinal_calibration_max_abs_error",
+    "ordinal_calibration_error_aperture", "report_sha256",
 }
 
 DATAPROTO_CLONE_ORACLE_FIELDS = {
@@ -68,12 +70,12 @@ def _finite_number(value, field: str, low: float = 0.0) -> float:
 
 
 def validate_fsdp_sketch_oracle_report(report) -> None:
-    """Strictly validate the complete two-rank v3 oracle contract."""
+    """Strictly validate the complete two-rank v4 oracle contract."""
     if not isinstance(report, dict) or set(report) != ORACLE_REPORT_FIELDS:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle fields")
     unsigned = {key: value for key, value in report.items()
                 if key != "report_sha256"}
-    if report["schema"] != "memagent.coral.e1-fsdp-sketch-oracle.v3" \
+    if report["schema"] != "memagent.coral.e1-fsdp-sketch-oracle.v4" \
             or report["status"] != "PASS" \
             or report["decision"] != "CORAL_E1_SKETCH_ORACLE_PASS" \
             or type(report["world_size"]) is not int \
@@ -87,6 +89,7 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
         "padded_shard_elements": 222,
         "collision_calibration_elements": 1_000_003,
         "collision_calibration_buckets_per_basis": 256,
+        "ordinal_calibration_parameters": 64,
     }
     if any(type(report[field]) is not int or report[field] != expected
            for field, expected in integer_contract.items()):
@@ -98,7 +101,8 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
             or report["projection_error_aperture"] != 0.10 \
             or report["collision_calibration_error_aperture"] != 0.10 \
             or report["sketch_assembly_aperture"] != 1e-7 \
-            or report["denominator_gradient_closure_aperture"] != 1e-6:
+            or report["denominator_gradient_closure_aperture"] != 1e-6 \
+            or report["ordinal_calibration_error_aperture"] != 1e-12:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle aperture drift")
     full_error = _finite_number(
         report["full_gradient_max_abs_error"], "full_gradient_max_abs_error",
@@ -125,10 +129,15 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
         report["denominator_gradient_closure_max_abs_error"],
         "denominator_gradient_closure_max_abs_error",
     )
+    ordinal_error = _finite_number(
+        report["ordinal_calibration_max_abs_error"],
+        "ordinal_calibration_max_abs_error",
+    )
     if full_error > 2e-5 or assembly_error > report["sketch_assembly_aperture"] \
             or projection_error > report["projection_error_aperture"] \
             or dense_error > report["collision_calibration_error_aperture"] \
-            or denominator_error > report["denominator_gradient_closure_aperture"]:
+            or denominator_error > report["denominator_gradient_closure_aperture"] \
+            or ordinal_error > report["ordinal_calibration_error_aperture"]:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle error aperture")
     # Recompute the reported dense relative error instead of trusting both the
     # projected/exact norms and their derived summary independently.
@@ -165,15 +174,20 @@ def validate_dataproto_clone_oracle_report(report) -> None:
         raise ValueError("CORAL_E1_NO_GO: DataProto clone oracle identity")
 
 
-def sketch_bucket_and_sign(index: int, ordinal: int, rank: int, basis: int):
-    """Pure reference for the nonlinear basis-separated coordinate hash."""
+def sketch_coordinate_offset(ordinal: int, rank: int, basis: int) -> int:
+    """Return the signed-int64-safe offset for the fixed mod-2^63 map."""
     mask = (1 << 63) - 1
-    mixed = (
-        int(index)
-        + int(ordinal) * SKETCH_SPEC["parameter_multiplier"]
+    return (
+        int(ordinal) * SKETCH_SPEC["parameter_multiplier"]
         + int(rank) * SKETCH_SPEC["rank_multiplier"]
         + int(basis) * SKETCH_SPEC["basis_multiplier"]
     ) & mask
+
+
+def sketch_bucket_and_sign(index: int, ordinal: int, rank: int, basis: int):
+    """Pure reference for the nonlinear basis-separated coordinate hash."""
+    mask = (1 << 63) - 1
+    mixed = (int(index) + sketch_coordinate_offset(ordinal, rank, basis)) & mask
     mixed = ((mixed ^ (mixed >> 30)) * SKETCH_SPEC["mixer_multiplier_1"]) & mask
     mixed = ((mixed ^ (mixed >> 27)) * SKETCH_SPEC["mixer_multiplier_2"]) & mask
     mixed = (mixed ^ (mixed >> 31)) & mask
@@ -218,12 +232,13 @@ def fixed_count_sketch(named_gradients: Iterable[tuple[str, object]], rank: int,
                 start, start + values.numel(), device=values.device, dtype=torch.int64,
             )
             for basis in range(SKETCH_SPEC["independent_bases"]):
-                mixed = (
-                    indices
-                    + ordinal * SKETCH_SPEC["parameter_multiplier"]
-                    + rank * SKETCH_SPEC["rank_multiplier"]
-                    + basis * SKETCH_SPEC["basis_multiplier"]
-                ) & modulus_mask
+                # Reduce the Python-integer product before tensor addition.
+                # The model has enough named parameters for ordinal * multiplier
+                # to exceed signed int64, while the fixed map itself is mod 2^63.
+                coordinate_offset = sketch_coordinate_offset(
+                    ordinal, rank, basis,
+                )
+                mixed = (indices + coordinate_offset) & modulus_mask
                 mixed = ((mixed ^ (mixed >> 30))
                          * SKETCH_SPEC["mixer_multiplier_1"]) & modulus_mask
                 mixed = ((mixed ^ (mixed >> 27))
