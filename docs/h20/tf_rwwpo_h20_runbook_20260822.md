@@ -25,11 +25,14 @@ export RWWPO_RUN_ID='tf_rwwpo_seed2026_primary_<SHORT_SHA>'
 export RWWPO_PHASE=full
 export RWWPO_ATTEMPT_ID=tf_rwwpo_primary
 export RWWPO_MANIFEST="$RWWPO_REPO_DIR/manifests/h20/qwen25_7b_tf_rwwpo_seed2026.json"
+export RWWPO_OBJECTIVE_VARIANT=whole_prefix
+export RWWPO_CONTROLLER_VARIANT=feasible_backtracking
 
 export RWWPO_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json
 export RWWPO_ORIGINAL_RESOLVED_SHA256="$(sha256sum "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" | awk '{print $1}')"
 
 source scripts/h20/rwwpo_common.sh
+test "$RWWPO_OUTPUT" = "$RWWPO_WORK_ROOT/logs/memory_agent/qwen25_7b_rwwpo_whole_prefix_feasible_backtracking_seed2026_${RWWPO_RUN_ID}"
 ```
 
 Materialize new commit-bound E0 and baseline receipts from authenticated

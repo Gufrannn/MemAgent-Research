@@ -157,6 +157,13 @@ def test_tf_launcher_pins_new_branch_and_controller():
     assert "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822" in text
     assert "RWWPO_CONTROLLER_VARIANT=feasible_backtracking" in text
 
+def test_tf_runbook_exports_variant_before_common_and_pins_same_output_root():
+    text=(ROOT/"docs/h20/tf_rwwpo_h20_runbook_20260822.md").read_text()
+    source=text.index("source scripts/h20/rwwpo_common.sh")
+    assert text.index("export RWWPO_OBJECTIVE_VARIANT=whole_prefix") < source
+    assert text.index("export RWWPO_CONTROLLER_VARIANT=feasible_backtracking") < source
+    assert "qwen25_7b_rwwpo_whole_prefix_feasible_backtracking_seed2026_" in text
+
 def test_tf_manifest_freezes_grid_constraint_and_t25_chain():
     row=json.loads((ROOT/"manifests/h20/qwen25_7b_tf_rwwpo_seed2026.json").read_text())
     assert row["method"]["q_min"]==0.5
