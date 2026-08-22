@@ -1908,21 +1908,36 @@ class RayPPOTrainer:
                                 gen_batch_output.batch["responses"].device
                             )
                             if "rollout_trajectory_seed" in batch.non_tensor_batch:
+                                from recurrent.research.actor_batch import align_recurrent_turn_identities
+
                                 source_seeds = np.asarray(
                                     batch.non_tensor_batch["rollout_trajectory_seed"], dtype=np.uint64
                                 )
-                                gen_batch_output.non_tensor_batch["trajectory_seed"] = source_seeds[source_rows]
+                                identity_columns = align_recurrent_turn_identities(
+                                    source_rows=source_rows,
+                                    source_uids=source_uids,
+                                    dataset_indices=dataset_indices,
+                                    trajectory_seeds=source_seeds,
+                                )
+                                gen_batch_output.non_tensor_batch.update(identity_columns)
+                                source_example_ids = np.asarray(
+                                    identity_columns["stable_example_id"], dtype=object
+                                )
                                 source_trajectory_ids = np.asarray(
-                                    [f"{uid}:{int(seed)}" for uid, seed in zip(source_uids, source_seeds)],
-                                    dtype=object,
+                                    identity_columns["trajectory_id"], dtype=object
                                 )
                             else:
+                                # RWWPO release manifests require independent trajectory seeds.  Keep
+                                # the legacy path usable for Original while still aligning its grouping
+                                # label; it cannot satisfy the RWWPO stable-identity gate below.
+                                gen_batch_output.non_tensor_batch["uid"] = source_uids[source_rows]
+                                source_example_ids = None
                                 source_trajectory_ids = np.asarray(
                                     [f"{uid}:{row}" for row, uid in enumerate(source_uids)], dtype=object
                                 )
-                            gen_batch_output.non_tensor_batch["trajectory_id"] = source_trajectory_ids[
-                                source_rows
-                            ]
+                                gen_batch_output.non_tensor_batch["trajectory_id"] = source_trajectory_ids[
+                                    source_rows
+                                ]
                             if "trajectory_turn" in gen_batch_output.batch:
                                 request_seeds = np.asarray(
                                     gen_batch_output.non_tensor_batch["request_seed"], dtype=np.uint64
@@ -1942,6 +1957,8 @@ class RayPPOTrainer:
                                         "replica": replica,
                                         "turn": int(turns[output_row]),
                                         "uid": str(source_uids[source_row]),
+                                        "stable_example_id": str(source_example_ids[output_row]),
+                                        "trajectory_id": str(source_trajectory_ids[output_row]),
                                         "trajectory_seed": int(source_seeds[source_row]),
                                         "dataset_index": int(dataset_indices[source_row]),
                                         "request_seed": int(request_seeds[output_row]),
@@ -2220,19 +2237,23 @@ class RayPPOTrainer:
                                 batch.batch["rwwpo_global_step"] = torch.full(
                                     (len(batch),), int(self.global_steps), dtype=torch.long,
                                     device=batch.batch["responses"].device)
-                                import hashlib
-                                def stable_int64(value):
-                                    raw=hashlib.sha256(str(value).encode()).digest()[:8]
-                                    return int.from_bytes(raw,"big",signed=False) & ((1 << 63) - 1)
+                                from recurrent.research.actor_batch import stable_identity_int64
                                 trajectory_ids=batch.non_tensor_batch.get("trajectory_id")
-                                uids=batch.non_tensor_batch.get("uid")
-                                if trajectory_ids is None or uids is None or len(trajectory_ids)!=len(batch) or len(uids)!=len(batch):
-                                    raise RuntimeError("RWWPO_STABLE_IDENTITY_MISSING")
+                                example_ids=batch.non_tensor_batch.get("stable_example_id")
+                                missing=[]
+                                if trajectory_ids is None or len(trajectory_ids)!=len(batch):
+                                    missing.append("trajectory_id")
+                                if example_ids is None or len(example_ids)!=len(batch):
+                                    missing.append("stable_example_id")
+                                if missing:
+                                    raise RuntimeError(
+                                        "RWWPO_STABLE_IDENTITY_MISSING:" + ",".join(missing)
+                                    )
                                 device=batch.batch["responses"].device
                                 batch.batch["rwwpo_example_identity_hash"] = torch.tensor(
-                                    [stable_int64(value) for value in uids],dtype=torch.long,device=device)
+                                    [stable_identity_int64(value) for value in example_ids],dtype=torch.long,device=device)
                                 batch.batch["rwwpo_trajectory_identity_hash"] = torch.tensor(
-                                    [stable_int64(value) for value in trajectory_ids],dtype=torch.long,device=device)
+                                    [stable_identity_int64(value) for value in trajectory_ids],dtype=torch.long,device=device)
                             eval_identity_config = self.config.trainer.get("eval_identity", None)
                             if eval_identity_config is not None and bool(
                                 eval_identity_config.get("enabled", False)

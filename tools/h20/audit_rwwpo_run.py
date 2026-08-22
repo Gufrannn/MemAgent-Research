@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.h20.audit_rwwpo_actual_loss import audit
 from recurrent.research.gate_a_execution import validate_jsonl_chain,checkpoint_inventory
+from recurrent.research.actor_batch import stable_identity_int64
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--run-root",required=True); p.add_argument("--actual-ledger-dir",required=True); p.add_argument("--execution-ledger",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--expected-schema-version",required=True); p.add_argument("--expected-objective",required=True); p.add_argument("--expected-controller",required=True); p.add_argument("--target-step",type=int,required=True); p.add_argument("--output",required=True); a=p.parse_args()
@@ -21,6 +22,32 @@ def main():
     actual_rows=[]
     for ledger in ledgers:
         actual_rows.extend(json.loads(line) for line in ledger.read_text().splitlines() if line.strip())
+    seed_path=Path(a.run_root)/"rollout_seed_audit.jsonl"
+    if not seed_path.is_file(): raise SystemExit("RWWPO_AUDIT_NO_GO:stable rollout identity ledger")
+    seed_rows=[json.loads(line) for line in seed_path.read_text().splitlines() if line.strip()]
+    turn_identity={}
+    for row in seed_rows:
+        if row.get("record_type")!="trajectory_turn_seed": continue
+        try:
+            key=(int(row["global_step"]),int(row["sample_index"]),int(row["turn"]))
+            example_id=str(row["stable_example_id"]); trajectory_id=str(row["trajectory_id"])
+            expected_example=f"frozen_train_row:{int(row['dataset_index'])}"
+            expected_trajectory=f"{expected_example}:seed:{int(row['trajectory_seed'])}"
+        except (KeyError,TypeError,ValueError):
+            raise SystemExit("RWWPO_AUDIT_NO_GO:malformed stable rollout identity")
+        if example_id!=expected_example or trajectory_id!=expected_trajectory:
+            raise SystemExit("RWWPO_AUDIT_NO_GO:non-reconstructible stable rollout identity")
+        if key in turn_identity: raise SystemExit("RWWPO_AUDIT_NO_GO:duplicate stable rollout identity")
+        turn_identity[key]=(stable_identity_int64(example_id),stable_identity_int64(trajectory_id))
+    if not turn_identity: raise SystemExit("RWWPO_AUDIT_NO_GO:empty stable rollout identity ledger")
+    for actual_row in actual_rows:
+        step=int(actual_row["global_step"])
+        columns=zip(actual_row["sample_index"],actual_row["trajectory_turn"],
+                    actual_row["example_identity_hash"],actual_row["trajectory_identity_hash"])
+        for sample_index,turn,example_hash,trajectory_hash in columns:
+            expected=turn_identity.get((step,int(sample_index),int(turn)))
+            if expected is None or expected!=(int(example_hash),int(trajectory_hash)):
+                raise SystemExit("RWWPO_AUDIT_NO_GO:actual/stable rollout identity mismatch")
     actual_identities={(row["attempt_id"],int(row["rank"]),int(row["global_step"]),int(row["epoch"]),int(row["minibatch"])):row for row in actual_rows}
     markers=sorted(Path(a.actual_ledger_dir).glob("transaction_rank*.jsonl"))
     if len(markers)!=2: raise SystemExit("RWWPO_AUDIT_NO_GO:transaction marker ranks")
@@ -85,7 +112,7 @@ def main():
     elif not transactional:
         target_actual=actual["steps"].get(str(a.target_step),{})
         if target_actual.get("accepted_fraction",0) <= 0 or target_actual.get("max_proposed_update",0) <= 1e-10: raise SystemExit("RWWPO_AUDIT_NO_GO:target-step acceptance/aperture")
-    report={"status":"PASS","decision":f"RWWPO_T{a.target_step}_HEALTH_PASS","git_commit":a.expected_commit,"target_step":a.target_step,"checkpoint":str(ck.resolve()),"actual_loss":actual,"execution_ledger_sha256":hashlib.sha256(Path(a.execution_ledger).read_bytes()).hexdigest()}
+    report={"status":"PASS","decision":f"RWWPO_T{a.target_step}_HEALTH_PASS","git_commit":a.expected_commit,"target_step":a.target_step,"checkpoint":str(ck.resolve()),"actual_loss":actual,"execution_ledger_sha256":hashlib.sha256(Path(a.execution_ledger).read_bytes()).hexdigest(),"rollout_seed_audit_sha256":hashlib.sha256(seed_path.read_bytes()).hexdigest()}
     report["report_sha256"]=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     Path(a.output).parent.mkdir(parents=True,exist_ok=True); Path(a.output).write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
 if __name__=="__main__": main()

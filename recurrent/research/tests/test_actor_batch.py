@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 import torch
 
-from recurrent.research.actor_batch import build_actor_batch_plan, validate_active_actor_batch
+from recurrent.research.actor_batch import (
+    align_recurrent_turn_identities,
+    build_actor_batch_plan,
+    stable_identity_int64,
+    validate_active_actor_batch,
+)
 from recurrent.utils import graceful_padding, indexing_proto, td_split
 from verl import DataProto
 
@@ -94,3 +99,32 @@ def test_trajectory_identity_fields_remain_aligned_after_reorder():
     assert reordered.batch["responses"].squeeze(-1).tolist() == [30, 10, 20]
     assert reordered.non_tensor_batch["trajectory_seed"].tolist() == [102, 100, 101]
     assert reordered.non_tensor_batch["trajectory_id"].tolist() == ["c", "a", "b"]
+
+
+def test_rollout_turn_identity_alignment_never_uses_random_uid_as_audit_identity():
+    columns = align_recurrent_turn_identities(
+        source_rows=np.asarray([0, 1, 0, 1]),
+        source_uids=np.asarray(["random-uuid-a", "random-uuid-b"], dtype=object),
+        dataset_indices=np.asarray([17, 29]),
+        trajectory_seeds=np.asarray([101, 202], dtype=np.uint64),
+    )
+    assert columns["uid"].tolist() == ["random-uuid-a", "random-uuid-b"] * 2
+    assert columns["stable_example_id"].tolist() == [
+        "frozen_train_row:17", "frozen_train_row:29",
+        "frozen_train_row:17", "frozen_train_row:29",
+    ]
+    assert columns["trajectory_id"].tolist() == [
+        "frozen_train_row:17:seed:101", "frozen_train_row:29:seed:202",
+        "frozen_train_row:17:seed:101", "frozen_train_row:29:seed:202",
+    ]
+    assert all("random-uuid" not in value for value in columns["trajectory_id"])
+    assert stable_identity_int64(columns["stable_example_id"][0]) == stable_identity_int64(
+        "frozen_train_row:17"
+    )
+
+
+def test_rollout_turn_identity_alignment_rejects_missing_source_column():
+    with pytest.raises(ValueError, match="not row aligned"):
+        align_recurrent_turn_identities(
+            source_rows=[0], source_uids=["u"], dataset_indices=[], trajectory_seeds=[1]
+        )

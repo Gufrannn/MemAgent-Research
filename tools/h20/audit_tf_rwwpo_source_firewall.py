@@ -22,6 +22,18 @@ def main():
     if method["q_min"]!=0.5: violations.append("q_min drift")
     if method["alpha_grid"]!=[1.0,0.5,0.25,0.125,0.0625,0.03125]: violations.append("alpha grid drift")
     if manifest["training"]["target_steps"]!=[5,10,15,20,25]: violations.append("anchor drift")
+    trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text(encoding="utf-8")
+    try:
+        example_hash=trainer.split(
+            'batch.batch["rwwpo_example_identity_hash"] = torch.tensor(',1
+        )[1].split('batch.batch["rwwpo_trajectory_identity_hash"]',1)[0]
+    except IndexError:
+        violations.append("missing RWWPO identity hash control flow")
+    else:
+        if "stable_identity_int64(value) for value in example_ids" not in example_hash or "for value in uids" in example_hash:
+            violations.append("ephemeral UUID used as RWWPO audit identity")
+    if 'gen_batch_output.non_tensor_batch.update(identity_columns)' not in trainer:
+        violations.append("recurrent turn identity columns are not attached")
     if violations: raise SystemExit("TF_RWWPO_SOURCE_FIREWALL_NO_GO:"+",".join(violations))
     print(json.dumps({"status":"PASS","decision":"TF_RWWPO_SOURCE_FIREWALL_PASS"},sort_keys=True))
 

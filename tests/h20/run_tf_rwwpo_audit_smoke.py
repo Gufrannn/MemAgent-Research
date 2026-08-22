@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from tools.h20.audit_rwwpo_actual_loss import audit
+from recurrent.research.actor_batch import stable_identity_int64
 from recurrent.research.gate_a_execution import append_jsonl, checkpoint_inventory
 
 
@@ -37,8 +38,10 @@ def make_row(rank):
         "old_log_prob":[[0.0]],"current_log_prob":[[0.0]],
         "proposed_post_log_prob":[[value]],"committed_log_prob":[[value]],
         "response_mask":[[1.0]],"writer_mask":[[1.0]],"answer_mask":[[0.0]],
-        "trajectory_turn":[0],"sample_index":[rank],"example_identity_hash":[100+rank],
-        "trajectory_identity_hash":[200+rank],"advantages":[[1.0]],"denominator":1,
+        "trajectory_turn":[0],"sample_index":[rank],
+        "example_identity_hash":[stable_identity_int64(f"frozen_train_row:{17+rank}")],
+        "trajectory_identity_hash":[stable_identity_int64(f"frozen_train_row:{17+rank}:seed:{101+rank}")],
+        "advantages":[[1.0]],"denominator":1,
         "prefix_rows":[prefix],"prefix_stats":[pre],"post_prefix_rows":[trial_prefix],
         "post_prefix_stats":[post],"q_min":0.5,"writer_log_ratio_cap":4.0,
         "constraint_pass":True,"accepted":True,"alpha_grid":[1.0,.5,.25,.125,.0625,.03125],
@@ -93,6 +96,13 @@ def main():
                                             (transaction_path,transaction_payload,marker_rows[-1]["record_sha256"],2)):
                 anchors[path.name]={"record_count":count,"prefix_sha256":hashlib.sha256(payload).hexdigest(),"tail_sha256":tail}
         head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()
+        seed_path=run/"rollout_seed_audit.jsonl"
+        seed_path.write_text("".join(json.dumps({
+            "record_type":"trajectory_turn_seed","global_step":1,"sample_index":rank,
+            "turn":0,"stable_example_id":f"frozen_train_row:{17+rank}",
+            "trajectory_id":f"frozen_train_row:{17+rank}:seed:{101+rank}",
+            "dataset_index":17+rank,"trajectory_seed":101+rank,
+        },sort_keys=True,separators=(",",":"))+"\n" for rank in (0,1)))
         execution=root/"execution.jsonl"
         append_jsonl(execution,{"record_type":"weight_sync_summary","git_commit":head,"global_step":1,
                                 "sync_kind":"post_actor_update","worker_ranks":[0,1],"sampled_tensor_digest":"f"*64})
@@ -108,6 +118,9 @@ def main():
         assert json.loads(output.read_text())["status"]=="PASS"
         bad=command.copy(); bad[bad.index("whole_prefix")]="original_tokenwise"
         assert subprocess.run(bad,capture_output=True,text=True).returncode!=0
+        forged=json.loads(seed_path.read_text().splitlines()[0]); forged["trajectory_id"]="forged"
+        seed_path.write_text(json.dumps(forged)+"\n"+seed_path.read_text().splitlines()[1]+"\n")
+        assert subprocess.run(command,capture_output=True,text=True).returncode!=0
     print("TF_RWWPO_AUDIT_SMOKE_PASS")
 
 

@@ -210,3 +210,19 @@ def test_old_diagnostic_is_never_promoted_to_formal():
     row=json.loads((ROOT/"manifests/h20/rwwpo_hard_rollback_diagnostic_inventory_20260822.json").read_text())
     assert row["status"]=="DIAGNOSTIC_ONLY"
     assert row["formal_training_health"]=="NO_GO"
+
+def test_rwwpo_actor_update_uses_frozen_row_identity_not_ephemeral_grpo_uid():
+    trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text()
+    assert 'gen_batch_output.non_tensor_batch.update(identity_columns)' in trainer
+    assert 'example_ids=batch.non_tensor_batch.get("stable_example_id")' in trainer
+    identity_block=trainer.split(
+        'batch.batch["rwwpo_example_identity_hash"] = torch.tensor(',1
+    )[1].split('batch.batch["rwwpo_trajectory_identity_hash"]',1)[0]
+    assert "stable_identity_int64(value) for value in example_ids" in identity_block
+    assert "for value in uids" not in identity_block
+    firewall=(ROOT/"tools/h20/audit_tf_rwwpo_source_firewall.py").read_text()
+    assert "ephemeral UUID used as RWWPO audit identity" in firewall
+    assert "recurrent turn identity columns are not attached" in firewall
+    audit=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
+    assert "actual/stable rollout identity mismatch" in audit
+    assert "non-reconstructible stable rollout identity" in audit

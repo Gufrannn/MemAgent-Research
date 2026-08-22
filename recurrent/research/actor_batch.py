@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from typing import Sequence
+
+import numpy as np
 
 
 DIAG_PREFIX = "[GATE_A_BATCH_DIAG]"
+
+
+def stable_identity_int64(value: object) -> int:
+    """Reconstruct the signed-positive int64 stored in distributed ledgers."""
+    raw = hashlib.sha256(str(value).encode()).digest()[:8]
+    return int.from_bytes(raw, "big", signed=False) & ((1 << 63) - 1)
 
 
 @dataclass(frozen=True)
@@ -92,3 +102,48 @@ def validate_active_actor_batch(*, active_batch_size: int, world_size: int, resp
             f"{DIAG_PREFIX} actor batch has no trainable response tokens: "
             f"active_batch_size={active_batch_size}, response_valid_tokens=0"
         )
+
+
+def align_recurrent_turn_identities(
+    *,
+    source_rows: Sequence[int],
+    source_uids: Sequence[object],
+    dataset_indices: Sequence[int],
+    trajectory_seeds: Sequence[int],
+) -> dict[str, np.ndarray]:
+    """Build row-aligned internal grouping and stable audit identities.
+
+    ``uid`` is the trainer's ephemeral GRPO grouping label.  It must remain
+    aligned with every recurrent turn, but it is deliberately not used as an
+    experimental identity.  Stable RWWPO identities instead derive from the
+    frozen dataset row and the independently derived trajectory seed.
+    """
+    uids = np.asarray(source_uids, dtype=object)
+    indices = np.asarray(dataset_indices)
+    seeds = np.asarray(trajectory_seeds)
+    rows = np.asarray(source_rows)
+    source_count = len(uids)
+    if len(indices) != source_count or len(seeds) != source_count:
+        raise ValueError(
+            "RWWPO stable identity source columns are not row aligned: "
+            f"uids={source_count}, dataset_indices={len(indices)}, "
+            f"trajectory_seeds={len(seeds)}"
+        )
+    if rows.ndim != 1 or not np.issubdtype(rows.dtype, np.integer):
+        raise ValueError("RWWPO stable identity source rows must be a 1D integer vector")
+    if len(rows) and (int(rows.min()) < 0 or int(rows.max()) >= source_count):
+        raise ValueError("RWWPO stable identity source row is out of range")
+
+    source_example_ids = np.asarray(
+        [f"frozen_train_row:{int(index)}" for index in indices], dtype=object
+    )
+    source_trajectory_ids = np.asarray(
+        [f"{example_id}:seed:{int(seed)}" for example_id, seed in zip(source_example_ids, seeds)],
+        dtype=object,
+    )
+    return {
+        "uid": uids[rows],
+        "stable_example_id": source_example_ids[rows],
+        "trajectory_id": source_trajectory_ids[rows],
+        "trajectory_seed": seeds.astype(np.uint64, copy=False)[rows],
+    }
