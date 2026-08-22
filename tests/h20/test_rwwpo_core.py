@@ -73,3 +73,31 @@ def test_non_scalar_writer_advantage_is_rejected():
         assert "scalar advantage" in str(exc)
     else:
         raise AssertionError("non-scalar trajectory advantage was accepted")
+
+
+def test_streaming_logprob_gradient_injection_matches_retained_graph_exactly():
+    old, response, final, writer, sample, turn, adv = _batch()
+    features = torch.arange(old.numel(), dtype=old.dtype).reshape_as(old) / 17.0
+
+    direct_parameter = torch.tensor(0.07, dtype=old.dtype, requires_grad=True)
+    direct_logprob = direct_parameter * features
+    direct_loss, _ = compute_rwwpo_policy_loss(
+        old, direct_logprob, adv, response, writer, final, sample, turn,
+        0.2, 0.2, 0.2,
+    )
+    direct_loss.backward()
+
+    streaming_parameter = torch.tensor(0.07, dtype=old.dtype, requires_grad=True)
+    proxy = (streaming_parameter.detach() * features).requires_grad_(True)
+    proxy_loss, _ = compute_rwwpo_policy_loss(
+        old, proxy, adv, response, writer, final, sample, turn,
+        0.2, 0.2, 0.2,
+    )
+    coefficient, = torch.autograd.grad(proxy_loss, proxy)
+    for indices in (slice(0, 2), slice(2, 4), slice(4, 5)):
+        live = streaming_parameter * features[indices]
+        (live * coefficient[indices]).sum().backward()
+
+    torch.testing.assert_close(
+        streaming_parameter.grad, direct_parameter.grad, rtol=0, atol=1e-12
+    )

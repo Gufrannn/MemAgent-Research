@@ -392,19 +392,27 @@ class DataParallelPPOActor(BasePPOActor):
                 mini_batch_token_nums = data['response_mask'].sum()
 
                 if rwwpo_capture:
+                    if self.config.entropy_coeff != 0:
+                        raise ValueError("RWWPO streaming exact-gradient path requires frozen entropy_coeff=0")
                     forwarded = []
                     for micro_data in micro_batches:
                         if isinstance(micro_data, DataProto):
                             micro_data = {**micro_data.batch.to(torch.cuda.current_device()), **micro_data.non_tensor_batch}
                         else:
                             micro_data = micro_data.to(torch.cuda.current_device())
-                        entropy, current = self._forward_micro_batch(
-                            micro_batch=micro_data, temperature=temperature,
-                            calculate_entropy=self.config.entropy_coeff != 0)
-                        forwarded.append((micro_data, entropy, current))
+                        # Pass one materializes full-minibatch log probabilities without
+                        # retaining every microbatch graph.  The exact loss derivative
+                        # with respect to these logits is injected in a streaming second
+                        # pass below, bounding activation memory independently of the
+                        # number of recurrent turns.
+                        with torch.no_grad():
+                            _, current = self._forward_micro_batch(
+                                micro_batch=micro_data, temperature=temperature,
+                                calculate_entropy=False)
+                        forwarded.append((micro_data, current.detach()))
                     def joined(key):
                         return torch.cat([item[0][key] for item in forwarded], dim=0)
-                    current_log_prob = torch.cat([item[2] for item in forwarded], dim=0)
+                    current_log_prob = torch.cat([item[1] for item in forwarded], dim=0).requires_grad_(True)
                     old_log_prob = joined("old_log_probs")
                     response_mask = joined("response_mask").bool()
                     final_mask = joined("final_mask").bool()
@@ -429,9 +437,6 @@ class DataParallelPPOActor(BasePPOActor):
                         rwwpo_metrics["answer_clipfrac"] = original_clipfrac
                         rwwpo_metrics["answer_ppo_kl"] = original_kl
                         rwwpo_metrics["answer_clipfrac_lower"] = original_lower
-                    if self.config.entropy_coeff != 0:
-                        entropy = torch.cat([item[1] for item in forwarded], dim=0)
-                        policy_loss = policy_loss - agg_loss(entropy, response_mask, "token-mean") * self.config.entropy_coeff
                     if self.config.use_kl_loss:
                         ref_log_prob = joined("ref_log_prob")
                         kld = kl_penalty(logprob=current_log_prob, ref_logprob=ref_log_prob,
@@ -469,7 +474,21 @@ class DataParallelPPOActor(BasePPOActor):
                     if rwwpo_enabled and not constraint_pass:
                         self.actor_optimizer.zero_grad()
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
-                    policy_loss.backward()
+                    logprob_gradient, = torch.autograd.grad(policy_loss, current_log_prob)
+                    if not torch.isfinite(logprob_gradient[response_mask]).all():
+                        raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite logprob gradient")
+                    gradient_cursor = 0
+                    for micro_data, _ in forwarded:
+                        _, live_log_prob = self._forward_micro_batch(
+                            micro_batch=micro_data, temperature=temperature,
+                            calculate_entropy=False)
+                        next_cursor = gradient_cursor + live_log_prob.shape[0]
+                        injected_loss = (live_log_prob *
+                                         logprob_gradient[gradient_cursor:next_cursor]).sum()
+                        injected_loss.backward()
+                        gradient_cursor = next_cursor
+                    if gradient_cursor != current_log_prob.shape[0]:
+                        raise RuntimeError("RWWPO_STREAMING_GRADIENT_ALIGNMENT_FAILURE")
                     snapshot = self._snapshot_local_optimizer_step() if rwwpo_enabled else None
                     grad_norm = self._optimizer_step()
                     if not torch.isfinite(grad_norm):
