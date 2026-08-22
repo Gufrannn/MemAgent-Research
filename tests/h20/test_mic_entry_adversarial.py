@@ -116,6 +116,8 @@ def test_real_eval_launcher_emits_actor_only_overrides_without_training_ledgers(
     overrides = json.loads(result.stdout.splitlines()[-1])
     assert "algorithm.mic.enabled=false" in overrides
     assert "trainer.resume_mode=mic_actor_only_eval" in overrides
+    assert f"+trainer.mic_eval_work_root={tmp_path}" in overrides
+    assert f"+trainer.mic_eval_repo_dir={REPO}" in overrides
     assert not any("critic_checkpoint_root" in value or "ledger_path" in value
                    for value in overrides)
 

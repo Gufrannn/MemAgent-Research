@@ -94,8 +94,12 @@ def _mic_generation_protocol_evidence(
         "reward_manager": resolved["reward_model"]["reward_manager"],
         "custom_reward_function": resolved["custom_reward_function"],
     }
-    work_root = os.environ.get("MEMAGENT_MIC_WORK_ROOT", "")
-    repo_dir = os.environ.get("MEMAGENT_MIC_REPO_DIR", "")
+    work_root = str(resolved["trainer"].get("mic_eval_work_root", ""))
+    repo_dir = str(resolved["trainer"].get("mic_eval_repo_dir", ""))
+    if not os.path.isabs(work_root) or not os.path.isabs(repo_dir):
+        raise RuntimeError(
+            "MIC_NO_GO: fixed-S128 audit roots must be explicit absolute paths"
+        )
     expected_validation = os.path.join(work_root, "datasets/hotpotqa/hotpotqa_dev.parquet")
     expected_model = os.path.join(work_root, "models/Qwen2.5-7B-Instruct")
     recurrent_config = projection["recurrent"]["memory"]["config"]

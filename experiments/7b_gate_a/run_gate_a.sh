@@ -238,6 +238,8 @@ if [[ -n ${MEMAGENT_MIC_EVAL_STEP:-} ]]; then
     "+trainer.mic_eval_summary_path=$MEMAGENT_MIC_EVAL_SUMMARY_PATH"
     "+trainer.mic_eval_generation_path=$MEMAGENT_MIC_EVAL_GENERATION_PATH"
     "+trainer.mic_eval_training_audit_sha256=$MEMAGENT_MIC_EVAL_TRAINING_AUDIT_SHA256"
+    "+trainer.mic_eval_work_root=$WORK_ROOT"
+    "+trainer.mic_eval_repo_dir=$CODE"
     "+trainer.mic_eval_original_protocol_sha256=$MEMAGENT_MIC_EVAL_ORIGINAL_PROTOCOL_SHA256"
     "+trainer.mic_eval_original_reward_code_sha256=$MEMAGENT_MIC_EVAL_ORIGINAL_REWARD_CODE_SHA256"
     actor_rollout_ref.rollout.val_kwargs.n=1
