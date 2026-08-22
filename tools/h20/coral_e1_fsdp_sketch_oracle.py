@@ -177,13 +177,13 @@ def main():
         projection_relative_norm_error = abs(projected_norm - exact_norm) / max(exact_norm, 1e-30)
         passed = (
             full_gradient_max_abs_error <= 2e-5
-            and sketch_max_abs_error == 0.0
+            and sketch_max_abs_error <= 1e-7
             and projection_relative_norm_error <= 0.10
             and dense_projection_relative_norm_error <= 0.10
             and denominator_closure_error <= 1e-6
         )
         report = {
-            "schema": "memagent.coral.e1-fsdp-sketch-oracle.v2",
+            "schema": "memagent.coral.e1-fsdp-sketch-oracle.v3",
             "status": "PASS" if passed else "FAIL",
             "decision": "CORAL_E1_SKETCH_ORACLE_PASS" if passed
                         else "CORAL_E1_SKETCH_ORACLE_NO_GO",
@@ -194,6 +194,7 @@ def main():
             "padded_shard_elements": int(padded.numel()),
             "full_gradient_max_abs_error": full_gradient_max_abs_error,
             "sketch_max_abs_error": sketch_max_abs_error,
+            "sketch_assembly_aperture": 1e-7,
             "projection_relative_norm_error": projection_relative_norm_error,
             "projection_error_aperture": 0.10,
             "collision_calibration_elements": dense_elements,

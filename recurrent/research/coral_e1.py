@@ -39,6 +39,7 @@ ORACLE_REPORT_FIELDS = {
     "schema", "status", "decision", "world_size", "backend",
     "basis_sha256", "full_gradient_elements", "padded_shard_elements",
     "full_gradient_max_abs_error", "sketch_max_abs_error",
+    "sketch_assembly_aperture",
     "projection_relative_norm_error", "projection_error_aperture",
     "collision_calibration_elements", "collision_calibration_buckets_per_basis",
     "collision_calibration_exact_norm", "collision_calibration_projected_norm",
@@ -59,12 +60,12 @@ def _finite_number(value, field: str, low: float = 0.0) -> float:
 
 
 def validate_fsdp_sketch_oracle_report(report) -> None:
-    """Strictly validate the complete two-rank v2 oracle contract."""
+    """Strictly validate the complete two-rank v3 oracle contract."""
     if not isinstance(report, dict) or set(report) != ORACLE_REPORT_FIELDS:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle fields")
     unsigned = {key: value for key, value in report.items()
                 if key != "report_sha256"}
-    if report["schema"] != "memagent.coral.e1-fsdp-sketch-oracle.v2" \
+    if report["schema"] != "memagent.coral.e1-fsdp-sketch-oracle.v3" \
             or report["status"] != "PASS" \
             or report["decision"] != "CORAL_E1_SKETCH_ORACLE_PASS" \
             or type(report["world_size"]) is not int \
@@ -88,6 +89,7 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
             or denominators != [5, 7] \
             or report["projection_error_aperture"] != 0.10 \
             or report["collision_calibration_error_aperture"] != 0.10 \
+            or report["sketch_assembly_aperture"] != 1e-7 \
             or report["denominator_gradient_closure_aperture"] != 1e-6:
         raise ValueError("CORAL_E1_NO_GO: FSDP sketch oracle aperture drift")
     full_error = _finite_number(
@@ -115,7 +117,7 @@ def validate_fsdp_sketch_oracle_report(report) -> None:
         report["denominator_gradient_closure_max_abs_error"],
         "denominator_gradient_closure_max_abs_error",
     )
-    if full_error > 2e-5 or assembly_error != 0.0 \
+    if full_error > 2e-5 or assembly_error > report["sketch_assembly_aperture"] \
             or projection_error > report["projection_error_aperture"] \
             or dense_error > report["collision_calibration_error_aperture"] \
             or denominator_error > report["denominator_gradient_closure_aperture"]:

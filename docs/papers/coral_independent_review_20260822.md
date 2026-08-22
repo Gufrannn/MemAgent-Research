@@ -29,7 +29,11 @@ Original's full-token denominator, rebuilding the shared-parameter E0,
 resampling both terminal branches at fixed proposal weights, binding
 step-independent dataset roots, using deterministic nonlinearly
 basis-separated sketches, clustering inference by eight writer proposals, and
-strictly validating and embedding the complete oracle v2 report.
+strictly validating and embedding the complete oracle v3 report. The first real
+two-rank H20 execution exposed a `7.45e-09` difference between NCCL and
+sequential rank0 FP32 reduction orders; v3 freezes a `1e-7` assembly aperture
+while leaving optimizer/checkpoint reversibility and all substantive projection,
+FSDP, denominator, and calibration gates unchanged.
 
 ## Mandatory runtime conditions
 

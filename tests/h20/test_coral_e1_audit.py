@@ -14,7 +14,7 @@ COMMIT = "1" * 40
 
 def oracle_report():
     value = {
-        "schema": "memagent.coral.e1-fsdp-sketch-oracle.v2",
+        "schema": "memagent.coral.e1-fsdp-sketch-oracle.v3",
         "status": "PASS",
         "decision": "CORAL_E1_SKETCH_ORACLE_PASS",
         "world_size": 2,
@@ -23,7 +23,8 @@ def oracle_report():
         "full_gradient_elements": 221,
         "padded_shard_elements": 222,
         "full_gradient_max_abs_error": 1e-6,
-        "sketch_max_abs_error": 0.0,
+        "sketch_max_abs_error": 5e-8,
+        "sketch_assembly_aperture": 1e-7,
         "projection_relative_norm_error": 0.01,
         "projection_error_aperture": 0.10,
         "collision_calibration_elements": 1_000_003,
@@ -148,6 +149,14 @@ class CoralE1AuditTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
             validate_fsdp_sketch_oracle_report(float_denominator)
+        assembly_over_aperture = oracle_report()
+        assembly_over_aperture["sketch_max_abs_error"] = 1.0000001e-7
+        assembly_over_aperture["report_sha256"] = canonical_sha256({
+            key: item for key, item in assembly_over_aperture.items()
+            if key != "report_sha256"
+        })
+        with self.assertRaisesRegex(ValueError, "CORAL_E1_NO_GO"):
+            validate_fsdp_sketch_oracle_report(assembly_over_aperture)
 
     def test_trainer_produced_root_cluster_evidence_passes(self):
         rows, proposal_mean, passed = validate_proposal(proposal(1), 1, COMMIT)
