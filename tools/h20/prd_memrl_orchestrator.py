@@ -172,7 +172,7 @@ def command_stage(args: argparse.Namespace) -> None:
     print(launch)
 
 
-def metric_rows(path: Path) -> tuple[dict, set[str]]:
+def metric_rows(path: Path, expected_binding: dict | None = None) -> tuple[dict, set[str]]:
     from recurrent.research.s128_hotpot_metrics import score_terminal_output
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     if len(rows) != 128:
@@ -183,6 +183,8 @@ def metric_rows(path: Path) -> tuple[dict, set[str]]:
     required = ("normalized_exact_match", "token_f1", "format_success")
     scored = []
     for row in rows:
+        if expected_binding is not None and any(row.get(key) != value for key, value in expected_binding.items()):
+            fail(f"raw terminal checkpoint/run binding mismatch: {path}")
         if "terminal_output" not in row or "ground_truth" not in row:
             fail(f"raw terminal output/ground truth missing: {path}")
         item = score_terminal_output(row["terminal_output"], row["ground_truth"])
@@ -196,6 +198,9 @@ def metric_rows(path: Path) -> tuple[dict, set[str]]:
 
 def command_evaluate(args: argparse.Namespace) -> None:
     cap = float(args.capacity); cid = capacity_id(cap); run_root = Path(args.run_root)
+    run = load(run_root / "resolved_run.json")
+    validate_checkpoint(run_root / "frontier" / cid / "checkpoints" / "global_step_25",
+                        25, cap, run["git_commit"], run["run_id"])
     anchors = tuple(int(x) for x in args.anchors.split(","))
     if not anchors or len(set(anchors)) != len(anchors) or any(x not in ANCHORS for x in anchors):
         fail("evaluation anchors must be a unique subset of 5,10,15,20,25")
@@ -205,36 +210,19 @@ def command_evaluate(args: argparse.Namespace) -> None:
         existing_domains.append(set(load(old).get("stable_keys", [])))
     for anchor in anchors:
         path = Path(args.input_template.format(anchor=anchor)).resolve()
-        summary, keys = metric_rows(path)
+        checkpoint = run_root / "frontier" / cid / "checkpoints" / f"global_step_{anchor}"
+        validate_checkpoint(checkpoint, anchor, cap, run["git_commit"], run["run_id"])
+        metadata_sha = digest(checkpoint / "prd_checkpoint.json")
+        binding = {"run_id": run["run_id"], "git_commit": run["git_commit"], "frontier_id": cid,
+                   "global_step": anchor, "checkpoint_metadata_sha256": metadata_sha}
+        summary, keys = metric_rows(path, binding)
         if (domain is not None and keys != domain) or any(keys != old for old in existing_domains):
             fail("stable-ID cohort drift across anchors")
         domain = keys
         output = run_root / "frontier" / cid / f"fixed_s128_anchor_{anchor}.json"
         exclusive(output, {"schema_version": 1, "status": "PASS", "decision": "PRD_FIXED_S128_PASS",
             "capacity_nats": cap, "anchor": anchor, "metrics": summary,
-            "rows_sha256": digest(path), "stable_keys": sorted(keys)})
-
-
-def command_t5_gate(args: argparse.Namespace) -> None:
-    run_root = Path(args.run_root); run = load(run_root / "resolved_run.json")
-    baseline = load(Path(run["baseline_path"]))
-    if digest(Path(run["baseline_path"])) != run["baseline_sha256"]:
-        fail("Original baseline import changed after binding")
-    original = baseline["recomputed"]["5"]
-    decisions = {}
-    for cap in CAPACITIES:
-        cid = capacity_id(cap)
-        checkpoint = run_root / "frontier" / cid / "checkpoints" / "global_step_5"
-        validate_checkpoint(checkpoint, 5, cap, run["git_commit"], run["run_id"])
-        summary = load(run_root / "frontier" / cid / "fixed_s128_anchor_5.json")
-        t5 = summary["metrics"]
-        degradation = float(original["token_f1"]) - float(t5["token_f1"])
-        decisions[cid] = {"token_f1_degradation": degradation, "pass": degradation <= args.max_degradation}
-    passed = all(item["pass"] for item in decisions.values())
-    exclusive(run_root / "certificates" / "t5_gate.json", {"schema_version": 1,
-        "status": "PASS" if passed else "FAIL", "decision": "PRD_T5_GATE_PASS" if passed else "PRD_T5_GATE_NO_GO",
-        "git_commit": run["git_commit"], "all_frontier_points_required": True, "frontier": decisions})
-    if not passed: raise SystemExit(7)
+            "rows_sha256": digest(path), "checkpoint_binding": binding, "stable_keys": sorted(keys)})
 
 
 def command_audit(args: argparse.Namespace) -> None:
@@ -250,6 +238,12 @@ def command_audit(args: argparse.Namespace) -> None:
             domains = []
             for anchor in ANCHORS:
                 summary = load(run_root / "frontier" / cid / f"fixed_s128_anchor_{anchor}.json")
+                checkpoint = run_root / "frontier" / cid / "checkpoints" / f"global_step_{anchor}"
+                expected_binding = {"run_id": run["run_id"], "git_commit": run["git_commit"],
+                    "frontier_id": cid, "global_step": anchor,
+                    "checkpoint_metadata_sha256": digest(checkpoint / "prd_checkpoint.json")}
+                if summary.get("checkpoint_binding") != expected_binding:
+                    fail(f"fixed-S128 checkpoint binding mismatch for {cid} step {anchor}")
                 domains.append(set(summary.get("stable_keys", [])))
                 original = load(Path(run["baseline_path"]))["recomputed"][str(anchor)]
                 method = summary["metrics"]
@@ -300,7 +294,6 @@ def main() -> None:
     for x in ("run-root", "run-id", "commit", "capacity"): s.add_argument("--"+x, required=True)
     s.add_argument("--resume"); s.set_defaults(func=command_stage)
     e = sub.add_parser("evaluate"); e.add_argument("--run-root", required=True); e.add_argument("--capacity", required=True); e.add_argument("--input-template", required=True); e.add_argument("--anchors", default="5,10,15,20,25"); e.set_defaults(func=command_evaluate)
-    g = sub.add_parser("t5-gate"); g.add_argument("--run-root", required=True); g.add_argument("--max-degradation", type=float, default=.02); g.set_defaults(func=command_t5_gate)
     a = sub.add_parser("audit"); a.add_argument("--run-root", required=True); a.add_argument("--ledger", required=True); a.add_argument("--output", required=True); a.set_defaults(func=command_audit)
     args = p.parse_args(); args.func(args)
 

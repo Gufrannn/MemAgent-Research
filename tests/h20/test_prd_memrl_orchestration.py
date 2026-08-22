@@ -94,6 +94,11 @@ class OrchestrationTests(unittest.TestCase):
         metrics,keys=orch.metric_rows(path)
         self.assertEqual(len(keys),128); self.assertEqual(metrics["normalized_exact_match"],1.0)
 
+    def test_evaluate_is_blocked_until_t25_checkpoint(self):
+        args=type("A",(),dict(run_root=str(self.root/"run"),capacity="128",
+            input_template=str(self.root/"step_{anchor}.jsonl"),anchors="5,10,15,20,25"))
+        self.assertNoGo(lambda:orch.command_evaluate(args),"global_step_25/prd_checkpoint.json")
+
     def test_bound_baseline_tamper_is_detectable(self):
         resolved=json.loads((self.root/"run"/"resolved_run.json").read_text())
         self.base.write_text("{}\n")
