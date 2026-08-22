@@ -300,6 +300,11 @@ class DataParallelPPOActor(BasePPOActor):
             dataloader = batch.split(self.config.ppo_mini_batch_size)
 
         metrics = {}
+        mic_role_totals = {
+            role: {"loss_weighted": 0.0, "active_tokens": 0.0,
+                   "grad_sq_sum": 0.0, "grad_abs_max": 0.0}
+            for role in ("writer", "answer")
+        } if mic_role_ledger else None
         for epoch in range(self.config.ppo_epochs):
             for batch_idx, data in enumerate(dataloader):
                 # split batch into micro_batches
@@ -404,18 +409,19 @@ class DataParallelPPOActor(BasePPOActor):
                                 role_logprob_gradient = torch.autograd.grad(
                                     role_loss, log_prob, retain_graph=True, create_graph=False
                                 )[0].masked_select(role_mask.bool())
-                                append_to_dict(metrics, {
-                                    f"mic_gradient/{role_name}_pg_loss": role_loss.detach().item(),
-                                    f"mic_gradient/{role_name}_active_tokens": int(
-                                        role_mask.sum().item()
-                                    ),
-                                    f"mic_gradient/{role_name}_logprob_grad_l2": float(
-                                        torch.linalg.vector_norm(role_logprob_gradient).detach().item()
-                                    ),
-                                    f"mic_gradient/{role_name}_logprob_grad_abs_max": float(
-                                        role_logprob_gradient.detach().abs().max().item()
-                                    ),
-                                })
+                                active_tokens = int(role_mask.sum().item())
+                                totals = mic_role_totals[role_name]
+                                totals["loss_weighted"] += float(
+                                    role_loss.detach().item()
+                                ) * active_tokens
+                                totals["active_tokens"] += active_tokens
+                                totals["grad_sq_sum"] += float(
+                                    role_logprob_gradient.detach().float().square().sum().item()
+                                )
+                                totals["grad_abs_max"] = max(
+                                    totals["grad_abs_max"],
+                                    float(role_logprob_gradient.detach().abs().max().item()),
+                                )
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
@@ -466,4 +472,40 @@ class DataParallelPPOActor(BasePPOActor):
                 data = {"actor/grad_norm": grad_norm.detach().item()}
             append_to_dict(metrics, data)
         self.actor_optimizer.zero_grad()
+        if mic_role_ledger:
+            # Role rows need not be balanced across DP ranks (final-answer rows
+            # commonly occupy only the later rank).  Aggregate the actual
+            # d(loss)/d(log_prob) receipts before returning metrics so every
+            # worker exposes the same complete global ledger.
+            device = torch.device("cuda", torch.cuda.current_device())
+            sum_values = []
+            max_values = []
+            for role_name in ("writer", "answer"):
+                totals = mic_role_totals[role_name]
+                sum_values.extend([
+                    totals["loss_weighted"], totals["active_tokens"],
+                    totals["grad_sq_sum"],
+                ])
+                max_values.append(totals["grad_abs_max"])
+            summed = torch.tensor(sum_values, dtype=torch.float64, device=device)
+            maxima = torch.tensor(max_values, dtype=torch.float64, device=device)
+            torch.distributed.all_reduce(summed, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(maxima, op=torch.distributed.ReduceOp.MAX)
+            for role_index, role_name in enumerate(("writer", "answer")):
+                offset = role_index * 3
+                active_tokens = float(summed[offset + 1].item())
+                if active_tokens <= 0:
+                    raise ValueError(f"MIC_NO_GO: globally inactive {role_name} gradient role")
+                append_to_dict(metrics, {
+                    f"mic_gradient/{role_name}_pg_loss": float(
+                        summed[offset].item() / active_tokens
+                    ),
+                    f"mic_gradient/{role_name}_active_tokens": int(active_tokens),
+                    f"mic_gradient/{role_name}_logprob_grad_l2": float(
+                        max(summed[offset + 2].item(), 0.0) ** 0.5
+                    ),
+                    f"mic_gradient/{role_name}_logprob_grad_abs_max": float(
+                        maxima[role_index].item()
+                    ),
+                })
         return metrics
