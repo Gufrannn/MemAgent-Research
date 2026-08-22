@@ -183,9 +183,9 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("ordinal_calibration_max_abs_error",sketch_oracle)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
-        self.assertIn("coral_e1_seed2026_v9",entry)
+        self.assertIn("coral_e1_seed2026_v11",entry)
         self.assertIn(
-            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8",
+            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10",
             entry,
         )
         self.assertIn("_coral_e1_resample_terminal",trainer)
@@ -197,7 +197,11 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertNotIn("MEASUREMENT_ROOT",entry)
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
-        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v9",runbook)
+        release_status=(ROOT/"docs/h20/COSI_RELEASE_STATUS.md").read_text()
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v11",runbook)
+        self.assertIn("v9 operator-interrupted partial-step run",runbook)
+        self.assertIn("v10 pre-scientific operational abort",runbook)
+        self.assertIn("18a39b1f727013734b7b92718f3f694072f1f299",release_status)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
         clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
         self.assertIn("sys.path.insert(0, str(ROOT))",clone_oracle)

@@ -5,12 +5,12 @@ source "$SCRIPT_DIR/cosi_common.sh"
 cosi_checkout_guard
 cosi_acquire_gpu_locks
 readonly PYTHON=$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python
-readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-coral_e1_seed2026_v9}
+readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-coral_e1_seed2026_v11}
 [[ $RUN_ID =~ ^[a-z0-9][a-z0-9_-]{7,79}$ ]] || {
   echo CORAL_E1_NO_GO:run_id >&2; exit 78;
 }
 case "$RUN_ID" in
-  coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8)
+  coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10)
     echo CORAL_E1_NO_GO:retired_evidence_run_id >&2; exit 78 ;;
 esac
 readonly EXP=qwen25_7b_coral_e1_actual_loss_${RUN_ID}
