@@ -217,8 +217,13 @@ def command_evaluate(args: argparse.Namespace) -> None:
         checkpoint = run_root / "frontier" / cid / "checkpoints" / f"global_step_{anchor}"
         validate_checkpoint(checkpoint, anchor, cap, run["git_commit"], run["run_id"])
         metadata_sha = digest(checkpoint / "prd_checkpoint.json")
+        sync_receipt = run_root / "frontier" / cid / "raw_terminal" / f"weight_sync_anchor_{anchor}.json"
+        receipt_payload = load(sync_receipt)
+        if receipt_payload.get("status") != "PASS" or receipt_payload.get("decision") != "PRD_S128_WEIGHT_SYNC_PASS":
+            fail(f"invalid S128 weight-sync receipt for {cid} step {anchor}")
         binding = {"run_id": run["run_id"], "git_commit": run["git_commit"], "frontier_id": cid,
-                   "global_step": anchor, "checkpoint_metadata_sha256": metadata_sha}
+                   "global_step": anchor, "checkpoint_metadata_sha256": metadata_sha,
+                   "weight_sync_receipt_sha256": digest(sync_receipt)}
         summary, keys = metric_rows(path, binding)
         if (domain is not None and keys != domain) or any(keys != old for old in existing_domains):
             fail("stable-ID cohort drift across anchors")
@@ -245,7 +250,8 @@ def command_audit(args: argparse.Namespace) -> None:
                 checkpoint = run_root / "frontier" / cid / "checkpoints" / f"global_step_{anchor}"
                 expected_binding = {"run_id": run["run_id"], "git_commit": run["git_commit"],
                     "frontier_id": cid, "global_step": anchor,
-                    "checkpoint_metadata_sha256": digest(checkpoint / "prd_checkpoint.json")}
+                    "checkpoint_metadata_sha256": digest(checkpoint / "prd_checkpoint.json"),
+                    "weight_sync_receipt_sha256": digest(run_root / "frontier" / cid / "raw_terminal" / f"weight_sync_anchor_{anchor}.json")}
                 if summary.get("checkpoint_binding") != expected_binding:
                     fail(f"fixed-S128 checkpoint binding mismatch for {cid} step {anchor}")
                 domains.append(set(summary.get("stable_keys", [])))

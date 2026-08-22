@@ -1762,8 +1762,9 @@ class RayPPOTrainer:
         strict_eval_identity = bool(
             eval_identity_config is not None and eval_identity_config.get("enabled", False)
         )
+        prd_eval_identity = str(self.config.trainer.resume_mode) == "prd_actor_only_eval"
         stable_eval_weight_before = None
-        if strict_eval_identity:
+        if strict_eval_identity or prd_eval_identity:
             stable_eval_weight_before = self._stable_eval_weight_snapshot(
                 sync_kind="stable_eval_before"
             )
@@ -1781,6 +1782,20 @@ class RayPPOTrainer:
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
+                if prd_eval_identity:
+                    stable_eval_weight_after = self._stable_eval_weight_snapshot(sync_kind="stable_eval_after")
+                    for field in ("actor_master_sampled_tensor_digest", "actor_rollout_sampled_tensor_digest",
+                                  "vllm_sampled_tensor_digest", "worker_ranks", "worker_evidence"):
+                        if stable_eval_weight_before[field] != stable_eval_weight_after[field]:
+                            raise RuntimeError(f"PRD evaluation weight drift: {field}")
+                    if stable_eval_weight_after["vllm_pre_sync_sampled_tensor_digest"] != stable_eval_weight_before["vllm_sampled_tensor_digest"]:
+                        raise RuntimeError("PRD evaluation vLLM drift before final sync")
+                    receipt_path = os.path.realpath(str(self.config.trainer.prd_eval.weight_sync_receipt_path))
+                    os.makedirs(os.path.dirname(receipt_path), exist_ok=True)
+                    with open(receipt_path, "x", encoding="utf-8") as stream:
+                        json.dump({"schema_version":1,"status":"PASS","decision":"PRD_S128_WEIGHT_SYNC_PASS",
+                                   "global_step":int(self.global_steps),"before":stable_eval_weight_before,
+                                   "after":stable_eval_weight_after},stream,indent=2,sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
                 if strict_eval_identity:
                     if self._actor_update_calls != 0:
                         raise RuntimeError(

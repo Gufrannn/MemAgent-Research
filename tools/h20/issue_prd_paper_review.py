@@ -28,6 +28,9 @@ def main()->int:
     if judgment.get("paper_sha256") != (sha(draft) if draft.is_file() else None): failures.append("scientific review paper hash mismatch")
     if judgment.get("source_audit_sha256") != (sha(audit) if audit.is_file() else None): failures.append("scientific review source-audit hash mismatch")
     if not judgment.get("mechanism_claim_pending_e1",False): failures.append("review must keep mechanism claim pending E1")
+    reviewed_commit=str(judgment.get("reviewed_source_commit",""))
+    if not reviewed_commit or subprocess.run(["git","-C",str(ROOT),"merge-base","--is-ancestor",reviewed_commit,"HEAD"]).returncode:
+        failures.append("scientific review source commit is not an ancestor")
     payload={"schema_version":1,"status":"PASS" if not failures else "FAIL",
         "decision":"PRD_PAPER_REVIEW_GO" if not failures else "PRD_PAPER_REVIEW_NO_GO",
         "evidence":{"git_commit":a.expected_commit,"paper_sha256":sha(draft) if draft.is_file() else None,

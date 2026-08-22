@@ -11,14 +11,16 @@ DATA_SHA="54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6"
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
 def main()->int:
     p=argparse.ArgumentParser()
-    for name in ("input","output","stable-resolved","validation-parquet","checkpoint-metadata","run-id","git-commit","frontier-id","global-step"): p.add_argument("--"+name,required=True)
+    for name in ("input","output","stable-resolved","validation-parquet","checkpoint-metadata","weight-sync-receipt","run-id","git-commit","frontier-id","global-step"): p.add_argument("--"+name,required=True)
     a=p.parse_args(); source=Path(a.input); output=Path(a.output); stable_path=Path(a.stable_resolved); data=Path(a.validation_parquet); metadata=Path(a.checkpoint_metadata)
     if sha(stable_path)!=STABLE_SHA or sha(data)!=DATA_SHA: raise SystemExit("PRD_NO_GO: frozen S128 identity/data SHA mismatch")
     stable=json.loads(stable_path.read_text()); rows=[json.loads(line) for line in source.read_text().splitlines() if line.strip()]
     if len(rows)!=128: raise SystemExit("PRD_NO_GO: strict producer did not generate exactly 128 rows")
     raw=_load_parquet_rows(data); identities=stable["identity_payload"]["rows"]
     if [int(row["source_order_index"]) for row in identities]!=list(range(128)): raise SystemExit("PRD_NO_GO: stable order is not 0..127")
-    bound=[]; step=int(a.global_step); metadata_sha=sha(metadata)
+    receipt=Path(a.weight_sync_receipt); receipt_payload=json.loads(receipt.read_text())
+    if receipt_payload.get("status")!="PASS" or receipt_payload.get("decision")!="PRD_S128_WEIGHT_SYNC_PASS" or int(receipt_payload.get("global_step",-1))!=int(a.global_step): raise SystemExit("PRD_NO_GO: invalid S128 weight-sync receipt")
+    bound=[]; step=int(a.global_step); metadata_sha=sha(metadata); receipt_sha=sha(receipt)
     for order,(generation,identity) in enumerate(zip(rows,identities)):
         reward=raw[int(identity["raw_row_position"])]["reward_model"]; reward=json.loads(reward) if isinstance(reward,str) else reward
         if canonical_sha256(reward["ground_truth"])!=identity["ground_truth_hash"]: raise SystemExit(f"PRD_NO_GO: ground truth drift row {order}")
@@ -27,6 +29,7 @@ def main()->int:
             "terminal_output":generation["output"],"ground_truth":reward["ground_truth"],"source_order_index":order,
             "run_id":a.run_id,"git_commit":a.git_commit,"frontier_id":a.frontier_id,"global_step":step,
             "checkpoint_metadata_sha256":metadata_sha})
+        bound[-1]["weight_sync_receipt_sha256"]=receipt_sha
     output.parent.mkdir(parents=True,exist_ok=True)
     with output.open("x") as stream:
         for row in bound: stream.write(json.dumps(row,sort_keys=True)+"\n")

@@ -84,11 +84,13 @@ case "$ACTION" in
       trainer.save_freq=-1 trainer.test_freq=-1 trainer.total_epochs=1 trainer.total_training_steps=1 trainer.default_hdfs_dir=null trainer.default_local_dir="$tmp/no_checkpoint" \
       trainer.resume_mode=prd_actor_only_eval trainer.resume_from_path="$checkpoint" \
       +trainer.prd_eval.expected_global_step="$ANCHOR" +trainer.prd_eval.capacity_nats="$CAPACITY_NATS" \
-      +trainer.prd_eval.git_commit="$EXPECTED_COMMIT" +trainer.prd_eval.run_id="$RUN_ID" ray_init.num_cpus=64
+      +trainer.prd_eval.git_commit="$EXPECTED_COMMIT" +trainer.prd_eval.run_id="$RUN_ID" \
+      +trainer.prd_eval.weight_sync_receipt_path="$PRD_RUN_ROOT/frontier/$cid/raw_terminal/weight_sync_anchor_$ANCHOR.json" ray_init.num_cpus=64
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/materialize_prd_s128_rows.py" --input "$tmp/generated/$ANCHOR.jsonl" \
       --output "$PRD_RUN_ROOT/frontier/$cid/raw_terminal/anchor_$ANCHOR.jsonl" \
       --stable-resolved /data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json \
       --validation-parquet "$VALIDATION_PARQUET" --checkpoint-metadata "$checkpoint/prd_checkpoint.json" \
+      --weight-sync-receipt "$PRD_RUN_ROOT/frontier/$cid/raw_terminal/weight_sync_anchor_$ANCHOR.json" \
       --run-id "$RUN_ID" --git-commit "$EXPECTED_COMMIT" --frontier-id "$cid" --global-step "$ANCHOR"
     ;;
   final-audit)
