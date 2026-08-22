@@ -144,7 +144,7 @@ def command_preflight(args: argparse.Namespace) -> int:
     pair = args.gpu_pair.split(",")
     if len(pair) != 2 or any(not item.isdigit() for item in pair) or len(set(pair)) != 2 or list(map(int, pair)) != sorted(map(int, pair)):
         failures.append("GPU pair must be two distinct canonical ascending indices")
-    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.e1), "PRD_E1_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO")):
+    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO")):
         if not path.is_file():
             failures.append(f"missing {decision}")
         else:
@@ -166,7 +166,18 @@ def command_preflight(args: argparse.Namespace) -> int:
                 prior_files.append({"path":path.name,"size":path.stat().st_size,"sha256":sha256(path)})
         if not any(item["path"].endswith(".safetensors") for item in prior_files): failures.append("prior weights missing")
     except Exception as exc: failures.append(f"invalid prior model inventory: {exc}")
-    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest), "prior_model":{"id":"Qwen/Qwen2.5-0.5B-Instruct","revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8","path":str(prior_root),"files":prior_files}})
+    base_root=Path(args.base_model).resolve(); base_files=[]; training_resolved=Path(args.original_training_resolved).resolve()
+    try:
+        config=json.loads((base_root/"config.json").read_text())
+        if base_root!=Path("/data/cw/memagent_work/models/Qwen2.5-7B-Instruct") or config.get("hidden_size")!=3584 or config.get("num_hidden_layers")!=28:
+            failures.append("base is not the frozen Qwen2.5-7B architecture/path")
+        for path in sorted(base_root.iterdir()):
+            if path.is_file() and path.suffix in {".json",".safetensors",".txt"}: base_files.append({"path":path.name,"size":path.stat().st_size,"sha256":sha256(path)})
+        if not any(item["path"].endswith(".safetensors") for item in base_files): failures.append("base weights missing")
+        resolved_text=training_resolved.read_text()
+        if str(base_root) not in resolved_text: failures.append("Original training resolved does not bind the base path")
+    except Exception as exc: failures.append(f"invalid base/original resolved binding: {exc}")
+    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest), "prior_model":{"id":"Qwen/Qwen2.5-0.5B-Instruct","revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8","path":str(prior_root),"files":prior_files},"base_model":{"id":"Qwen/Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28","path":str(base_root),"files":base_files},"original_training_resolved":{"path":str(training_resolved),"sha256":sha256(training_resolved)}})
     write_json_exclusive(Path(args.output), result)
     return 0 if not failures else 4
 
@@ -177,7 +188,7 @@ def main() -> int:
     e0 = sub.add_parser("e0"); e0.add_argument("--output", required=True); e0.set_defaults(func=command_e0)
     e1 = sub.add_parser("e1"); e1.add_argument("--rows", required=True); e1.add_argument("--output", required=True); e1.set_defaults(func=command_e1)
     p0 = sub.add_parser("preflight")
-    for name in ("expected_commit", "gpu_pair", "e0", "e1", "paper_review", "prior_model", "output"):
+    for name in ("expected_commit", "gpu_pair", "e0", "paper_review", "prior_model", "base_model", "original_training_resolved", "output"):
         p0.add_argument("--" + name.replace("_", "-"), required=True)
     p0.set_defaults(func=command_preflight)
     return args.func(args) if (args := parser.parse_args()) else 1

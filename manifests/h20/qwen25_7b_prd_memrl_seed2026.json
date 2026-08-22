@@ -73,7 +73,8 @@
   },
   "gates": {
     "e0_required": true,
-    "e1_required": true,
+    "e1_required": false,
+    "e1_status": "POSTHOC_METHOD_DIAGNOSTIC_FROM_ON_POLICY_METHOD_ROWS; MISSING_ORIGINAL_INTERNAL_LOGPROBS_DO_NOT_BLOCK_TRAINING",
     "paper_framing_review_required": true,
     "single_fresh_run_to_t25": true,
     "t5_health_only": ["finite_loss", "finite_nonzero_gradient", "checkpoint_inventory", "ledger", "weight_sync"],

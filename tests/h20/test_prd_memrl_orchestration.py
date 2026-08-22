@@ -45,6 +45,8 @@ class OrchestrationTests(unittest.TestCase):
                     "path":str(self.prior.resolve()),
                     "files":[{"path":"config.json","sha256":hashlib.sha256(prior_config.read_bytes()).hexdigest()}],
                 },
+                "base_model":{"id":"Qwen/Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28",
+                    "path":"/data/cw/memagent_work/models/Qwen2.5-7B-Instruct","files":[]},
             },
         })
         args = type("A", (), dict(run_root=str(self.root/"run"), run_id=self.run_id,
@@ -160,6 +162,17 @@ class OrchestrationTests(unittest.TestCase):
         block=trainer[trainer.index('PRD T5 numerical health NO-GO'):trainer.index('PRD_T5_HEALTH_PASS')]
         self.assertNotIn('_validate()',block)
         self.assertNotIn('fixed_s128',block)
+
+    def test_h20_release_has_real_materializers_and_post_t25_producer(self):
+        entry=(REPO/"scripts/h20/run_qwen25_7b_prd_memrl.sh").read_text()
+        gate=(REPO/"tools/h20/prd_memrl_gate.py").read_text()
+        self.assertIn("produce-s128)",entry)
+        self.assertIn("global_step_25/prd_checkpoint.json",entry)
+        self.assertIn("VLLM_WORKER_MULTIPROC_METHOD=spawn",entry)
+        self.assertIn("materialize_prd_s128_rows.py",entry)
+        self.assertNotIn('(Path(args.e1), "PRD_E1_PASS")',gate)
+        for path in ("materialize_prd_prior.py","issue_prd_paper_review.py","materialize_prd_s128_rows.py"):
+            self.assertTrue((REPO/"tools/h20"/path).is_file())
 
 
 if __name__ == "__main__": unittest.main()

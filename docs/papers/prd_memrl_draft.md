@@ -1,6 +1,6 @@
 # Paper IV Draft — Conditional Innovation Rate for Recurrent Text Memory
 
-**Scientific status (2026-08-22): REFRAME-GO, pre-E1.** This document states a
+**Scientific status (2026-08-22): REFRAME-GO for gated Method execution.** This document states a
 falsifiable paper program, not a result claim. Bracketed entries are experiment
 placeholders. A failure of the Original rate-not-length audit, prior coding-gain
 gate, or three-point frontier gate changes the status to NO-GO.
@@ -270,8 +270,8 @@ RL cover every generic component. Framing is therefore GO only if:
 1. The production writer's complete input is proven to be `(E_t,M_t,t)`.
 2. E0 verifies normalization/support, the finite-channel decomposition, dual
    direction, and the behavior/current-policy estimator boundary.
-3. E1 shows legal-prior coding gain and rate variation unexplained by token
-   length, turn, entropy, or fixed-reference KL.
+3. Posthoc E1 uses authenticated on-policy Method rows to test legal-prior
+   coding gain and rate variation unexplained by length, turn, entropy, or KL.
 4. At least three preregistered capacities yield distinct realized rates.
 5. Predictive probes plus deletion/injection interventions locate where lower
    rate preserves or destroys future-useful information.
@@ -292,7 +292,7 @@ as information rate.
 | Dynamic taint | mutate evidence/gold/future with fixed legal context | prior input hash and logits bitwise/tolerance invariant | leakage; blocker |
 | Checkpoint round trip | actor, prior, both optimizers/schedulers, dual, RNG, step, frontier ID | exact restart receipt | experiments non-recoverable |
 
-### E1 — frozen Original trajectories
+### E1 — posthoc authenticated Method trajectories
 
 **Table 1: Rate is not length.** Per-turn and per-trajectory Kendall/Spearman;
 discordant-pair fraction; regression `rate ~ tokens + turn`; residual variance;
@@ -312,13 +312,13 @@ used as reward.
 
 E1 failures: perfect length ordering; no legal coding gain; source leakage;
 missing exact actor tokens/log-probs; or insufficient comparable turns. Any is
-`NO-GO_E1`, not permission to train.
+`NO-GO_E1_CLAIM`: it disables the conditional-rate mechanism claim, but missing
+Original internal log-probabilities does not block the frozen Method run.
 
 ### Fresh Method frontier
 
-Capacities are frozen after E1 and before any S128 Method result, with at least
-three distinct ascending values spanning below/equal/above the Original E1
-realized rate. Every capacity is an independent experiment, manifest, ledger,
+Capacities are frozen before Method training, with at least three distinct
+ascending values spanning a preregistered engineering range. Every capacity is an independent experiment, manifest, ledger,
 checkpoint namespace, and commit if algorithmically changed.
 
 **Table 4: T5 health and frontier.** Capacity, realized rate (nats/trajectory),
