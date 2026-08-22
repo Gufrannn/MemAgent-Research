@@ -4,7 +4,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/rwwpo_common.sh"
 [[ ${RWWPO_PHASE:-} == full || ${RWWPO_PHASE:-} == t5 || ${RWWPO_PHASE:-} == continue ]] || { echo 'RWWPO_NO_GO:RWWPO_PHASE=full|t5|continue' >&2; exit 74; }
 rwwpo_require_checkout
-PREFLIGHT=("$RWWPO_PYTHON" "$RWWPO_REPO_DIR/tools/h20/preflight_rwwpo.py" --manifest "$RWWPO_MANIFEST" --expected-commit "$RWWPO_EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$RWWPO_E0" --baseline-import "$RWWPO_BASELINE" --original-resolved-manifest "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256" --phase "$RWWPO_PHASE")
+PREFLIGHT=("$RWWPO_PYTHON" "$RWWPO_REPO_DIR/tools/h20/preflight_rwwpo.py" --manifest "$RWWPO_MANIFEST" --expected-commit "$RWWPO_EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$RWWPO_E0" --baseline-import "$RWWPO_BASELINE" --original-resolved-manifest "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256" --phase "$RWWPO_PHASE" --objective-variant "$RWWPO_OBJECTIVE_VARIANT" --controller-variant "$RWWPO_CONTROLLER_VARIANT")
 if [[ $RWWPO_PHASE == continue ]]; then
   [[ ${RWWPO_RESUME_STEP:-} =~ ^(5|10|15|20)$ ]] || { echo 'RWWPO_NO_GO:RWWPO_RESUME_STEP must be prior anchor' >&2; exit 75; }
   [[ ${RWWPO_TARGET_STEP:-} =~ ^(10|15|20|25)$ && $RWWPO_TARGET_STEP -gt $RWWPO_RESUME_STEP ]] || { echo 'RWWPO_NO_GO:invalid target anchor' >&2; exit 76; }

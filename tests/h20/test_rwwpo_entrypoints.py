@@ -16,7 +16,7 @@ def test_preflight_rejects_noncanonical_gpu_pair(tmp_path):
     original=ROOT/"manifests/h20/qwen25_7b_original_t25_seed2026.json"
     original_sha=hashlib.sha256(original.read_bytes()).hexdigest()
     head=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
-    result=run(ROOT/"tools/h20/preflight_rwwpo.py","--manifest",ROOT/"manifests/h20/qwen25_7b_rwwpo_seed2026.json","--expected-commit",head,"--gpu-pair","7,3","--e0",tmp_path/"e0.json","--e1",tmp_path/"e1.json","--baseline-import",tmp_path/"baseline.json","--original-resolved-manifest",original,"--original-resolved-sha256",original_sha,"--phase","t5")
+    result=run(ROOT/"tools/h20/preflight_rwwpo.py","--manifest",ROOT/"manifests/h20/qwen25_7b_rwwpo_seed2026.json","--expected-commit",head,"--gpu-pair","7,3","--e0",tmp_path/"e0.json","--e1",tmp_path/"e1.json","--baseline-import",tmp_path/"baseline.json","--original-resolved-manifest",original,"--original-resolved-sha256",original_sha,"--phase","t5","--objective-variant","whole_prefix","--controller-variant","hard_rollback")
     assert result.returncode != 0 and "canonical" in result.stderr
 
 def test_actual_ledger_rejects_hash_tamper(tmp_path):

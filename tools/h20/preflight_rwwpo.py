@@ -7,13 +7,14 @@ def receipt(path, decision, commit):
     actual=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     return declared==actual and row.get("status")=="PASS" and row.get("decision")==decision and row.get("git_commit")==commit
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--manifest",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--gpu-pair",required=True); p.add_argument("--e0",required=True); p.add_argument("--e1"); p.add_argument("--baseline-import",required=True); p.add_argument("--original-resolved-manifest",required=True); p.add_argument("--original-resolved-sha256",required=True); p.add_argument("--phase",choices=["full","t5","continue"],required=True); p.add_argument("--resume-step",type=int); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--manifest",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--gpu-pair",required=True); p.add_argument("--e0",required=True); p.add_argument("--e1"); p.add_argument("--baseline-import",required=True); p.add_argument("--original-resolved-manifest",required=True); p.add_argument("--original-resolved-sha256",required=True); p.add_argument("--phase",choices=["full","t5","continue"],required=True); p.add_argument("--resume-step",type=int); p.add_argument("--objective-variant",required=True); p.add_argument("--controller-variant",required=True); a=p.parse_args()
     manifest=json.loads(Path(a.manifest).read_text())
     head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); branch=subprocess.check_output(["git","branch","--show-current"],text=True).strip()
     pair=[int(x) for x in a.gpu_pair.split(",")]
     if len(pair)!=2 or pair!=sorted(set(pair)): raise SystemExit("RWWPO_NO_GO:GPU_PAIR must be two distinct canonical ascending IDs")
     if head!=a.expected_commit or not re.fullmatch(r"[0-9a-f]{40}",head): raise SystemExit("RWWPO_NO_GO:wrong_commit")
     if branch!=manifest.get("branch"): raise SystemExit("RWWPO_NO_GO:wrong_branch")
+    if manifest.get("method",{}).get("objective_variant","whole_prefix")!=a.objective_variant or manifest.get("method",{}).get("controller_variant","hard_rollback")!=a.controller_variant: raise SystemExit("RWWPO_NO_GO:variant_identity_drift")
     if subprocess.check_output(["git","status","--porcelain"],text=True).strip(): raise SystemExit("RWWPO_NO_GO:dirty_tree")
     if not receipt(a.e0,"RWWPO_E0_PASS",head): raise SystemExit("RWWPO_NO_GO:E0")
     if not receipt(a.baseline_import,"ORIGINAL_BASELINE_IMPORT_PASS",head): raise SystemExit("RWWPO_NO_GO:baseline_import")
