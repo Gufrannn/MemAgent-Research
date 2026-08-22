@@ -25,6 +25,12 @@ readonly MIC_P0=$MIC_CERT/p0.json
 readonly MIC_E0=$MIC_CERT/e0.json
 readonly MIC_E1=$MIC_CERT/e1.json
 readonly MIC_BASELINE=$MIC_CERT/baseline_import.json
+readonly MIC_BASELINE_ROOT=$MIC_ROOT/baseline_materialized
+readonly MIC_BASELINE_INVENTORY=$MIC_BASELINE_ROOT/baseline_inventory.json
+readonly MIC_CHECKPOINT_AUTHORITY=$MEMAGENT_MIC_REPO_DIR/manifests/h20/qwen25_7b_mic_checkpoint_authority.json
+readonly MIC_CURVE_AUTHORITY=$MEMAGENT_MIC_REPO_DIR/manifests/h20/qwen25_7b_mic_original_curve_authority.json
+readonly MIC_CHECKPOINT_AUTHORITY_CERT=$MIC_CERT/checkpoint_authority.json
+readonly MIC_CURVE_RESOLVED=$MEMAGENT_MIC_WORK_ROOT/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json
 readonly MIC_PAPER_REVIEW=$MEMAGENT_MIC_REPO_DIR/docs/papers/mic_release_review.json
 readonly MIC_LEDGER=$MIC_ROOT/mic_execution_ledger.jsonl
 readonly MIC_WEIGHT_LEDGER=$MIC_ROOT/mic_weight_sync_ledger.jsonl
@@ -74,7 +80,27 @@ mic_require_training_gates() {
   mic_require_gate "$MIC_PAPER_REVIEW" MIC_PAPER_REVIEW_GO
 }
 
+mic_next_eval_attempt() {
+  local step=$1 index=1 candidate
+  local container=$MIC_ROOT/eval_t${step}_attempts
+  mkdir -p "$container"
+  while :; do
+    candidate=$(printf '%s/attempt_%04d' "$container" "$index")
+    if mkdir "$candidate" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+}
+
 mic_export_training() {
+  unset MEMAGENT_MIC_EVAL_STEP MEMAGENT_MIC_EVAL_DIR \
+    MEMAGENT_MIC_EVAL_IDENTITY_PATH MEMAGENT_MIC_EVAL_IDENTITY_SHA256 \
+    MEMAGENT_MIC_EVAL_SUMMARY_PATH MEMAGENT_MIC_EVAL_GENERATION_PATH \
+    MEMAGENT_MIC_EVAL_TRAINING_AUDIT_SHA256 \
+    MEMAGENT_MIC_EVAL_ORIGINAL_PROTOCOL_SHA256 \
+    MEMAGENT_MIC_EVAL_ORIGINAL_REWARD_CODE_SHA256
   export CUDA_VISIBLE_DEVICES=$MEMAGENT_MIC_GPU_PAIR
   export MEMAGENT_MIC_REQUIRED=1
   export MEMAGENT_MIC_ENABLE=1
@@ -86,6 +112,19 @@ mic_export_training() {
   export GATE_A_EXPERIMENT_NAME=$MIC_EXPERIMENT
   export GATE_A_GIT_COMMIT=$MEMAGENT_MIC_EXPECTED_COMMIT
   export GATE_A_RUN_ID=$MEMAGENT_MIC_RUN_ID
+  export GATE_A_WEIGHT_DIGEST_PARAMETERS=model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight
+  export GATE_A_WEIGHT_DIGEST_SAMPLES=256
+}
+
+mic_export_evaluation() {
+  export CUDA_VISIBLE_DEVICES=$MEMAGENT_MIC_GPU_PAIR
+  export MEMAGENT_MIC_REQUIRED=1
+  export MEMAGENT_MIC_ENABLE=1
+  export MEMAGENT_MIC_EXPECTED_COMMIT
+  export MEMAGENT_MIC_RUN_ID
+  export GATE_A_FROZEN_AUDIT=0
+  unset MEMAGENT_MIC_LEDGER_PATH MEMAGENT_MIC_CRITIC_ROOT \
+    GATE_A_EXECUTION_LEDGER GATE_A_EXPERIMENT_NAME GATE_A_GIT_COMMIT GATE_A_RUN_ID
   export GATE_A_WEIGHT_DIGEST_PARAMETERS=model.embed_tokens.weight,model.layers.0.input_layernorm.weight,model.layers.0.self_attn.o_proj.weight,model.layers.0.mlp.down_proj.weight,model.layers.27.input_layernorm.weight,model.layers.27.self_attn.o_proj.weight,model.layers.27.mlp.down_proj.weight,model.norm.weight
   export GATE_A_WEIGHT_DIGEST_SAMPLES=256
 }

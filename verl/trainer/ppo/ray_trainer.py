@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from pprint import pprint
 from typing import Dict, Type
 
@@ -61,6 +62,114 @@ from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
 
 WorkerType = Type[Worker]
+
+
+def _mic_generation_protocol_evidence(
+        config, expected_original_sha256: str, expected_reward_code_sha256: str
+) -> dict[str, str]:
+    """Mirror the certified S128 projection; exclude training-only knobs and paths."""
+    resolved = OmegaConf.to_container(config, resolve=True)
+    projection = {
+        "recurrent": resolved["recurrent"],
+        "data": {
+            key: resolved["data"][key]
+            for key in (
+                "val_files", "shuffle", "filter_overlong_prompts",
+                "filter_overlong_prompts_workers", "dataloader_num_workers",
+                "include_source_order_index", "truncation", "context_key",
+                "val_max_samples", "max_prompt_length", "max_response_length",
+            )
+        },
+        "model": {
+            "path": resolved["actor_rollout_ref"]["model"]["path"],
+            "use_remove_padding": resolved["actor_rollout_ref"]["model"]["use_remove_padding"],
+        },
+        "rollout": {
+            key: resolved["actor_rollout_ref"]["rollout"][key]
+            for key in (
+                "name", "mode", "n", "tensor_model_parallel_size",
+                "max_num_batched_tokens", "max_num_seqs", "val_kwargs",
+            )
+        },
+        "reward_manager": resolved["reward_model"]["reward_manager"],
+        "custom_reward_function": resolved["custom_reward_function"],
+    }
+    work_root = os.environ.get("MEMAGENT_MIC_WORK_ROOT", "")
+    repo_dir = os.environ.get("MEMAGENT_MIC_REPO_DIR", "")
+    expected_validation = os.path.join(work_root, "datasets/hotpotqa/hotpotqa_dev.parquet")
+    expected_model = os.path.join(work_root, "models/Qwen2.5-7B-Instruct")
+    recurrent_config = projection["recurrent"]["memory"]["config"]
+    expected_data = {
+        "val_files": expected_validation, "shuffle": False,
+        "filter_overlong_prompts": True, "filter_overlong_prompts_workers": 1,
+        "dataloader_num_workers": 0, "include_source_order_index": True,
+        "truncation": "center", "context_key": "context", "val_max_samples": 128,
+        "max_prompt_length": 8192, "max_response_length": 1024,
+    }
+    expected_rollout = {
+        "name": "vllm", "mode": "sync", "n": 1, "tensor_model_parallel_size": 1,
+        "max_num_batched_tokens": 16384, "max_num_seqs": 16,
+        "val_kwargs": {
+            "top_k": -1, "top_p": 1.0, "temperature": 0.0,
+            "n": 1, "do_sample": False,
+        },
+    }
+    if projection["recurrent"].get("enable") != "memory" \
+            or {key: recurrent_config.get(key) for key in (
+                "chunk_size", "max_chunks", "max_prompt_length",
+                "max_memorization_length", "max_final_response_length",
+            )} != {
+                "chunk_size": 5000, "max_chunks": 8, "max_prompt_length": 1024,
+                "max_memorization_length": 1024, "max_final_response_length": 1024,
+            } \
+            or projection["data"] != expected_data \
+            or projection["model"] != {
+                "path": expected_model, "use_remove_padding": True,
+            } \
+            or projection["rollout"] != expected_rollout \
+            or projection["reward_manager"] != "naive" \
+            or projection["custom_reward_function"] != {
+                "path": os.path.join(repo_dir, "recurrent/research/hotpotqa_dense_reward.py"),
+                "name": "compute_score",
+                "reward_kwargs": {"f1_weight": 0.95, "grounded_box_bonus": 0.05},
+            }:
+        raise RuntimeError("MIC_NO_GO: strict fixed-S128 generation contract drifted")
+    def projection_sha(value) -> str:
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    actual_reward_path = Path(projection["custom_reward_function"]["path"]).resolve()
+    if not actual_reward_path.is_file():
+        raise RuntimeError("MIC_NO_GO: Method evaluation reward code is absent")
+    actual_reward_sha = hashlib.sha256(actual_reward_path.read_bytes()).hexdigest()
+    if actual_reward_sha != expected_reward_code_sha256:
+        raise RuntimeError("MIC_NO_GO: Method/Original S128 reward code differs")
+    matches = []
+    code_root = Path(work_root) / "code"
+    for candidate in sorted(code_root.rglob("hotpotqa_dense_reward.py")):
+        if candidate.parts[-3:] != (
+                "recurrent", "research", "hotpotqa_dense_reward.py"
+        ):
+            continue
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected_reward_code_sha256:
+            continue
+        candidate_projection = deepcopy(projection)
+        candidate_projection["custom_reward_function"]["path"] = str(candidate.resolve())
+        if projection_sha(candidate_projection) == expected_original_sha256:
+            matches.append(str(candidate.resolve()))
+    if not matches:
+        raise RuntimeError(
+            "MIC_NO_GO: Method generation protocol does not reconstruct the certified "
+            "Original protocol after repository-path normalization"
+        )
+    return {
+        "method_generation_protocol_sha256": projection_sha(projection),
+        "original_generation_protocol_sha256": expected_original_sha256,
+        "original_protocol_reconstruction_path": matches[0],
+        "reward_code_sha256": expected_reward_code_sha256,
+    }
 
 
 class Role(Enum):
@@ -500,6 +609,8 @@ class RayPPOTrainer:
         self.validation_generations_logger = ValidationGenerationsLogger()
         self._actor_update_calls = 0
         self._stable_eval_actor_checkpoint_load_acks = None
+        self._mic_eval_actor_checkpoint_load_acks = None
+        self._mic_eval_actor_checkpoint_inventory = None
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -991,7 +1102,7 @@ class RayPPOTrainer:
                     ).tolist()
                 selected = [mic_eval_identities[int(order)] for order in source_orders]
                 fields = ("stable_key", "stable_example_id", "stable_root_id",
-                          "source_order_index", "source_question_sha256",
+                          "source_order_index", "raw_row_position", "source_question_sha256",
                           "source_context_sha256", "trajectory_seed")
                 identity_batch = {field: [row[field] for row in selected] for field in fields}
                 validation_seeds = [int(row["trajectory_seed"]) for row in selected]
@@ -1323,6 +1434,33 @@ class RayPPOTrainer:
         local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
+        if os.environ.get("MEMAGENT_MIC_ENABLE", "0") == "1":
+            from recurrent.research.mic import append_jsonl_new, sha256_file, sha256_json
+
+            model_shards = []
+            for rank in range(self.actor_rollout_wg.world_size):
+                shard = os.path.join(
+                    actor_local_path,
+                    f"model_world_size_{self.actor_rollout_wg.world_size}_rank_{rank}.pt",
+                )
+                if not os.path.isfile(shard):
+                    raise RuntimeError(
+                        f"MIC_NO_GO: saved actor checkpoint shard absent: {shard}"
+                    )
+                model_shards.append({
+                    "path": f"actor/{os.path.basename(shard)}",
+                    "size": int(os.path.getsize(shard)),
+                    "sha256": sha256_file(shard),
+                })
+            append_jsonl_new(os.environ["MEMAGENT_MIC_LEDGER_PATH"], {
+                "record_type": "mic_actor_checkpoint_inventory",
+                "global_step": int(self.global_steps),
+                "checkpoint_path": os.path.realpath(local_global_step_folder),
+                "model_shards": model_shards,
+                "model_shards_sha256": sha256_json(model_shards),
+                "git_commit": os.environ.get("MEMAGENT_MIC_EXPECTED_COMMIT", ""),
+                "run_id": os.environ.get("MEMAGENT_MIC_RUN_ID", ""),
+            })
 
     def _audit_gate_a_weight_sync(self, *, global_step: int, actor_version: int, sync_kind: str) -> None:
         from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
@@ -1504,9 +1642,41 @@ class RayPPOTrainer:
             if not os.path.isdir(actor_path):
                 raise FileNotFoundError(f"MIC_NO_GO: actor checkpoint missing: {actor_path}")
             self.global_steps = int(match.group(1))
-            self.actor_rollout_wg.load_model_checkpoint_only(
+            shard_inventory = []
+            for rank in range(self.actor_rollout_wg.world_size):
+                shard = os.path.join(
+                    actor_path,
+                    f"model_world_size_{self.actor_rollout_wg.world_size}_rank_{rank}.pt",
+                )
+                if not os.path.isfile(shard):
+                    raise FileNotFoundError(
+                        f"MIC_NO_GO: actor checkpoint shard missing: {shard}"
+                    )
+                digest = hashlib.sha256()
+                with open(shard, "rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                shard_inventory.append({
+                    "path": f"actor/{os.path.basename(shard)}",
+                    "size": int(os.path.getsize(shard)),
+                    "sha256": digest.hexdigest(),
+                })
+            acknowledgements = self.actor_rollout_wg.load_model_checkpoint_only(
                 actor_path, del_local_after_load=False
             )
+            from recurrent.research.stable_eval_identity import (
+                validate_actor_only_checkpoint_acknowledgements,
+            )
+
+            self._mic_eval_actor_checkpoint_load_acks = (
+                validate_actor_only_checkpoint_acknowledgements(
+                    acknowledgements,
+                    shard_inventory,
+                    global_step_folder=checkpoint,
+                    world_size=self.actor_rollout_wg.world_size,
+                )
+            )
+            self._mic_eval_actor_checkpoint_inventory = shard_inventory
             return self.global_steps
         if self.config.trainer.resume_mode == "actor_only_eval":
             eval_identity_config = self.config.trainer.get("eval_identity", None)
@@ -1690,8 +1860,31 @@ class RayPPOTrainer:
         strict_eval_identity = bool(
             eval_identity_config is not None and eval_identity_config.get("enabled", False)
         )
+        mic_read_only_eval = str(self.config.trainer.get("resume_mode", "")) == (
+            "mic_actor_only_eval"
+        )
+        if mic_read_only_eval:
+            from recurrent.research.gate_a_execution import gate_a_enabled
+
+            if gate_a_enabled():
+                raise RuntimeError(
+                    "MIC_NO_GO: read-only Method evaluation refuses the training evidence writer"
+                )
+            if not self.config.trainer.get("mic_eval_identity_path", None) \
+                    or not self.config.trainer.get("mic_eval_summary_path", None) \
+                    or re.fullmatch(r"[0-9a-f]{64}", str(
+                        self.config.trainer.get("mic_eval_training_audit_sha256", "")
+                    )) is None:
+                raise RuntimeError("MIC_NO_GO: read-only Method evaluation binding missing")
+            self._mic_eval_generation_protocol_evidence = (
+                _mic_generation_protocol_evidence(
+                    self.config,
+                    str(self.config.trainer.mic_eval_original_protocol_sha256),
+                    str(self.config.trainer.mic_eval_original_reward_code_sha256),
+                )
+            )
         stable_eval_weight_before = None
-        if strict_eval_identity:
+        if strict_eval_identity or mic_read_only_eval:
             stable_eval_weight_before = self._stable_eval_weight_snapshot(
                 sync_kind="stable_eval_before"
             )
@@ -1709,7 +1902,7 @@ class RayPPOTrainer:
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
-                if strict_eval_identity:
+                if strict_eval_identity or mic_read_only_eval:
                     if self._actor_update_calls != 0:
                         raise RuntimeError(
                             "stable evaluation identity canary reached actor update unexpectedly: "
@@ -1739,6 +1932,7 @@ class RayPPOTrainer:
                             f"before_post={stable_eval_weight_before['vllm_sampled_tensor_digest']}, "
                             f"after_pre={stable_eval_weight_after['vllm_pre_sync_sampled_tensor_digest']}"
                         )
+                if strict_eval_identity:
                     summary_path = os.path.realpath(str(eval_identity_config.execution_summary_path))
                     summary_parent = os.path.dirname(summary_path)
                     if summary_parent:
@@ -1773,6 +1967,72 @@ class RayPPOTrainer:
                             if self._stable_eval_actor_checkpoint_load_acks is not None
                             else []
                         ),
+                        "validation_only": True,
+                        "weight_snapshot_before": stable_eval_weight_before,
+                        "weight_snapshot_after": stable_eval_weight_after,
+                    }
+                    with open(summary_path, "x", encoding="utf-8") as stream:
+                        stream.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+                elif mic_read_only_eval:
+                    checkpoint_root = os.path.realpath(str(self.config.trainer.resume_from_path))
+                    current_inventory = []
+                    for item in self._mic_eval_actor_checkpoint_inventory or []:
+                        shard = os.path.join(checkpoint_root, item["path"])
+                        digest = hashlib.sha256()
+                        with open(shard, "rb") as stream:
+                            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                        current_inventory.append({
+                            "path": item["path"], "size": int(os.path.getsize(shard)),
+                            "sha256": digest.hexdigest(),
+                        })
+                    if current_inventory != self._mic_eval_actor_checkpoint_inventory:
+                        raise RuntimeError("MIC_NO_GO: actor checkpoint changed during evaluation")
+                    identity_path = os.path.realpath(str(
+                        self.config.trainer.mic_eval_identity_path
+                    ))
+                    identity_sha = hashlib.sha256(open(identity_path, "rb").read()).hexdigest()
+                    if identity_sha != str(self.config.trainer.mic_eval_identity_sha256):
+                        raise RuntimeError("MIC_NO_GO: evaluation identity changed during rollout")
+                    summary_path = os.path.realpath(str(
+                        self.config.trainer.mic_eval_summary_path
+                    ))
+                    generation_path = os.path.realpath(str(
+                        self.config.trainer.mic_eval_generation_path
+                    ))
+                    if not os.path.isfile(generation_path):
+                        raise RuntimeError("MIC_NO_GO: evaluation generation artifact absent")
+                    generation_digest = hashlib.sha256()
+                    with open(generation_path, "rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            generation_digest.update(chunk)
+                    summary_parent = os.path.dirname(summary_path)
+                    if summary_parent:
+                        os.makedirs(summary_parent, exist_ok=True)
+                    summary = {
+                        "schema": "memagent.mic.eval.v1",
+                        "record_type": "mic_read_only_execution_summary",
+                        "global_step": int(self.global_steps),
+                        "run_id": os.environ.get("MEMAGENT_MIC_RUN_ID", ""),
+                        "evaluation_git_commit": os.environ.get(
+                            "MEMAGENT_MIC_EXPECTED_COMMIT", ""
+                        ),
+                        "training_audit_sha256": str(
+                            self.config.trainer.mic_eval_training_audit_sha256
+                        ),
+                        "generation_protocol_evidence": (
+                            self._mic_eval_generation_protocol_evidence
+                        ),
+                        "identity_path": identity_path,
+                        "identity_sha256": identity_sha,
+                        "generation_path": generation_path,
+                        "generation_sha256": generation_digest.hexdigest(),
+                        "checkpoint_source": checkpoint_root,
+                        "checkpoint_inventory": current_inventory,
+                        "actor_checkpoint_load_acks": (
+                            self._mic_eval_actor_checkpoint_load_acks or []
+                        ),
+                        "actor_update_calls": int(self._actor_update_calls),
                         "validation_only": True,
                         "weight_snapshot_before": stable_eval_weight_before,
                         "weight_snapshot_after": stable_eval_weight_after,

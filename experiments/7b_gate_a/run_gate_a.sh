@@ -187,7 +187,7 @@ TRAINER_OVERRIDES=(
   "${RESUME_ARGS[@]}"
 )
 
-if [[ ${MEMAGENT_MIC_ENABLE:-0} == 1 ]]; then
+if [[ ${MEMAGENT_MIC_ENABLE:-0} == 1 && -z ${MEMAGENT_MIC_EVAL_STEP:-} ]]; then
   [[ -n ${MEMAGENT_MIC_LEDGER_PATH:-} && -n ${MEMAGENT_MIC_CRITIC_ROOT:-} ]] || {
     echo "MIC_NO_GO: MIC ledger and critic root are required" >&2
     exit 56
@@ -205,21 +205,41 @@ fi
 
 if [[ -n ${MEMAGENT_MIC_EVAL_STEP:-} ]]; then
   [[ ${MEMAGENT_MIC_EVAL_STEP} =~ ^(5|10|15|20|25)$ && -n ${MEMAGENT_MIC_EVAL_DIR:-} \
-      && -n ${MEMAGENT_MIC_EVAL_IDENTITY_PATH:-} && -n ${MEMAGENT_MIC_EVAL_IDENTITY_SHA256:-} ]] || {
+      && -n ${MEMAGENT_MIC_EVAL_IDENTITY_PATH:-} && -n ${MEMAGENT_MIC_EVAL_IDENTITY_SHA256:-} \
+      && -n ${MEMAGENT_MIC_EVAL_SUMMARY_PATH:-} && -n ${MEMAGENT_MIC_EVAL_GENERATION_PATH:-} \
+      && ${MEMAGENT_MIC_EVAL_TRAINING_AUDIT_SHA256:-} =~ ^[0-9a-f]{64}$ \
+      && ${MEMAGENT_MIC_EVAL_ORIGINAL_PROTOCOL_SHA256:-} =~ ^[0-9a-f]{64}$ \
+      && ${MEMAGENT_MIC_EVAL_ORIGINAL_REWARD_CODE_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
     echo "MIC_NO_GO: invalid MIC evaluation step/directory" >&2
     exit 57
   }
   TRAINER_OVERRIDES+=(
     algorithm.mic.enabled=false
+    recurrent.memory.config.max_prompt_length=1024
+    recurrent.memory.config.max_memorization_length=1024
+    recurrent.memory.config.max_final_response_length=1024
+    data.filter_overlong_prompts_workers=1
+    +data.val_max_samples=128
+    algorithm.use_kl_in_reward=false
+    actor_rollout_ref.actor.use_kl_loss=false
+    actor_rollout_ref.actor.ppo_mini_batch_size=2
+    actor_rollout_ref.rollout.mode=sync
+    actor_rollout_ref.rollout.n=1
     trainer.val_before_train=true
     +trainer.val_only=true
     trainer.save_freq=-1
+    trainer.total_epochs=1
     trainer.resume_mode=mic_actor_only_eval
     "trainer.resume_from_path=$OUT/global_step_${MEMAGENT_MIC_EVAL_STEP}"
     "trainer.validation_data_dir=$MEMAGENT_MIC_EVAL_DIR"
     +data.include_source_order_index=true
-    "trainer.mic_eval_identity_path=$MEMAGENT_MIC_EVAL_IDENTITY_PATH"
-    "trainer.mic_eval_identity_sha256=$MEMAGENT_MIC_EVAL_IDENTITY_SHA256"
+    "+trainer.mic_eval_identity_path=$MEMAGENT_MIC_EVAL_IDENTITY_PATH"
+    "+trainer.mic_eval_identity_sha256=$MEMAGENT_MIC_EVAL_IDENTITY_SHA256"
+    "+trainer.mic_eval_summary_path=$MEMAGENT_MIC_EVAL_SUMMARY_PATH"
+    "+trainer.mic_eval_generation_path=$MEMAGENT_MIC_EVAL_GENERATION_PATH"
+    "+trainer.mic_eval_training_audit_sha256=$MEMAGENT_MIC_EVAL_TRAINING_AUDIT_SHA256"
+    "+trainer.mic_eval_original_protocol_sha256=$MEMAGENT_MIC_EVAL_ORIGINAL_PROTOCOL_SHA256"
+    "+trainer.mic_eval_original_reward_code_sha256=$MEMAGENT_MIC_EVAL_ORIGINAL_REWARD_CODE_SHA256"
     actor_rollout_ref.rollout.val_kwargs.n=1
     actor_rollout_ref.rollout.val_kwargs.do_sample=false
     actor_rollout_ref.rollout.val_kwargs.temperature=0.0

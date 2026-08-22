@@ -1,0 +1,7 @@
+{
+  "authority_kind": "out_of_band_operator_sha256_pinned",
+  "checkpoint_authority_sha256": "21a4b19fe2500bb4df12fefb6d675f960a29baaee9fa58ba8f19d9a53c2bb212",
+  "run_id": "mic-main-v1-seed2026-runtimefix3",
+  "schema": "memagent.mic.v1",
+  "training_git_commit": "6013dcc7afb24b91afbb31b37e14a7c54702b066"
+}

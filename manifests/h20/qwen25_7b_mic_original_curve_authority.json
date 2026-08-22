@@ -1,0 +1,8 @@
+{
+  "authority_kind": "out_of_band_original_curve_sha256_pinned",
+  "curve_report_path": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json",
+  "curve_report_sha256": "59c417657163ce843ec8f6e7a22e3129b895a3a32a10f7e45731adab4d03f3e9",
+  "curve_resolved_path": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json",
+  "curve_resolved_sha256": "75167a3179698ce8edf0a2da6164795bc495952c66b9e1ea09b2cda91c5b0bb6",
+  "schema": "memagent.mic.v1"
+}

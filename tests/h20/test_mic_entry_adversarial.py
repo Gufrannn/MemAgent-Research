@@ -13,6 +13,8 @@ from recurrent.research.mic import (
     innovation_ledger, sha256_file,
 )
 from recurrent.research.gate_a_execution import append_jsonl
+from recurrent.research.s128_hotpot_metrics import score_terminal_output, summarize_fixed_s128
+from recurrent.research.stable_eval_identity import canonical_sha256, stable_key
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("mic_pipeline", REPO / "tools/h20/mic_pipeline.py")
@@ -54,6 +56,178 @@ def test_method_inactive_and_seed_tamper_real_training_entry(tmp_path, extra, co
     )
     assert result.returncode == code
     assert message in result.stderr
+
+
+def test_real_eval_launcher_emits_actor_only_overrides_without_training_ledgers(tmp_path):
+    model, train, validation = tmp_path / "model", tmp_path / "train.parquet", tmp_path / "val.parquet"
+    model.mkdir(); (model / "config.json").write_text("{}")
+    train.write_bytes(b"train"); validation.write_bytes(b"validation")
+    experiment = "mic-eval-entry"
+    checkpoint = tmp_path / "logs/memory_agent" / experiment / "global_step_5"
+    (checkpoint / "actor").mkdir(parents=True); (checkpoint / "data.pt").write_bytes(b"data")
+    identity, summary, generation = (tmp_path / name for name in (
+        "identity.jsonl", "summary.json", "generation.jsonl"
+    ))
+    identity.write_text("{}\n")
+    env = os.environ.copy()
+    env.update({
+        "WORK_ROOT": str(tmp_path), "CODE": str(REPO), "PYTHON": os.sys.executable,
+        "MODEL": str(model), "TRAIN": str(train), "VAL": str(validation),
+        "PHASE": "resume", "EXP": experiment, "RESUME_SOURCE_STEP": "5",
+        "RESUME_TOTAL_STEPS": "6", "N_GPUS": "2", "FSDP_SIZE": "2",
+        "CUDA_VISIBLE_DEVICES": "6,7", "MEMAGENT_MIC_REQUIRED": "1",
+        "MEMAGENT_MIC_ENABLE": "1", "RUN_SEED": "2026", "EMIT_TRAINER_OVERRIDES": "1",
+        "MEMAGENT_MIC_EVAL_STEP": "5", "MEMAGENT_MIC_EVAL_DIR": str(tmp_path / "raw"),
+        "MEMAGENT_MIC_EVAL_IDENTITY_PATH": str(identity),
+        "MEMAGENT_MIC_EVAL_IDENTITY_SHA256": hashlib.sha256(identity.read_bytes()).hexdigest(),
+        "MEMAGENT_MIC_EVAL_SUMMARY_PATH": str(summary),
+            "MEMAGENT_MIC_EVAL_GENERATION_PATH": str(generation),
+            "MEMAGENT_MIC_EVAL_TRAINING_AUDIT_SHA256": "a" * 64,
+            "MEMAGENT_MIC_EVAL_ORIGINAL_PROTOCOL_SHA256": "b" * 64,
+            "MEMAGENT_MIC_EVAL_ORIGINAL_REWARD_CODE_SHA256": "c" * 64,
+    })
+    result = subprocess.run(
+        ["bash", str(REPO / "experiments/7b_gate_a/run_gate_a.sh")], env=env,
+        text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    overrides = json.loads(result.stdout.splitlines()[-1])
+    assert "algorithm.mic.enabled=false" in overrides
+    assert "trainer.resume_mode=mic_actor_only_eval" in overrides
+    assert not any("critic_checkpoint_root" in value or "ledger_path" in value
+                   for value in overrides)
+
+
+def test_eval_all_parent_exports_baseline_authority_to_final_entry(tmp_path):
+    script_dir = tmp_path / "scripts" / "h20"
+    script_dir.mkdir(parents=True)
+    eval_all = script_dir / "eval_all_qwen25_7b_mic.sh"
+    eval_all.write_text((REPO / "scripts/h20/eval_all_qwen25_7b_mic.sh").read_text())
+    eval_all.chmod(0o755)
+    (script_dir / "eval_audit_qwen25_7b_mic.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n"
+    )
+    p0 = tmp_path / "p0.json"
+    p0.write_text(json.dumps({"original_curve_report_sha256": "a" * 64}))
+    capture = tmp_path / "captured.txt"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ ${1:-} == -c ]]; then echo " + "a" * 64 + "; exit 0; fi\n"
+        "printf '%s\\n%s\\n' \"${MEMAGENT_MIC_BASELINE_INVENTORY:-}\" "
+        "\"${MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256:-}\" >\"$CAPTURE\"\n"
+    )
+    fake_python.chmod(0o755)
+    (script_dir / "mic_common.sh").write_text("\n".join([
+        f"MIC_PYTHON={fake_python}", f"MIC_P0={p0}",
+        f"MIC_BASELINE_INVENTORY={tmp_path / 'baseline_inventory.json'}",
+        f"MIC_BASELINE={tmp_path / 'baseline.json'}", f"MIC_CERT={tmp_path / 'cert'}",
+        f"MIC_ROOT={tmp_path / 'root'}", f"MIC_OUTPUT={tmp_path / 'output'}",
+        f"MIC_CHECKPOINT_AUTHORITY={tmp_path / 'authority.json'}",
+        f"MIC_CHECKPOINT_AUTHORITY_CERT={tmp_path / 'authority_cert.json'}",
+        f"MIC_WEIGHT_LEDGER={tmp_path / 'weights.jsonl'}",
+        f"MIC_LEDGER={tmp_path / 'mic.jsonl'}", f"MIC_E0={tmp_path / 'e0.json'}",
+        f"MIC_PAPER_REVIEW={tmp_path / 'paper.json'}",
+        "mic_require_checkout() { :; }", "mic_require_training_gates() { :; }", "",
+    ]))
+    result = subprocess.run(
+        ["bash", str(eval_all)], env={**os.environ, "CAPTURE": str(capture),
+                                      "MEMAGENT_MIC_REPO_DIR": str(tmp_path)},
+        text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text().splitlines() == [
+        str(tmp_path / "baseline_inventory.json"), "a" * 64,
+    ]
+
+
+def test_partial_anchor_attempts_are_preserved_and_retry_allocates_new_directory(tmp_path):
+    env = {**os.environ,
+           "MEMAGENT_MIC_WORK_ROOT": str(tmp_path / "work"),
+           "MEMAGENT_MIC_REPO_DIR": str(REPO),
+           "MEMAGENT_MIC_EXPECTED_COMMIT": "a" * 40,
+           "MEMAGENT_MIC_GPU_PAIR": "1,3", "MEMAGENT_MIC_RUN_ID": "retry-test"}
+    command = f'''source "{REPO / 'scripts/h20/mic_common.sh'}"
+mkdir -p "$MIC_ROOT/eval_t5_attempts/attempt_0001"
+mkdir -p "$MIC_ROOT/eval_t10_attempts/attempt_0001"
+first=$(mic_next_eval_attempt 5)
+second=$(mic_next_eval_attempt 10)
+test -d "$MIC_ROOT/eval_t5_attempts/attempt_0001"
+test -d "$MIC_ROOT/eval_t10_attempts/attempt_0001"
+printf '%s\n%s\n' "$first" "$second"
+'''
+    result = subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(tmp_path / "work/logs/mic_frozen_20260822/retry-test/"
+            "eval_t5_attempts/attempt_0002"),
+        str(tmp_path / "work/logs/mic_frozen_20260822/retry-test/"
+            "eval_t10_attempts/attempt_0002"),
+    ]
+
+
+def test_completed_anchor_is_reauthenticated_before_skip(tmp_path):
+    script_dir = tmp_path / "scripts" / "h20"
+    script_dir.mkdir(parents=True)
+    entry = script_dir / "eval_audit_qwen25_7b_mic.sh"
+    entry.write_text((REPO / "scripts/h20/eval_audit_qwen25_7b_mic.sh").read_text())
+    entry.chmod(0o755)
+    cert = tmp_path / "cert"; cert.mkdir()
+    root = tmp_path / "run"; attempt = root / "eval_t5_attempts/attempt_0001"
+    attempt.mkdir(parents=True)
+    (cert / "t5_eval.json").write_text(json.dumps({"evaluation_root": str(attempt)}))
+    (cert / "t5_audit.json").write_text("{}")
+    output = tmp_path / "output"; (output / "global_step_5/actor").mkdir(parents=True)
+    baseline_inventory = tmp_path / "baseline_inventory.json"; baseline_inventory.write_text("{}")
+    baseline = tmp_path / "baseline.json"; baseline.write_text("{}")
+    checkpoint_cert = tmp_path / "checkpoint_cert.json"; checkpoint_cert.write_text("{}")
+    p0 = tmp_path / "p0.json"; p0.write_text(json.dumps({
+        "original_curve_report_sha256": "a" * 64,
+    }))
+    identity = tmp_path / "identity.jsonl"; identity.write_text("{}\n")
+    capture = tmp_path / "capture.txt"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(f'''#!/usr/bin/env bash
+if [[ ${{1:-}} == -c ]]; then
+  case "$2" in
+    *original_curve_report_sha256*) echo {"a" * 64} ;;
+    *'name="Original"'*) echo {identity} ;;
+    *evaluation_root*) echo {attempt} ;;
+  esac
+  exit 0
+fi
+if [[ "$*" == *prepare-eval* ]]; then
+  echo prepare-verify-called >"$CAPTURE"
+  exit 42
+fi
+exit 0
+''')
+    fake_python.chmod(0o755)
+    common = script_dir / "mic_common.sh"
+    common.write_text("\n".join([
+        f"MIC_PYTHON={fake_python}", f"MIC_P0={p0}", f"MIC_CERT={cert}",
+        f"MIC_ROOT={root}", f"MIC_BASELINE_INVENTORY={baseline_inventory}",
+        f"MIC_BASELINE={baseline}", f"MIC_MANIFEST={tmp_path / 'manifest.json'}",
+        f"MIC_OUTPUT={output}", f"MIC_CHECKPOINT_AUTHORITY_CERT={checkpoint_cert}",
+        f"MIC_CHECKPOINT_AUTHORITY={tmp_path / 'authority.json'}",
+        f"MIC_LEDGER={tmp_path / 'mic.jsonl'}", f"MIC_WEIGHT_LEDGER={tmp_path / 'weight.jsonl'}",
+        f"MIC_CURVE_RESOLVED={tmp_path / 'resolved.json'}",
+        f"MIC_CURVE_AUTHORITY={tmp_path / 'curve_authority.json'}",
+        "mic_require_checkout() { :; }", "mic_require_training_gates() { :; }",
+        "mic_require_gate() { :; }",
+        "mic_acquire_gpu_locks() { echo unexpected-gpu-lock >&2; exit 99; }",
+        "mic_require_idle() { :; }", "mic_next_eval_attempt() { exit 98; }",
+        "mic_export_evaluation() { :; }", "",
+    ]))
+    env = {**os.environ, "CAPTURE": str(capture),
+           "MEMAGENT_MIC_WORK_ROOT": str(tmp_path),
+           "MEMAGENT_MIC_REPO_DIR": str(tmp_path),
+           "MEMAGENT_MIC_ORIGINAL_CURVE_REPORT": str(tmp_path / "curve.json")}
+    result = subprocess.run(["bash", str(entry), "5"], env=env, text=True,
+                            capture_output=True)
+    assert result.returncode == 42
+    assert capture.read_text().strip() == "prepare-verify-called"
+    assert "unexpected-gpu-lock" not in result.stderr
 
 
 def test_full_manifest_parity_rejects_unwhitelisted_drift(tmp_path):
@@ -345,6 +519,19 @@ def test_real_calibration_producer_flows_through_real_audit(tmp_path):
     )
 
 
+def test_fresh_release_requires_training_time_full_checkpoint_inventory(tmp_path):
+    args = _audit_fixture(tmp_path)
+    p0 = json.loads(Path(args.p0).read_text())
+    p0["requires_training_checkpoint_inventory"] = True
+    Path(args.p0).write_text(json.dumps(p0))
+    _, _, advantage = _real_checkpoint_and_advantage(tmp_path)
+    append_jsonl_new(args.ledger, advantage)
+    append_jsonl_new(args.ledger, _valid_gradient_row())
+    _append_valid_weight_sync(args.weight_ledger)
+    with pytest.raises(ValueError, match="required training-time actor checkpoint inventory absent"):
+        PIPELINE.audit(args)
+
+
 def test_source_firewall_real_entry_passes():
     result = subprocess.run(
         ["python3", str(REPO / "tools/h20/audit_mic_source_firewall.py")],
@@ -411,12 +598,18 @@ def test_dirty_tree_real_p0_rejection(tmp_path, monkeypatch):
 
 def test_fake_baseline_authority_rejected_at_real_evaluation_import(tmp_path, monkeypatch):
     inventory = tmp_path / "inventory.json"
-    inventory.write_text(json.dumps({"files": [], "prediction_files": []}))
+    inventory.write_text(json.dumps({"source_curve_report": str(tmp_path / "curve.json"),
+                                     "source_curve_report_sha256": "e" * 64,
+                                     "files": [], "prediction_files": []}))
+    p0 = tmp_path / "p0.json"
+    p0.write_text(json.dumps({"status": "PASS", "decision": "MIC_P0_PASS",
+                              "original_curve_report": str(tmp_path / "curve.json"),
+                              "original_curve_report_sha256": "e" * 64}))
     monkeypatch.setenv("MEMAGENT_MIC_BASELINE_INVENTORY", str(inventory))
     monkeypatch.setenv("MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256", "f" * 64)
-    with pytest.raises(ValueError, match="evaluation inventory authority"):
+    with pytest.raises(ValueError, match="certified curve trust root"):
         PIPELINE.import_baseline(SimpleNamespace(manifest=str(tmp_path / "manifest.json"),
-                                                 output=str(tmp_path / "baseline.json")))
+                                                 p0=str(p0), output=str(tmp_path / "baseline.json")))
 
 
 def test_gpu_lock_conflict_real_shell_entry_rejection(tmp_path):
@@ -466,10 +659,13 @@ def _identity_rows():
         question, context = f"q-{index}", f"c-{index}"
         identity = {
             "stable_key": f"key-{index}", "source_order_index": index,
+            "raw_row_position": index,
             "source_question_sha256": hashlib.sha256(question.encode()).hexdigest(),
             "source_context_sha256": hashlib.sha256(context.encode()).hexdigest(),
+            "ground_truth": f"a-{index}",
         }
-        sources.append({"question": question, "context": context, "ground_truth": f"a-{index}"})
+        sources.append({"question": question, "context": context,
+                        "reward_model": {"ground_truth": f"a-{index}"}})
         identities.append(identity)
         generations.append({**identity, "output": f"prediction-{index}"})
     return sources, identities, generations
@@ -479,6 +675,96 @@ def _write_jsonl(path, rows):
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
+def _prepare_eval_args(tmp_path, identity_path, generation_path):
+    validation = tmp_path / "validation.parquet"
+    validation.write_bytes(b"frozen-validation")
+    p0 = tmp_path / "p0.json"
+    p0.write_text(json.dumps({
+        "status": "PASS", "decision": "MIC_P0_PASS",
+        "git_commit": "a" * 40, "run_id": "audit-run",
+    }))
+    reconstructed_reward = tmp_path / "original/recurrent/research/hotpotqa_dense_reward.py"
+    reconstructed_reward.parent.mkdir(parents=True)
+    reconstructed_reward.write_bytes(b"certified-reward-code")
+    checkpoint = tmp_path / "global_step_5"
+    actor = checkpoint / "actor"
+    actor.mkdir(parents=True)
+    inventory = []
+    for rank in (0, 1):
+        shard = actor / f"model_world_size_2_rank_{rank}.pt"
+        shard.write_bytes(f"rank-{rank}".encode())
+        inventory.append({"path": f"actor/{shard.name}", "size": shard.stat().st_size,
+                          "sha256": hashlib.sha256(shard.read_bytes()).hexdigest()})
+    training_audit = tmp_path / "t5_audit.json"
+    training_audit.write_text(json.dumps({
+        "status": "PASS", "decision": "MIC_T5_AUDIT_PASS", "mic_steps": [5],
+        "gate_sha256": {"p0": hashlib.sha256(p0.read_bytes()).hexdigest()},
+    }))
+    digest = "d" * 64
+    worker_evidence = [{"rank": rank} for rank in (0, 1)]
+    before = {
+        "actor_master_sampled_tensor_digest": "e" * 64,
+        "actor_rollout_sampled_tensor_digest": digest,
+        "vllm_sampled_tensor_digest": digest, "vllm_pre_sync_sampled_tensor_digest": None,
+        "worker_ranks": [0, 1], "worker_evidence": worker_evidence,
+    }
+    after = {**before, "vllm_pre_sync_sampled_tensor_digest": digest}
+    summary = tmp_path / "execution_summary.json"
+    summary.write_text(json.dumps({
+        "schema": "memagent.mic.eval.v1",
+        "record_type": "mic_read_only_execution_summary", "global_step": 5,
+        "run_id": "audit-run",
+        "evaluation_git_commit": "a" * 40,
+        "training_audit_sha256": hashlib.sha256(training_audit.read_bytes()).hexdigest(),
+        "identity_path": str(identity_path.resolve()),
+        "identity_sha256": hashlib.sha256(identity_path.read_bytes()).hexdigest(),
+        "generation_path": str(generation_path.resolve()),
+        "generation_sha256": hashlib.sha256(generation_path.read_bytes()).hexdigest(),
+        "generation_protocol_evidence": {
+            "method_generation_protocol_sha256": "b" * 64,
+            "original_generation_protocol_sha256": "a" * 64,
+            "original_protocol_reconstruction_path": str(reconstructed_reward.resolve()),
+            "reward_code_sha256": hashlib.sha256(reconstructed_reward.read_bytes()).hexdigest(),
+        },
+        "checkpoint_source": str(checkpoint.resolve()), "checkpoint_inventory": inventory,
+        "actor_checkpoint_load_acks": [
+            {"rank": rank, "optimizer_loaded": False, "lr_scheduler_loaded": False,
+             "rng_loaded": False, "dataloader_loaded": False} for rank in (0, 1)
+        ],
+        "actor_update_calls": 0, "validation_only": True,
+        "weight_snapshot_before": before, "weight_snapshot_after": after,
+    }))
+    return SimpleNamespace(
+        generations=str(generation_path), identity_source=str(identity_path),
+        validation=str(validation), baseline=str(tmp_path / "baseline.json"),
+        p0=str(p0),
+        execution_summary=str(summary), training_audit=str(training_audit),
+        checkpoint=str(checkpoint), step=5, output=str(tmp_path / "predictions.jsonl"),
+        report=str(tmp_path / "prepare.json"), verify_existing=False,
+        checkpoint_authority=str(tmp_path / "checkpoint_authority.json"),
+        checkpoint_authority_certificate=str(tmp_path / "checkpoint_authority_cert.json"),
+        output_root=str(tmp_path), weight_ledger=str(tmp_path / "weights.jsonl"),
+        mic_ledger=str(tmp_path / "mic.jsonl"),
+    )
+
+
+def _stub_prepare_baseline_authority(monkeypatch, args, identity_path):
+    monkeypatch.setattr(PIPELINE, "import_baseline", lambda _: {
+        "interfaces": {"Original5": {"path": str(identity_path.resolve())}},
+        "validation_path": str(Path(args.validation).resolve()),
+        "validation_sha256": hashlib.sha256(Path(args.validation).read_bytes()).hexdigest(),
+        "shared_generation_protocol_sha256": "a" * 64,
+        "original_reward_code_sha256": hashlib.sha256(
+            (Path(args.execution_summary).parent /
+             "original/recurrent/research/hotpotqa_dense_reward.py").read_bytes()
+        ).hexdigest(),
+    })
+    monkeypatch.setattr(PIPELINE, "verify_checkpoint_authority", lambda *unused: {
+        "checkpoint_authority_sha256": "c" * 64,
+    })
+    monkeypatch.setattr(PIPELINE, "_verify_training_weight_prefix", lambda *unused: "w" * 64)
+
+
 def test_permuted_generation_real_prepare_eval_exact_joins(tmp_path, monkeypatch):
     pd = pytest.importorskip("pandas")
     sources, identities, generations = _identity_rows()
@@ -486,10 +772,11 @@ def test_permuted_generation_real_prepare_eval_exact_joins(tmp_path, monkeypatch
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
     monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
-    report = PIPELINE.prepare_eval(SimpleNamespace(
-        generations=str(generation_path), identity_source=str(identity_path),
-        validation=str(tmp_path / "validation.parquet"), output=str(tmp_path / "predictions.jsonl"),
-    ))
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    report = PIPELINE.prepare_eval(args)
     assert report["decision"] == "MIC_S128_PREPARE_PASS"
     rows = [json.loads(line) for line in (tmp_path / "predictions.jsonl").read_text().splitlines()]
     assert rows[0]["stable_key"] == "key-0" and rows[0]["output"] == "prediction-0"
@@ -502,8 +789,416 @@ def test_generation_identity_tamper_real_prepare_eval_rejection(tmp_path, monkey
     identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
     _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
     monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
     with pytest.raises(ValueError, match="generation identity binding mismatch"):
-        PIPELINE.prepare_eval(SimpleNamespace(
-            generations=str(generation_path), identity_source=str(identity_path),
-            validation=str(tmp_path / "validation.parquet"), output=str(tmp_path / "predictions.jsonl"),
+        PIPELINE.prepare_eval(args)
+
+
+def test_validation_ground_truth_tamper_real_prepare_eval_rejection(tmp_path, monkeypatch):
+    pd = pytest.importorskip("pandas")
+    sources, identities, generations = _identity_rows()
+    sources[0]["reward_model"]["ground_truth"] = "tampered"
+    identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
+    _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
+    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    with pytest.raises(ValueError, match="frozen ground truth mismatch"):
+        PIPELINE.prepare_eval(args)
+
+
+def test_original_method_generation_protocol_mismatch_is_rejected(tmp_path, monkeypatch):
+    pd = pytest.importorskip("pandas")
+    sources, identities, generations = _identity_rows()
+    identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
+    _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
+    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    summary = json.loads(Path(args.execution_summary).read_text())
+    summary["generation_protocol_evidence"]["original_generation_protocol_sha256"] = "f" * 64
+    Path(args.execution_summary).write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="read-only evaluation summary binding mismatch"):
+        PIPELINE.prepare_eval(args)
+
+
+def test_checkpoint_drift_real_prepare_eval_rejection(tmp_path, monkeypatch):
+    pd = pytest.importorskip("pandas")
+    sources, identities, generations = _identity_rows()
+    identity_path, generation_path = tmp_path / "identity.jsonl", tmp_path / "generation.jsonl"
+    _write_jsonl(identity_path, identities); _write_jsonl(generation_path, generations)
+    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    monkeypatch.setattr(PIPELINE, "git", lambda *args: "a" * 40)
+    monkeypatch.setenv("MEMAGENT_MIC_RUN_ID", "audit-run")
+    args = _prepare_eval_args(tmp_path, identity_path, generation_path)
+    _stub_prepare_baseline_authority(monkeypatch, args, identity_path)
+    (Path(args.checkpoint) / "actor/model_world_size_2_rank_0.pt").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="checkpoint inventory changed"):
+        PIPELINE.prepare_eval(args)
+
+
+def test_release_pinned_checkpoint_authority_rejects_pre_eval_shard_replacement(tmp_path):
+    output_root = tmp_path / "run"
+    for step in (5, 10, 15, 20, 25):
+        actor = output_root / f"global_step_{step}" / "actor"
+        actor.mkdir(parents=True)
+        for rank in (0, 1):
+            (actor / f"model_world_size_2_rank_{rank}.pt").write_bytes(
+                f"step={step},rank={rank}".encode()
+            )
+    records = PIPELINE._actor_model_inventory(output_root, (5, 10, 15, 20, 25))
+    authority = tmp_path / "authority.json"
+    p0 = tmp_path / "checkpoint_p0.json"
+    p0.write_text(json.dumps({"git_commit": "a" * 40, "run_id": "audit-run"}))
+    authority.write_text(json.dumps({
+        "schema": "memagent.mic.v1",
+        "authority_kind": "out_of_band_operator_sha256_pinned",
+        "training_git_commit": "a" * 40, "run_id": "audit-run",
+        "checkpoint_authority_sha256": PIPELINE.sha256_json(records),
+    }))
+    certificate = tmp_path / "certificate.json"
+    PIPELINE.materialize_checkpoint_authority(SimpleNamespace(
+        authority=str(authority), p0=str(p0), output_root=str(output_root),
+        ledger=str(tmp_path / "unused-ledger.jsonl"), output=str(certificate),
+    ))
+    PIPELINE.verify_checkpoint_authority(
+        authority, certificate, output_root, 5, p0, tmp_path / "unused-ledger.jsonl"
+    )
+    (output_root / "global_step_5/actor/model_world_size_2_rank_0.pt").write_bytes(b"replaced")
+    with pytest.raises(ValueError, match="differs from release authority"):
+        PIPELINE.verify_checkpoint_authority(
+            authority, certificate, output_root, 5, p0,
+            tmp_path / "unused-ledger.jsonl",
+        )
+
+
+def test_fresh_checkpoint_authority_replays_training_time_inventory(tmp_path):
+    output_root = tmp_path / "fresh-run"
+    ledger = tmp_path / "mic.jsonl"
+    for step in (5, 10, 15, 20, 25):
+        actor = output_root / f"global_step_{step}" / "actor"
+        actor.mkdir(parents=True)
+        shards = []
+        for rank in (0, 1):
+            shard = actor / f"model_world_size_2_rank_{rank}.pt"
+            shard.write_bytes(f"fresh-step={step},rank={rank}".encode())
+            shards.append({
+                "path": f"actor/{shard.name}", "size": shard.stat().st_size,
+                "sha256": sha256_file(shard),
+            })
+        append_jsonl_new(ledger, {
+            "record_type": "mic_actor_checkpoint_inventory", "global_step": step,
+            "checkpoint_path": str((output_root / f"global_step_{step}").resolve()),
+            "model_shards": shards, "model_shards_sha256": PIPELINE.sha256_json(shards),
+            "git_commit": "a" * 40, "run_id": "fresh-audit-run",
+        })
+    p0 = tmp_path / "p0.json"
+    p0.write_text(json.dumps({
+        "git_commit": "a" * 40, "run_id": "fresh-audit-run",
+        "requires_training_checkpoint_inventory": True,
+    }))
+    certificate = tmp_path / "certificate.json"
+    args = SimpleNamespace(
+        authority=str(tmp_path / "not-used.json"), p0=str(p0),
+        output_root=str(output_root), ledger=str(ledger), output=str(certificate),
+    )
+    report = PIPELINE.materialize_checkpoint_authority(args)
+    assert report["authority_kind"] == "training_ledger_checkpoint_inventory"
+    PIPELINE.verify_checkpoint_authority(
+        args.authority, certificate, output_root, 25, p0, ledger,
+    )
+    (output_root / "global_step_25/actor/model_world_size_2_rank_1.pt").write_bytes(
+        b"replaced-after-training"
+    )
+    with pytest.raises(ValueError, match="differ from training-time inventory"):
+        PIPELINE.verify_checkpoint_authority(
+            args.authority, certificate, output_root, 25, p0, ledger,
+        )
+
+
+def test_training_weight_prefix_rejects_cross_run_replay(tmp_path):
+    ledger = tmp_path / "weights.jsonl"
+    _append_valid_weight_sync(ledger)
+    audit_report = {"weight_sync_ledger_sha256": hashlib.sha256(ledger.read_bytes()).hexdigest()}
+    snapshot = {
+        "actor_master_sampled_tensor_digest": "e" * 64,
+        "actor_rollout_sampled_tensor_digest": "d" * 64,
+        "vllm_sampled_tensor_digest": "d" * 64,
+    }
+    with pytest.raises(ValueError, match="cross-run replay"):
+        PIPELINE._verify_training_weight_prefix(
+            ledger, audit_report, 5, snapshot, "a" * 40, "different-run",
+        )
+
+
+def test_evaluation_entry_is_read_only_and_attested():
+    common = (REPO / "scripts/h20/mic_common.sh").read_text()
+    entry = (REPO / "scripts/h20/eval_audit_qwen25_7b_mic.sh").read_text()
+    trainer = (REPO / "verl/trainer/ppo/ray_trainer.py").read_text()
+    assert "mic_export_evaluation" in entry and "mic_export_training" not in entry
+    assert "GATE_A_FROZEN_AUDIT=0" in common
+    assert "GATE_A_EXECUTION_LEDGER" in common
+    assert "unset MEMAGENT_MIC_LEDGER_PATH MEMAGENT_MIC_CRITIC_ROOT" in common
+    assert "mic_read_only_execution_summary" in trainer
+    assert "actor checkpoint changed during evaluation" in trainer
+    assert 'sync_kind="stable_eval_before"' in trainer
+    assert 'sync_kind="stable_eval_after"' in trainer
+
+
+def _baseline_materialization_fixture(tmp_path, monkeypatch):
+    pd = pytest.importorskip("pandas")
+    validation = tmp_path / "validation.parquet"
+    validation.write_bytes(b"frozen-s128")
+    sources, frozen_rows = [], []
+    for index in range(128):
+        ground_truth = f"answer-{index}"
+        sources.append({"reward_model": {"ground_truth": ground_truth}})
+        frozen_rows.append({
+            "example_id": str(index), "semantic_dataset_index": index,
+            "source_order_index": index, "raw_row_position": index,
+            "production_effective_position": index, "context_token_count": 10,
+            "source_question_hash": hashlib.sha256(f"q-{index}".encode()).hexdigest(),
+            "source_context_hash": hashlib.sha256(f"c-{index}".encode()).hexdigest(),
+            "ground_truth_hash": canonical_sha256(ground_truth),
+        })
+    monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame(sources))
+    identity_payload = {
+        "source_dataset": {"parquet_sha256": hashlib.sha256(validation.read_bytes()).hexdigest()},
+        "rows": frozen_rows,
+    }
+    resolved = tmp_path / "curve_resolved.json"
+    resolved.write_text(json.dumps({
+        "identity_payload": identity_payload,
+        "eval_manifest_hash": canonical_sha256(identity_payload),
+        "execution_binding": {"trainer_configuration": {
+            "shared_generation_protocol_sha256": "a" * 64,
+        }, "execution_code_sha256": {
+            "recurrent/research/hotpotqa_dense_reward.py": "b" * 64,
+        }},
+    }))
+    interfaces = ("I", "Original5", "Original10", "Original15", "Original20", "Original25")
+    evidence = {}
+    search_root = tmp_path / "logs"
+    for interface_index, interface in enumerate(interfaces):
+        terminal_rows, metric_rows = [], []
+        for index, frozen in enumerate(frozen_rows):
+            terminal = {
+                **frozen, "eval_manifest_hash": canonical_sha256(identity_payload),
+                "replica_id": 0, "trajectory_seed": index + 100,
+                "trajectory_id": f"trajectory-{index}",
+                "output": f"answer-{index}" if interface_index % 2 == 0 else "wrong",
+            }
+            terminal_rows.append(terminal)
+            scored = score_terminal_output(terminal["output"], f"answer-{index}")
+            metric_rows.append({
+                "stable_key": json.dumps(stable_key(terminal), separators=(",", ":")),
+                "source_order_index": index, "eval_manifest_hash": terminal["eval_manifest_hash"],
+                "example_id": terminal["example_id"], "replica_id": 0,
+                "trajectory_seed": terminal["trajectory_seed"],
+                "trajectory_id": terminal["trajectory_id"], **scored,
+            })
+        terminal_path = search_root / interface / "terminal" / f"{interface_index}.jsonl"
+        terminal_path.parent.mkdir(parents=True)
+        _write_jsonl(terminal_path, terminal_rows)
+        evidence[interface] = {
+            "artifacts": {f"terminal/{interface_index}.jsonl": {
+                "sha256": hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+            }},
+            "independent_metric_rows_sha256": canonical_sha256(metric_rows),
+            "metrics": summarize_fixed_s128(metric_rows),
+        }
+    curve = tmp_path / "curve.json"
+    curve.write_text(json.dumps({
+        "status": "PASS", "decision": "ORIGINAL_S128_CURVE_PASS",
+        "evidence": {
+            "interfaces": evidence,
+            "resolved_manifest_sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        },
+    }))
+    p0 = tmp_path / "p0.json"
+    p0.write_text(json.dumps({
+        "status": "PASS", "decision": "MIC_P0_PASS",
+        "original_curve_report": str(curve.resolve()),
+        "original_curve_report_sha256": hashlib.sha256(curve.read_bytes()).hexdigest(),
+    }))
+    curve_authority = tmp_path / "curve_authority.json"
+    curve_authority.write_text(json.dumps({
+        "schema": "memagent.mic.v1",
+        "authority_kind": "out_of_band_original_curve_sha256_pinned",
+        "curve_report_path": str(curve.resolve()),
+        "curve_report_sha256": hashlib.sha256(curve.read_bytes()).hexdigest(),
+        "curve_resolved_path": str(resolved.resolve()),
+        "curve_resolved_sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+    }))
+    return SimpleNamespace(
+        p0=str(p0), curve_report=str(curve), curve_resolved=str(resolved),
+        curve_authority=str(curve_authority),
+        search_root=str(search_root), validation=str(validation),
+        output_root=str(tmp_path / "materialized" / "rows"),
+        output=str(tmp_path / "materialized" / "inventory.json"),
+    )
+
+
+def test_certified_baseline_materializes_and_recomputes_metric_rows(tmp_path, monkeypatch):
+    args = _baseline_materialization_fixture(tmp_path, monkeypatch)
+    report = PIPELINE.materialize_baseline(args)
+    assert report["decision"] == "MIC_BASELINE_MATERIALIZE_PASS"
+    inventory = json.loads(Path(args.output).read_text())
+    assert {row["interface"] for row in inventory["prediction_files"]} == {
+        "I", "Original5", "Original10", "Original15", "Original20", "Original25"
+    }
+    assert all(Path(row["path"]).is_file() for row in inventory["prediction_files"])
+    p0 = json.loads(Path(args.p0).read_text())
+    monkeypatch.setenv("MEMAGENT_MIC_BASELINE_INVENTORY", args.output)
+    monkeypatch.setenv(
+        "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256", p0["original_curve_report_sha256"]
+    )
+    imported = PIPELINE.import_baseline(SimpleNamespace(
+        p0=args.p0, manifest=str(tmp_path / "unused.json"),
+        output=str(tmp_path / "baseline_import.json"),
+        curve_authority=args.curve_authority,
+    ))
+    assert imported["decision"] == "MIC_BASELINE_IMPORT_PASS"
+
+
+def test_existing_self_consistent_fake_baseline_is_reauthenticated_against_curve(tmp_path, monkeypatch):
+    args = _baseline_materialization_fixture(tmp_path, monkeypatch)
+    PIPELINE.materialize_baseline(args)
+    p0 = json.loads(Path(args.p0).read_text())
+    monkeypatch.setenv("MEMAGENT_MIC_BASELINE_INVENTORY", args.output)
+    monkeypatch.setenv(
+        "MEMAGENT_MIC_BASELINE_AUTHORITY_SHA256", p0["original_curve_report_sha256"]
+    )
+    baseline_path = tmp_path / "baseline_import.json"
+    PIPELINE.import_baseline(SimpleNamespace(
+        p0=args.p0, manifest=str(tmp_path / "unused.json"),
+        output=str(baseline_path), verify_existing=False,
+        curve_authority=args.curve_authority,
+    ))
+    inventory = json.loads(Path(args.output).read_text())
+    item = next(row for row in inventory["prediction_files"] if row["interface"] == "Original25")
+    normalized = Path(item["path"])
+    rows = [json.loads(line) for line in normalized.read_text().splitlines()]
+    rows[0]["output"] = "forged-perfect-answer"
+    _write_jsonl(normalized, rows)
+    item["sha256"] = hashlib.sha256(normalized.read_bytes()).hexdigest()
+    Path(args.output).write_text(json.dumps(inventory))
+    forged = json.loads(baseline_path.read_text())
+    forged["inventory_sha256"] = hashlib.sha256(Path(args.output).read_bytes()).hexdigest()
+    forged["interfaces"]["Original25"]["sha256"] = item["sha256"]
+    baseline_path.write_text(json.dumps(forged))
+    with pytest.raises(ValueError, match="normalized row 0"):
+        PIPELINE.import_baseline(SimpleNamespace(
+            p0=args.p0, manifest=str(tmp_path / "unused.json"),
+            output=str(baseline_path), verify_existing=True,
+            curve_authority=args.curve_authority,
+        ))
+
+
+def test_certified_baseline_rejects_metric_digest_drift(tmp_path, monkeypatch):
+    args = _baseline_materialization_fixture(tmp_path, monkeypatch)
+    curve = json.loads(Path(args.curve_report).read_text())
+    curve["evidence"]["interfaces"]["Original25"]["independent_metric_rows_sha256"] = "f" * 64
+    Path(args.curve_report).write_text(json.dumps(curve))
+    p0 = json.loads(Path(args.p0).read_text())
+    p0["original_curve_report_sha256"] = hashlib.sha256(
+        Path(args.curve_report).read_bytes()
+    ).hexdigest()
+    Path(args.p0).write_text(json.dumps(p0))
+    authority = json.loads(Path(args.curve_authority).read_text())
+    authority["curve_report_sha256"] = p0["original_curve_report_sha256"]
+    Path(args.curve_authority).write_text(json.dumps(authority))
+    with pytest.raises(ValueError, match="Original25 metric-row digest"):
+        PIPELINE.materialize_baseline(args)
+
+
+def test_replaced_curve_resolved_execution_binding_is_rejected(tmp_path, monkeypatch):
+    args = _baseline_materialization_fixture(tmp_path, monkeypatch)
+    resolved = json.loads(Path(args.curve_resolved).read_text())
+    resolved["execution_binding"]["trainer_configuration"][
+        "shared_generation_protocol_sha256"
+    ] = "f" * 64
+    Path(args.curve_resolved).write_text(json.dumps(resolved))
+    with pytest.raises(ValueError, match="release-pinned curve authority"):
+        PIPELINE.materialize_baseline(args)
+
+
+def test_final_audit_rejects_self_consistent_eval_report_rewrite(tmp_path, monkeypatch):
+    keys = [f"stable-{index}" for index in range(128)]
+    original_rows = [
+        {"stable_key": key, "output": "wrong", "ground_truth": f"answer-{index}"}
+        for index, key in enumerate(keys)
+    ]
+    original_path = tmp_path / "original.jsonl"
+    _write_jsonl(original_path, original_rows)
+    original_scored = [
+        {"stable_key": row["stable_key"],
+         **score_terminal_output(row["output"], row["ground_truth"])}
+        for row in original_rows
+    ]
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text("{}")
+    monkeypatch.setenv("MEMAGENT_MIC_BASELINE_INVENTORY", str(inventory_path))
+    interface = {
+        "path": str(original_path),
+        "sha256": hashlib.sha256(original_path.read_bytes()).hexdigest(),
+        "aggregate": summarize_fixed_s128(original_scored),
+        "stable_key_inventory_sha256": PIPELINE.sha256_json(keys),
+    }
+    certified = {
+        "status": "PASS", "decision": "MIC_BASELINE_IMPORT_PASS",
+        "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+        "validation_path": str(tmp_path / "validation.parquet"),
+        "interfaces": {f"Original{step}": interface for step in (5, 10, 15, 20, 25)},
+    }
+    monkeypatch.setattr(PIPELINE, "import_baseline", lambda _: certified)
+    monkeypatch.setattr(PIPELINE, "prepare_eval", lambda _: {
+        "status": "PASS", "checkpoint_authority_sha256": "c" * 64,
+    })
+    monkeypatch.setattr(PIPELINE, "audit", lambda _: {
+        "status": "PASS", "decision": "MIC_T25_AUDIT_PASS",
+    })
+    cert_root, eval_root = tmp_path / "certificates", tmp_path / "evaluations"
+    cert_root.mkdir(); eval_root.mkdir()
+    for step in (5, 10, 15, 20, 25):
+        anchor = eval_root / f"eval_t{step}_attempts" / "attempt_0001"
+        anchor.mkdir(parents=True)
+        (anchor / "prepare.json").write_text("{}")
+        predictions = [
+            {"stable_key": key, "output": f"answer-{index}",
+             "ground_truth": f"answer-{index}"}
+            for index, key in enumerate(keys)
+        ]
+        _write_jsonl(anchor / "predictions.jsonl", predictions)
+        (cert_root / f"t{step}_audit.json").write_text(json.dumps({
+            "status": "PASS", "decision": f"MIC_T{step}_AUDIT_PASS",
+        }))
+        PIPELINE.evaluate(SimpleNamespace(
+            predictions=str(anchor / "predictions.jsonl"), baseline=str(tmp_path / "baseline.json"),
+            p0=str(tmp_path / "p0.json"), step=step,
+            output=str(cert_root / f"t{step}_eval.json"), verify_existing=False,
+        ))
+    forged_path = cert_root / "t25_eval.json"
+    forged = json.loads(forged_path.read_text())
+    forged["aggregate"]["token_f1"] = 0.0
+    forged["token_f1_delta_pp"] = 0.0
+    forged["delta_percentage_points"]["token_f1"] = 0.0
+    forged_path.write_text(json.dumps(forged))
+    with pytest.raises(ValueError, match="evaluation certificate differs from recomputation"):
+        PIPELINE.final_eval_audit(SimpleNamespace(
+            baseline=str(tmp_path / "baseline.json"), p0=str(tmp_path / "p0.json"),
+            health_root=str(cert_root), eval_root=str(eval_root), output_root=str(tmp_path / "run"),
+            checkpoint_authority=str(tmp_path / "authority.json"),
+            checkpoint_authority_certificate=str(tmp_path / "authority_cert.json"),
+            weight_ledger=str(tmp_path / "weights.jsonl"),
+            mic_ledger=str(tmp_path / "mic.jsonl"), e0=str(tmp_path / "e0.json"),
+            paper_review=str(tmp_path / "paper.json"),
+            output=str(cert_root / "final.json"),
         ))
