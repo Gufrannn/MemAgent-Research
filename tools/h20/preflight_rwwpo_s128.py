@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,json,sys
+import argparse,json,re,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT))
 from recurrent.research.stable_eval_identity import stable_eval_runtime_config_sha256,validate_resolved_manifest
@@ -17,11 +17,23 @@ def overrides(a, expected):
 def main():
     p=argparse.ArgumentParser()
     for name in ("checkpoint","validation","model","resolved-manifest","resolved-manifest-sha256","eval-hash","run-id","output"): p.add_argument("--"+name,required=True)
-    p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True); a=p.parse_args()
+    p.add_argument("--step",type=int,choices=[5,10,15,20,25],required=True)
+    p.add_argument("--diagnostic-only",action="store_true"); a=p.parse_args()
     if sha256_file(Path(a.resolved_manifest))!=a.resolved_manifest_sha256: raise SystemExit("RWWPO_S128_NO_GO:resolved manifest SHA")
     resolved=validate_resolved_manifest(json.loads(Path(a.resolved_manifest).read_text()))
     if resolved["eval_manifest_hash"]!=a.eval_hash: raise SystemExit("RWWPO_S128_NO_GO:eval hash")
     if Path(a.checkpoint).name!=f"global_step_{a.step}": raise SystemExit("RWWPO_S128_NO_GO:checkpoint step")
+    if a.diagnostic_only:
+        raw=json.loads(Path(a.resolved_manifest).read_text())
+        if raw.get("diagnostic_only") is not True: raise SystemExit("RWWPO_S128_NO_GO:diagnostic manifest label")
+        artifact=raw.get("execution_binding",{}).get("model_artifacts",{}).get(f"RWWPO{a.step}",{})
+        shards=artifact.get("actor_model_shards",[])
+        if len(shards)!=2: raise SystemExit("RWWPO_S128_NO_GO:diagnostic shard inventory")
+        for item in shards:
+            path=str(item.get("path",""))
+            if not re.fullmatch(r"actor/model_world_size_2_rank_[01]\.pt",path): raise SystemExit("RWWPO_S128_NO_GO:diagnostic shard path")
+            target=Path(a.checkpoint)/path
+            if not target.is_file() or target.stat().st_size!=item.get("size") or sha256_file(target)!=item.get("sha256"): raise SystemExit("RWWPO_S128_NO_GO:diagnostic shard drift")
     provisional=overrides(a,"0"*64); digest=stable_eval_runtime_config_sha256(compose_resolved_trainer_config(ROOT,provisional))
     final=overrides(a,digest)
     if stable_eval_runtime_config_sha256(compose_resolved_trainer_config(ROOT,final))!=digest: raise SystemExit("RWWPO_S128_NO_GO:unstable config hash")

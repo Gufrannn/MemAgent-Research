@@ -136,3 +136,18 @@ def test_checkpoint_producer_records_inventory_after_data_state_save():
     assert save.index("torch.save(dataloader_state_dict") < save.index(
         'append_gate_a_record(\n                "checkpoint_inventory"')
     assert "inventory=checkpoint_inventory(local_global_step_folder)" in save
+
+def test_post_hoc_s128_requires_explicit_diagnostic_label_and_separate_root():
+    launcher=(ROOT/"scripts/h20/run_rwwpo_s128_anchor.sh").read_text()
+    preflight=(ROOT/"tools/h20/preflight_rwwpo_s128.py").read_text()
+    audit=(ROOT/"tools/h20/audit_rwwpo_s128.py").read_text()
+    assert "RWWPO_DIAGNOSTIC_ONLY" in launcher
+    assert "RWWPO_EVAL_ATTEMPT_SUFFIX" in launcher
+    assert "--diagnostic-only" in preflight
+    assert 'raw.get("diagnostic_only") is not True' in preflight
+    assert '"DIAGNOSTIC_ONLY" if a.diagnostic_only' in audit
+    assert 'a.diagnostic_only != (raw_resolved.get("diagnostic_only") is True)' in audit
+
+def test_formal_compare_cannot_accept_diagnostic_status():
+    text=(ROOT/"tools/h20/compare_rwwpo_anchor.py").read_text()
+    assert 'row.get("status")!="PASS"' in text
