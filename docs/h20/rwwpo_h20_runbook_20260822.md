@@ -2,7 +2,8 @@
 
 ## Scientific state
 
-`REFRAME / PENDING_ACTUAL_LOSS_LEDGER`. The code is train-capable but the GPU
+`PAPER-FRAMING GO / PENDING_BASELINE_BUNDLE_MATERIALIZATION /
+PENDING_ACTUAL_LOSS_LEDGER`. The code is train-capable but the GPU
 entry is deliberately locked until independently generated E0 and frozen
 Original actual-loss E1 receipts both PASS. Existing Original S128 curve and
 Capture32 evidence do not contain the required current-policy loss tensors and
@@ -19,8 +20,9 @@ export RWWPO_EXPECTED_COMMIT=<RELEASE_SHA>
 export RWWPO_WORK_ROOT=/data/cw/memagent_work
 export GPU_PAIR=2,5                 # any two idle H20s, distinct and ascending
 export RWWPO_RUN_ID=rwwpo_seed2026_primary
-export RWWPO_ORIGINAL_RESOLVED_MANIFEST=/readonly/original/accepted_resolved_manifest.json
-export RWWPO_ORIGINAL_RESOLVED_SHA256=<ACCEPTED_RESOLVED_MANIFEST_SHA256>
+export RWWPO_ORIGINAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json
+# Compute this file's SHA read-only on H20 and freeze the exact output; do not guess.
+export RWWPO_ORIGINAL_RESOLVED_SHA256=$(sha256sum "$RWWPO_ORIGINAL_RESOLVED_MANIFEST" | awk '{print $1}')
 ```
 
 Never select an output that already exists. The run ID is semantic and explicit;
@@ -30,14 +32,24 @@ the scripts never kill a process.
 
 ## Read-only baseline import, E0, and E1
 
-The baseline bundle is supplied by the experiment authority and contains
+The unified read-only authority is
+`manifests/h20/rwwpo_original_evidence_authority_20260822.json`. The certified
+Original curve is rooted at
+`/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821`; its
+canonical row digests are not standalone file SHA values. No certified
+`baseline_bundle.json` currently exists. It must be materialized from artifact
+paths and SHA values authenticated by that curve's PASS final report, with
+EM/token-F1/format independently recomputed. Until then this gate is
+`PENDING_BASELINE_BUNDLE_MATERIALIZATION`.
+
+Once supplied, the baseline bundle contains
 absolute read-only paths, per-file SHA-256 values, stable-key rows, and certified
 aggregates. The importer copies no predictions.
 
 ```bash
 mkdir -p "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates"
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/import_rwwpo_original_baseline.py \
-  --bundle /readonly/original_curve/baseline_bundle.json \
+  --bundle "$RWWPO_BASELINE_BUNDLE" \
   --bundle-sha256 <AUTHORITY_PUBLISHED_BUNDLE_SHA256> \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/baseline_import.json"
@@ -48,8 +60,8 @@ mkdir -p "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates"
 
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/run_rwwpo_e1.py \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
-  --original-ledger /readonly/original_actual_loss/actual_loss_rank0.jsonl \
-  --original-ledger /readonly/original_actual_loss/actual_loss_rank1.jsonl \
+  --original-ledger "$RWWPO_ORIGINAL_LEDGER_RANK0" \
+  --original-ledger "$RWWPO_ORIGINAL_LEDGER_RANK1" \
   --output "$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates/e1.json"
 ```
 
@@ -87,9 +99,9 @@ non-inferiority gate pass.
 The concrete fixed-S128 entry and read-only metric audit are:
 
 ```bash
-export RWWPO_EVAL_RESOLVED_MANIFEST=/readonly/stable_s128/p0_resolved_manifest.json
-export RWWPO_EVAL_RESOLVED_SHA256=<SHA256>
-export RWWPO_EVAL_MANIFEST_HASH=<EVAL_MANIFEST_HASH>
+export RWWPO_EVAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json
+export RWWPO_EVAL_RESOLVED_SHA256=6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411
+export RWWPO_EVAL_MANIFEST_HASH=351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a
 RWWPO_EVAL_STEP=5 bash scripts/h20/run_rwwpo_s128_anchor.sh
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_s128.py \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \

@@ -3,6 +3,7 @@
   "branch": "h20/qwen25-7b-rwwpo-t25-frozen-20260822",
   "clean_base_commit": "2d49269687f5e96a2464b8c81c264919c08f7141",
   "original_curve_audit_commit": "fbb9bad4a4facad6a5bfc73d74186eb58cb5fe0e",
+  "original_evidence_authority": "manifests/h20/rwwpo_original_evidence_authority_20260822.json",
   "method": {"name": "RWWPO", "enabled_from_update": 1, "q_min": 0.5,
     "allowed_differences": ["writer_surrogate", "prefix_constraint", "actual_loss_ledger", "experiment_identity", "output_paths"]},
   "training": {"seed": 2026, "trajectory_seed_mode": "independent", "train_batch_size": 4,

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "policy": "read_only_fail_closed",
+  "original_s128_curve": {
+    "root": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821",
+    "final_report": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/original_s128_curve_final_report.json",
+    "p0": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_preflight.json",
+    "resolved": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/certificates/p0_resolved_manifest.json",
+    "ledger": "/data/cw/memagent_work/logs/s128_original_all_anchor_frozen_20260821/original_s128_curve_execution_ledger.jsonl",
+    "required_final_status": "PASS",
+    "canonical_metric_row_digests": {
+      "I": "fd4c6763c8d8a6caa0389082f1fa838dc510d872b99e6283c1483c4427336c64",
+      "Original5": "58b01ad5e523ee8853c05af691a659480d0d905d22f2c6ffb0590484c5a38a30d",
+      "Original10": "bc5c29e7e6f163828758cb68dca1237f9d970af24217f60e272ba2945017b4a4",
+      "Original15": "3e8ae48f4a092ec136c568397037b9f270532bb0ab92a6b976c4de66c2c02b2f",
+      "Original20": "8a831d5d96c4f963f53a6a8d2c01a6a1414724a8a189a05f5a89c68d56494cd8",
+      "Original25": "4db791e409edeb269b56b1633b07c272ef04abf8b15da5c479a1e7822a93b2d6"
+    },
+    "digest_semantics": "canonical_metric_rows_not_file_sha256",
+    "baseline_bundle_status": "PENDING_BASELINE_BUNDLE_MATERIALIZATION"
+  },
+  "original_t25_training": {
+    "root": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821",
+    "final_report": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/original_t25_final_report.json",
+    "final_report_sha256": "33cab1eb09eefd89b7f764d0f2c6851eac5e58dc7c0a3d147c30ce05522c9040",
+    "resolved": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/certificates/p0_resolved_manifest.json",
+    "resolved_sha256": null,
+    "resolved_sha256_status": "MUST_COMPUTE_READ_ONLY_ON_H20_AND_FREEZE",
+    "ledger": "/data/cw/memagent_work/logs/original_t25_2gpu_frozen_20260821/original_t25_execution_ledger.jsonl",
+    "ledger_sha256": "3bc94a6796d84ea1c297271f1d7cde0b38ac805293e3c7164b6cadeb31495d47",
+    "ledger_tail": "4d51e6c18fbaa08a068c3c955b2559346b05eef75c755f0e43b641b6692f2b75",
+    "training_commit": "b7bf64937b5825513df86ab963816b73604f102c"
+  },
+  "fixed_s128_identity": {
+    "root": "/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2",
+    "resolved": "/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json",
+    "resolved_sha256": "6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411",
+    "eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a",
+    "final_report": "/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/stable_i4x2_final_report.json",
+    "final_report_sha256": "bfe0011e20d9055aaf2e92196d2e2e805bde09aff1fd87d9361d12f179467e12",
+    "ledger": "/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/stable_identity_execution_ledger.jsonl",
+    "ledger_sha256": "95a4e5179767a17532fe37e20c8ff78d93131e0275b13c8678feed96feb1be66",
+    "ledger_tail": "949aea00e07bd9e7ba77900270979c913ae79fdadba7a61ccd9cab94654a4deb",
+    "git_commit": "bd8b804c2cbf333f0f0650b729fd03a143d445b2"
+  },
+  "original_actual_loss": {
+    "status": "PENDING_ACTUAL_LOSS_LEDGER",
+    "rank0": null,
+    "rank1": null,
+    "collection_only_run_requires_separate_authorization": true
+  },
+  "forbidden": [
+    "rerun_certified_original",
+    "derive_rows_or_loss_from_aggregate",
+    "invent_file_sha256",
+    "use_checkpoint_or_capture32_as_actual_loss"
+  ]
+}
