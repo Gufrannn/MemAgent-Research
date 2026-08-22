@@ -494,7 +494,9 @@ class ActorRolloutRefWorker(Worker):
             OmegaConf.set_struct(self.config.actor, True)
             with open_dict(self.config.actor):
                 self.config.actor.use_remove_padding = use_remove_padding
-            self.actor = DataParallelPPOActor(config=self.config.actor, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer)
+            self.actor = DataParallelPPOActor(config=self.config.actor, actor_module=self.actor_module_fsdp,
+                                              actor_optimizer=self.actor_optimizer,
+                                              actor_lr_scheduler=self.actor_lr_scheduler)
 
         if self._is_rollout:
             self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
@@ -549,7 +551,10 @@ class ActorRolloutRefWorker(Worker):
             metrics["perf/max_memory_reserved_gb"] = torch.cuda.max_memory_reserved() / (1024**3)
             metrics["perf/cpu_memory_used_gb"] = psutil.virtual_memory().used / (1024**3)
 
-            self.actor_lr_scheduler.step()
+            # Prefix-certified transactions advance the scheduler inside the
+            # same commit/rollback boundary as model and optimizer state.
+            if not self.config.actor.get("rwwpo", {}).get("enable", False):
+                self.actor_lr_scheduler.step()
             lr = self.actor_lr_scheduler.get_last_lr()[0]
             metrics["actor/lr"] = lr
 

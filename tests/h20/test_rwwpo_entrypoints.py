@@ -151,3 +151,30 @@ def test_post_hoc_s128_requires_explicit_diagnostic_label_and_separate_root():
 def test_formal_compare_cannot_accept_diagnostic_status():
     text=(ROOT/"tools/h20/compare_rwwpo_anchor.py").read_text()
     assert 'row.get("status")!="PASS"' in text
+
+def test_tf_launcher_pins_new_branch_and_controller():
+    text=(ROOT/"scripts/h20/run_qwen25_7b_tf_rwwpo.sh").read_text()
+    assert "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822" in text
+    assert "RWWPO_CONTROLLER_VARIANT=feasible_backtracking" in text
+
+def test_tf_manifest_freezes_grid_constraint_and_t25_chain():
+    row=json.loads((ROOT/"manifests/h20/qwen25_7b_tf_rwwpo_seed2026.json").read_text())
+    assert row["method"]["q_min"]==0.5
+    assert row["method"]["alpha_grid"]==[1.0,.5,.25,.125,.0625,.03125]
+    assert row["training"]["target_steps"]==[5,10,15,20,25]
+
+def test_transactional_scheduler_is_not_advanced_by_worker():
+    actor=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
+    worker=(ROOT/"verl/workers/fsdp_workers.py").read_text()
+    assert "self.actor_lr_scheduler.step()" in actor
+    assert 'if not self.config.actor.get("rwwpo", {}).get("enable", False)' in worker
+
+def test_transaction_audit_rejects_interrupted_trial():
+    text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()
+    assert "interrupted trial transaction" in text
+    assert "transaction marker chain" in text
+
+def test_old_diagnostic_is_never_promoted_to_formal():
+    row=json.loads((ROOT/"manifests/h20/rwwpo_hard_rollback_diagnostic_inventory_20260822.json").read_text())
+    assert row["status"]=="DIAGNOSTIC_ONLY"
+    assert row["formal_training_health"]=="NO_GO"

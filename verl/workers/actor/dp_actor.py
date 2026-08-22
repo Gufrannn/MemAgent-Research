@@ -18,6 +18,7 @@ Single Process Actor
 import itertools
 import logging
 import os
+import time
 from typing import Tuple
 
 import torch
@@ -35,6 +36,10 @@ from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
 from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
+from recurrent.research.rwwpo_transaction import (
+    ALPHA_GRID, digest, displacement_norm,
+    parameter_snapshot, restore_rng, rng_snapshot, set_interpolated_parameters,
+)
 
 __all__ = ["DataParallelPPOActor"]
 
@@ -43,11 +48,13 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 class DataParallelPPOActor(BasePPOActor):
-    def __init__(self, config, actor_module: nn.Module, actor_optimizer: torch.optim.Optimizer = None):
+    def __init__(self, config, actor_module: nn.Module, actor_optimizer: torch.optim.Optimizer = None,
+                 actor_lr_scheduler=None):
         """When optimizer is None, it is Reference Policy"""
         super().__init__(config)
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
+        self.actor_lr_scheduler = actor_lr_scheduler
         self.use_remove_padding = self.config.get("use_remove_padding", False)
         print(f"Actor use_remove_padding={self.use_remove_padding}")
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
@@ -71,14 +78,26 @@ class DataParallelPPOActor(BasePPOActor):
                 return tuple(cpu_clone(item) for item in value)
             return value
         params = [param.detach().cpu().clone() for param in self.actor_module.parameters()]
-        return params, cpu_clone(self.actor_optimizer.state_dict())
+        scheduler = cpu_clone(self.actor_lr_scheduler.state_dict()) if self.actor_lr_scheduler is not None else None
+        return params, cpu_clone(self.actor_optimizer.state_dict()), scheduler
+
+    def _transaction_digests(self, snapshot, rng_state):
+        return {
+            "model": digest(snapshot[0]),
+            "optimizer": digest(snapshot[1]),
+            "scheduler": digest(snapshot[2]),
+            "scaler": "not_applicable_bfloat16",
+            "rng": digest(rng_state),
+        }
 
     def _restore_local_optimizer_step(self, snapshot):
-        params, optimizer = snapshot
+        params, optimizer, scheduler = snapshot
         with torch.no_grad():
             for target, source in zip(self.actor_module.parameters(), params):
                 target.copy_(source.to(device=target.device, dtype=target.dtype))
         self.actor_optimizer.load_state_dict(optimizer)
+        if scheduler is not None:
+            self.actor_lr_scheduler.load_state_dict(scheduler)
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -269,11 +288,18 @@ class DataParallelPPOActor(BasePPOActor):
         rwwpo_config = self.config.get("rwwpo", {})
         rwwpo_enabled = bool(rwwpo_config.get("enable", False))
         rwwpo_collect_original = bool(rwwpo_config.get("collect_original_only", False))
+        rwwpo_objective = str(rwwpo_config.get("objective_variant", "whole_prefix"))
+        rwwpo_controller = str(rwwpo_config.get("controller_variant", "hard_rollback"))
+        if rwwpo_objective not in ("whole_prefix", "original_tokenwise"):
+            raise ValueError("RWWPO unknown objective_variant")
+        if rwwpo_controller not in ("hard_rollback", "feasible_backtracking"):
+            raise ValueError("RWWPO unknown controller_variant")
         if rwwpo_enabled and rwwpo_collect_original:
             raise ValueError("RWWPO method and Original collection modes are mutually exclusive")
         rwwpo_capture = rwwpo_enabled or rwwpo_collect_original
         if rwwpo_capture:
-            select_keys.extend(["final_mask", "sample_index", "trajectory_turn", "rwwpo_global_step"])
+            select_keys.extend(["final_mask", "sample_index", "trajectory_turn", "rwwpo_global_step",
+                                "rwwpo_example_identity_hash", "rwwpo_trajectory_identity_hash"])
             if self.config.loss_agg_mode != "token-mean":
                 raise ValueError("RWWPO exact first-order contract requires Original token-mean aggregation")
             if not rwwpo_config.get("ledger_dir"):
@@ -336,6 +362,8 @@ class DataParallelPPOActor(BasePPOActor):
                 slot = min(range(target_sections), key=lambda idx: loads[idx])
                 bins[slot].append(group); loads[slot] += len(group)
             dataloader = [batch[torch.cat(parts)] for parts in bins if parts]
+            if rwwpo_controller == "feasible_backtracking" and len(dataloader) != 1:
+                raise ValueError("RWWPO transactional scheduler semantics require one optimizer minibatch per update")
         elif padded:
             from recurrent.utils import td_split
             dataloader = td_split(batch, self.config.train_batch_size // self.config.ppo_mini_batch_size)
@@ -427,13 +455,23 @@ class DataParallelPPOActor(BasePPOActor):
                         cliprange_high=self.config.clip_ratio_high,
                         clip_ratio_c=self.config.get("clip_ratio_c", 3.0),
                         writer_log_ratio_cap=float(rwwpo_config.get("writer_log_ratio_cap", 4.0)))
-                    if rwwpo_collect_original:
-                        policy_loss, original_clipfrac, original_kl, original_lower = compute_policy_loss(
+                    rwwpo_candidate_loss = policy_loss
+                    original_candidate_loss, original_clipfrac, original_kl, original_lower = compute_policy_loss(
                             old_log_prob=old_log_prob, log_prob=current_log_prob,
                             advantages=joined("advantages"), response_mask=response_mask,
                             cliprange=self.config.clip_ratio, cliprange_low=self.config.clip_ratio_low,
                             cliprange_high=self.config.clip_ratio_high,
                             clip_ratio_c=self.config.get("clip_ratio_c", 3.0), loss_agg_mode="token-mean")
+                    rwwpo_coefficient, = torch.autograd.grad(rwwpo_candidate_loss, current_log_prob,
+                                                             retain_graph=True)
+                    original_coefficient, = torch.autograd.grad(original_candidate_loss, current_log_prob,
+                                                                 retain_graph=True)
+                    active = response_mask
+                    coefficient_cosine = torch.nn.functional.cosine_similarity(
+                        rwwpo_coefficient[active].reshape(1,-1),
+                        original_coefficient[active].reshape(1,-1)).item()
+                    if rwwpo_collect_original or rwwpo_objective == "original_tokenwise":
+                        policy_loss = original_candidate_loss
                         rwwpo_metrics["answer_clipfrac"] = original_clipfrac
                         rwwpo_metrics["answer_ppo_kl"] = original_kl
                         rwwpo_metrics["answer_clipfrac_lower"] = original_lower
@@ -489,7 +527,15 @@ class DataParallelPPOActor(BasePPOActor):
                         gradient_cursor = next_cursor
                     if gradient_cursor != current_log_prob.shape[0]:
                         raise RuntimeError("RWWPO_STREAMING_GRADIENT_ALIGNMENT_FAILURE")
-                    snapshot = self._snapshot_local_optimizer_step() if rwwpo_enabled else None
+                    snapshot = self._snapshot_local_optimizer_step() if rwwpo_capture else None
+                    pre_rng = rng_snapshot() if rwwpo_capture else None
+                    pre_digests = self._transaction_digests(snapshot, pre_rng) if rwwpo_capture else {}
+                    if rwwpo_enabled:
+                        from recurrent.research.rwwpo_ledger import append_transaction_marker
+                        append_transaction_marker(
+                            ledger_dir=rwwpo_config.get("ledger_dir"),attempt_id=rwwpo_config.get("attempt_id"),
+                            rank=rank,global_step=int(joined("rwwpo_global_step")[0].item()),epoch=epoch,
+                            minibatch=batch_idx,phase="intent",model_digest=pre_digests["model"])
                     grad_norm = self._optimizer_step()
                     if not torch.isfinite(grad_norm):
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite gradient norm")
@@ -497,7 +543,89 @@ class DataParallelPPOActor(BasePPOActor):
                     post_prefix_stats = global_prefix_stats
                     post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]
                     accepted = True
+                    alpha_committed = 1.0
+                    trial_rows = []
+                    full_params = parameter_snapshot(self.actor_module) if rwwpo_capture else None
+                    full_displacement = displacement_norm(snapshot[0], full_params) if rwwpo_capture else 0.0
+                    proposal_zero = full_displacement <= 1e-15
                     if rwwpo_enabled:
+                        alpha_grid = tuple(float(value) for value in rwwpo_config.get("alpha_grid", ALPHA_GRID))
+                        if alpha_grid != ALPHA_GRID:
+                            raise RuntimeError("RWWPO_ALPHA_GRID_DRIFT")
+                        tested = {}
+                        chosen_payload = None
+                        full_log_prob = None
+                        candidates = alpha_grid if rwwpo_controller == "feasible_backtracking" else (1.0,)
+                        trial_started = time.perf_counter()
+                        for alpha in candidates:
+                            set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha)
+                            restore_rng(pre_rng)
+                            with torch.no_grad():
+                                trial_log_prob = torch.cat([
+                                    self._forward_micro_batch(item[0], temperature=temperature,
+                                                              calculate_entropy=False)[1]
+                                    for item in forwarded], dim=0)
+                                _, trial_metrics = compute_rwwpo_policy_loss(
+                                    old_log_prob, trial_log_prob, joined("advantages"), response_mask,
+                                    writer_mask, final_mask, joined("sample_index"), joined("trajectory_turn"),
+                                    self.config.clip_ratio, self.config.clip_ratio_low,
+                                    self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
+                                    writer_log_ratio_cap=ratio_cap)
+                            stats = build_global_stats(trial_metrics["prefix_log_ratios"])
+                            feasible = all(row["ess_fraction"] >= q_min and
+                                           row["max_abs_log_ratio"] <= ratio_cap for row in stats)
+                            tested[alpha] = feasible
+                            trial_rows.append({"alpha": alpha, "feasible": feasible,
+                                "log_prob": trial_log_prob.detach().cpu().tolist(),
+                                "prefix_rows": trial_metrics["prefix_log_ratios"], "prefix_stats": stats})
+                            if alpha == 1.0:
+                                full_log_prob = trial_log_prob.detach()
+                            if feasible and chosen_payload is None:
+                                chosen_payload = (trial_log_prob.detach(), trial_metrics["prefix_log_ratios"], stats)
+                            if rwwpo_controller == "feasible_backtracking" and feasible:
+                                # Descending fixed grid: this is the largest tested feasible point.
+                                break
+                        trial_forward_wall_seconds = time.perf_counter() - trial_started
+                        max_trial_seconds = float(rwwpo_config.get("max_trial_forward_wall_seconds", 600.0))
+                        if trial_forward_wall_seconds > max_trial_seconds:
+                            self._restore_local_optimizer_step(snapshot)
+                            restore_rng(pre_rng)
+                            raise RuntimeError("RWWPO_TRIAL_FORWARD_BUDGET_EXCEEDED")
+                        if rwwpo_controller == "feasible_backtracking":
+                            # Complete the declared evidence grid after an early choice is unnecessary;
+                            # decision is over the tested descending prefix only.
+                            decision = next((a for a in candidates if tested.get(a)), 0.0)
+                            alpha_committed = 0.0 if proposal_zero else float(decision)
+                            accepted = alpha_committed > 0.0
+                        else:
+                            accepted = bool(tested[1.0]) and not proposal_zero
+                            alpha_committed = 1.0 if accepted else 0.0
+                        if accepted:
+                            set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha_committed)
+                            post_log_prob, post_prefix_rows, post_prefix_stats = chosen_payload
+                        else:
+                            self._restore_local_optimizer_step(snapshot)
+                            restore_rng(pre_rng)
+                            post_log_prob = current_log_prob.detach()
+                            post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]
+                            post_prefix_stats = global_prefix_stats
+                        # All ranks must make the same transactional decision.
+                        if torch.distributed.is_initialized():
+                            decisions = [None] * torch.distributed.get_world_size()
+                            torch.distributed.all_gather_object(decisions, alpha_committed)
+                            if len(set(decisions)) != 1:
+                                self._restore_local_optimizer_step(snapshot)
+                                raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
+                        commit_params = parameter_snapshot(self.actor_module)
+                        if accepted and self.actor_lr_scheduler is not None:
+                            self.actor_lr_scheduler.step()
+                        commit_digests = {"model": digest(commit_params),
+                                          "optimizer": digest(self.actor_optimizer.state_dict()),
+                                          "scheduler": digest(self.actor_lr_scheduler.state_dict())
+                                          if self.actor_lr_scheduler is not None else digest(None),
+                                          "scaler": "not_applicable_bfloat16",
+                                          "rng": digest(rng_snapshot())}
+                    else:
                         with torch.no_grad():
                             post_log_prob = torch.cat([
                                 self._forward_micro_batch(item[0], temperature=temperature,
@@ -509,27 +637,59 @@ class DataParallelPPOActor(BasePPOActor):
                                 self.config.clip_ratio, self.config.clip_ratio_low,
                                 self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
                                 writer_log_ratio_cap=ratio_cap)
-                        post_prefix_stats = build_global_stats(post_metrics["prefix_log_ratios"])
                         post_prefix_rows = post_metrics["prefix_log_ratios"]
-                        accepted = all(row["ess_fraction"] >= q_min and
-                                       row["max_abs_log_ratio"] <= ratio_cap
-                                       for row in post_prefix_stats)
-                        if not accepted:
-                            self._restore_local_optimizer_step(snapshot)
+                        post_prefix_stats = build_global_stats(post_prefix_rows)
+                        full_log_prob = post_log_prob
+                        trial_rows = [{"alpha": 1.0, "feasible": True,
+                                       "log_prob": post_log_prob.detach().cpu().tolist(),
+                                       "prefix_rows": post_prefix_rows, "prefix_stats": post_prefix_stats}]
+                        accepted = not proposal_zero
+                        alpha_committed = 1.0 if accepted else 0.0
+                        commit_params = parameter_snapshot(self.actor_module)
+                        commit_digests = {"model": digest(commit_params),
+                                          "optimizer": digest(self.actor_optimizer.state_dict()),
+                                          "scheduler": digest(self.actor_lr_scheduler.state_dict())
+                                          if self.actor_lr_scheduler is not None else digest(None),
+                                          "scaler": "not_applicable_bfloat16", "rng": digest(rng_snapshot())}
+                        trial_forward_wall_seconds = 0.0
                     from recurrent.research.rwwpo_ledger import append_actual_loss_record
                     append_actual_loss_record(
                         ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
                         mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
                         global_step=int(joined("rwwpo_global_step")[0].item()), epoch=epoch,
                         minibatch=batch_idx, old_log_prob=old_log_prob, current_log_prob=current_log_prob,
-                        proposed_post_log_prob=post_log_prob, response_mask=response_mask,
+                        proposed_post_log_prob=full_log_prob if rwwpo_enabled else post_log_prob,
+                        committed_log_prob=post_log_prob, response_mask=response_mask,
                         writer_mask=writer_mask, answer_mask=rwwpo_metrics["answer_mask"],
                         trajectory_turn=joined("trajectory_turn"), sample_index=joined("sample_index"),
+                        example_identity_hash=joined("rwwpo_example_identity_hash"),
+                        trajectory_identity_hash=joined("rwwpo_trajectory_identity_hash"),
                         advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
                         prefix_rows=rwwpo_metrics["prefix_log_ratios"], prefix_stats=global_prefix_stats,
                         post_prefix_rows=post_prefix_rows, post_prefix_stats=post_prefix_stats, q_min=q_min,
                         writer_log_ratio_cap=ratio_cap,
-                        constraint_pass=constraint_pass, accepted=accepted)
+                        constraint_pass=constraint_pass, accepted=accepted,
+                        objective_variant=rwwpo_objective, controller_variant=rwwpo_controller,
+                        alpha_grid=list(ALPHA_GRID), alpha_test_order=[row["alpha"] for row in trial_rows],
+                        alpha_committed=alpha_committed, accepted_nonzero=accepted,
+                        proposal_zero=proposal_zero, trial_evidence=trial_rows,
+                        full_parameter_displacement_norm=full_displacement,
+                        committed_parameter_displacement_norm=displacement_norm(snapshot[0], commit_params),
+                        pre_digests=pre_digests, commit_digests=commit_digests,
+                        trial_forward_wall_seconds=trial_forward_wall_seconds if rwwpo_enabled else 0.0,
+                        mechanism_diagnostics={
+                            "token_approx_kl": rwwpo_metrics["token_approx_kl"],
+                            "token_clipfrac": rwwpo_metrics["token_clipfrac"],
+                            "per_write_rows": rwwpo_metrics["per_write_rows"],
+                            "per_write_stats": rwwpo_metrics["per_write_stats"],
+                            "covariance_diagnostics": rwwpo_metrics["covariance_diagnostics"],
+                            "whole_prefix_tokenwise_gradient_cosine": coefficient_cosine,
+                        })
+                    if rwwpo_enabled:
+                        append_transaction_marker(
+                            ledger_dir=rwwpo_config.get("ledger_dir"),attempt_id=rwwpo_config.get("attempt_id"),
+                            rank=rank,global_step=int(joined("rwwpo_global_step")[0].item()),epoch=epoch,
+                            minibatch=batch_idx,phase="complete",model_digest=commit_digests["model"])
                     append_to_dict(metrics, {
                         "actor/pg_loss": policy_loss.detach().item(),
                         "actor/pg_clipfrac": rwwpo_metrics["answer_clipfrac"].detach().item(),
@@ -538,7 +698,9 @@ class DataParallelPPOActor(BasePPOActor):
                         "rwwpo/min_prefix_ess": min(row["ess_fraction"] for row in global_prefix_stats),
                     })
                     append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),
-                                             "rwwpo/update_accepted": float(accepted)})
+                                             "rwwpo/update_accepted": float(accepted),
+                                             "rwwpo/alpha_committed": float(alpha_committed),
+                                             "rwwpo/scheduler_managed_transactionally": 1.0})
                     # The legacy non-RWWPO path appends its final scalar metric
                     # dictionary once more after the minibatch loop.  Do not let
                     # that epilogue see this branch's GPU minibatch container:

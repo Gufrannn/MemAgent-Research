@@ -2204,6 +2204,19 @@ class RayPPOTrainer:
                                 batch.batch["rwwpo_global_step"] = torch.full(
                                     (len(batch),), int(self.global_steps), dtype=torch.long,
                                     device=batch.batch["responses"].device)
+                                import hashlib
+                                def stable_int64(value):
+                                    raw=hashlib.sha256(str(value).encode()).digest()[:8]
+                                    return int.from_bytes(raw,"big",signed=False) & ((1 << 63) - 1)
+                                trajectory_ids=batch.non_tensor_batch.get("trajectory_id")
+                                uids=batch.non_tensor_batch.get("uid")
+                                if trajectory_ids is None or uids is None or len(trajectory_ids)!=len(batch) or len(uids)!=len(batch):
+                                    raise RuntimeError("RWWPO_STABLE_IDENTITY_MISSING")
+                                device=batch.batch["responses"].device
+                                batch.batch["rwwpo_example_identity_hash"] = torch.tensor(
+                                    [stable_int64(value) for value in uids],dtype=torch.long,device=device)
+                                batch.batch["rwwpo_trajectory_identity_hash"] = torch.tensor(
+                                    [stable_int64(value) for value in trajectory_ids],dtype=torch.long,device=device)
                             eval_identity_config = self.config.trainer.get("eval_identity", None)
                             if eval_identity_config is not None and bool(
                                 eval_identity_config.get("enabled", False)

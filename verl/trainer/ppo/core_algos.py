@@ -536,6 +536,49 @@ def compute_rwwpo_policy_loss(
         chi2 = float((batch_size * weights.square().sum() - 1.0).item())
         prefix_stats.append({"turn": turn, "batch_size": batch_size,
                              "ess_fraction": ess_fraction, "chi2": chi2})
+    per_write_rows = []
+    for row in writer_rows:
+        per_write_rows.append({
+            "turn": int(trajectory_turn[row].item()),
+            "sample_index": int(sample_index[row].item()),
+            "log_ratio": float(writer_row_log_ratio[row].detach().item()),
+            "token_count": int(writer_mask[row].sum().item()),
+        })
+    per_write_stats = []
+    for turn in sorted({row["turn"] for row in per_write_rows}):
+        values = torch.tensor([row["log_ratio"] for row in per_write_rows if row["turn"] == turn],
+                              dtype=torch.float64)
+        weights = torch.softmax(values, dim=0)
+        chi2 = float((len(values) * weights.square().sum() - 1.0).item())
+        per_write_stats.append({"turn": turn, "batch_size": len(values),
+                                "ess_fraction": 1.0 / (1.0 + chi2), "chi2": chi2,
+                                "variance": float(values.var(unbiased=False).item())})
+    covariance_diagnostics = []
+    samples = sorted({row["sample_index"] for row in per_write_rows})
+    for turn in sorted({row["turn"] for row in per_write_rows}):
+        paths=[]
+        for sid in samples:
+            path=sorted((row for row in per_write_rows
+                         if row["sample_index"]==sid and row["turn"]<=turn),
+                        key=lambda row:row["turn"])
+            if path and path[-1]["turn"]==turn:
+                paths.append([row["log_ratio"] for row in path])
+        if paths and len({len(path) for path in paths})==1:
+            matrix=torch.tensor(paths,dtype=torch.float64)
+            cumulative=matrix.sum(dim=1)
+            marginal_variance=matrix.var(dim=0,unbiased=False).sum()
+            cumulative_variance=cumulative.var(unbiased=False)
+            covariance_diagnostics.append({
+                "turn": turn, "trajectory_count": len(paths),
+                "cumulative_prefix_variance": float(cumulative_variance.item()),
+                "sum_per_write_variance": float(marginal_variance.item()),
+                "cross_turn_covariance_contribution": float((cumulative_variance-marginal_variance).item()),
+            })
+    active_ratio = log_ratio[response_mask].detach().to(torch.float64)
+    clip_low = cliprange_low if cliprange_low is not None else cliprange
+    clip_high = cliprange_high if cliprange_high is not None else cliprange
+    token_clipfrac = float(((active_ratio < active_ratio.new_tensor(1.0-clip_low).log()) |
+                            (active_ratio > active_ratio.new_tensor(1.0+clip_high).log())).double().mean().item())
     metrics = {
         "answer_clipfrac": answer_clipfrac,
         "answer_ppo_kl": answer_kl,
@@ -543,6 +586,11 @@ def compute_rwwpo_policy_loss(
         "denominator": denominator.detach(),
         "writer_trajectory_count": len(trajectory_losses),
         "prefix_stats": prefix_stats,
+        "per_write_rows": per_write_rows,
+        "per_write_stats": per_write_stats,
+        "covariance_diagnostics": covariance_diagnostics,
+        "token_approx_kl": float((-active_ratio).mean().item()),
+        "token_clipfrac": token_clipfrac,
         "prefix_log_ratios": [
             {"turn": turn, "sample_index": sid, "log_ratio": float(value.detach().item()),
              "prefix_token_count": tokens}

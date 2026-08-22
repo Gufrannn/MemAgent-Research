@@ -8,7 +8,8 @@ IFS=, read -r RWWPO_GPU_A RWWPO_GPU_B <<< "$GPU_PAIR"
 (( RWWPO_GPU_A < RWWPO_GPU_B )) || { echo 'RWWPO_NO_GO:GPU_PAIR must be distinct canonical ascending' >&2; exit 64; }
 [[ ${RWWPO_RUN_ID:-} =~ ^[a-z0-9][a-z0-9_-]{5,63}$ ]] || { echo 'RWWPO_NO_GO:set semantic RWWPO_RUN_ID (not random UUID)' >&2; exit 65; }
 [[ -f ${RWWPO_ORIGINAL_RESOLVED_MANIFEST:-} && ${RWWPO_ORIGINAL_RESOLVED_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || { echo 'RWWPO_NO_GO:bind accepted Original resolved manifest path and SHA256' >&2; exit 59; }
-readonly RWWPO_MANIFEST=$RWWPO_REPO_DIR/manifests/h20/qwen25_7b_rwwpo_seed2026.json
+readonly RWWPO_EXPECTED_BRANCH=${RWWPO_EXPECTED_BRANCH:-h20/qwen25-7b-rwwpo-t25-frozen-20260822}
+readonly RWWPO_MANIFEST=${RWWPO_MANIFEST:-$RWWPO_REPO_DIR/manifests/h20/qwen25_7b_rwwpo_seed2026.json}
 readonly RWWPO_CERT_ROOT=$RWWPO_WORK_ROOT/logs/rwwpo/$RWWPO_RUN_ID/certificates
 readonly RWWPO_E0=$RWWPO_CERT_ROOT/e0.json
 readonly RWWPO_E1=$RWWPO_CERT_ROOT/e1.json
@@ -22,7 +23,7 @@ readonly RWWPO_PYTHON=$RWWPO_WORK_ROOT/.venv/bin/python
 
 rwwpo_require_checkout() {
   [[ $(cd "$RWWPO_REPO_DIR" && git rev-parse HEAD) == "$RWWPO_EXPECTED_COMMIT" ]] || { echo 'RWWPO_NO_GO:commit drift' >&2; exit 66; }
-  [[ $(cd "$RWWPO_REPO_DIR" && git branch --show-current) == h20/qwen25-7b-rwwpo-t25-frozen-20260822 ]] || { echo 'RWWPO_NO_GO:branch drift' >&2; exit 67; }
+  [[ $(cd "$RWWPO_REPO_DIR" && git branch --show-current) == "$RWWPO_EXPECTED_BRANCH" ]] || { echo 'RWWPO_NO_GO:branch drift' >&2; exit 67; }
   [[ -z $(cd "$RWWPO_REPO_DIR" && git status --porcelain) ]] || { echo 'RWWPO_NO_GO:dirty tree' >&2; exit 68; }
 }
 rwwpo_acquire_gpu_locks() {
@@ -41,6 +42,8 @@ rwwpo_require_idle() {
 }
 rwwpo_export_runtime() {
   export CUDA_VISIBLE_DEVICES=$GPU_PAIR RWWPO_ENABLE=1 RWWPO_LEDGER_DIR RWWPO_Q_MIN=0.5
+  export RWWPO_OBJECTIVE_VARIANT=${RWWPO_OBJECTIVE_VARIANT:-whole_prefix}
+  export RWWPO_CONTROLLER_VARIANT=${RWWPO_CONTROLLER_VARIANT:-hard_rollback}
   export GATE_A_FROZEN_AUDIT=1 GATE_A_EXECUTION_LEDGER=$RWWPO_EXECUTION_LEDGER
   export GATE_A_EXPERIMENT_NAME=$RWWPO_EXPERIMENT GATE_A_GIT_COMMIT=$RWWPO_EXPECTED_COMMIT
   export GATE_A_RUN_ID

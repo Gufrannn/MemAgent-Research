@@ -1,4 +1,11 @@
-# Paper I working draft — RWWPO
+# Paper I working draft — Prefix-Divergence Trust Regions for State-Writing Policies
+
+> **Post-diagnostic revision.** The binary hard-rollback implementation has now
+> produced a formally NO-GO, diagnostic-only T5–T25 run: seven nonzero commits,
+> no accepted anchor proposal, and mean fixed-S128 F1 delta -0.01029 versus the
+> certified Original curve.  These observations do not establish causality.
+> The active algorithm proposal is the transactional feasible-step controller
+> specified in `tf_rwwpo_revision_20260822.md`; no TF-RWWPO result exists yet.
 
 **Scientific status (2026-08-22): PAPER-FRAMING GO; empirical claims remain conditional on Method evidence.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
@@ -12,8 +19,7 @@ recurrent-prefix phenomenon beyond single-response and token diagnostics.
 
 ## Tentative title
 
-**Trust the State You Write: Prefix-Constrained Policy Optimization for
-Recurrent Language Memory**
+**Prefix-Divergence Trust Regions for State-Writing Policies**
 
 ## Abstract (203 words; no unobserved result is asserted)
 
@@ -66,9 +72,11 @@ generic stability as new. Its potential contribution must instead arise from a
 different probability object: the cumulative likelihood of the sequence of
 *state-producing writes* through a recurrent turn. A per-write ratio controls
 the action just sampled; a prefix ratio measures the change of measure for the
-actual chain of states on which the next shared policy acts. Candidate optimizer
-steps are checked on the same actual-loss minibatch after the step; a violating
-step is rolled back together with its optimizer state and recorded as rejected.
+actual chain of states on which the next shared policy acts. After the full Adam
+proposal, a frozen descending grid of genuinely realized parameter
+displacements is re-forwarded on the actual-loss minibatch. The largest tested
+feasible point is committed transactionally; if none is feasible, model,
+optimizer, scheduler, and RNG state are restored.
 
 Why can this matter? Let a writer output contain (K) tokens and let every
 token ratio lie inside a PPO clipping interval. The joint ratio is their

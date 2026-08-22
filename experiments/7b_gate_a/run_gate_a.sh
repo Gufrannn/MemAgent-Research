@@ -195,6 +195,8 @@ if [[ ${RWWPO_ENABLE:-0} == 1 || ${RWWPO_COLLECT_ORIGINAL:-0} == 1 ]]; then
     "actor_rollout_ref.actor.rwwpo.ledger_dir=$RWWPO_LEDGER_DIR"
     "actor_rollout_ref.actor.rwwpo.q_min=$RWWPO_Q_MIN"
     "actor_rollout_ref.actor.rwwpo.attempt_id=$RWWPO_ATTEMPT_ID"
+    "actor_rollout_ref.actor.rwwpo.objective_variant=${RWWPO_OBJECTIVE_VARIANT:-whole_prefix}"
+    "actor_rollout_ref.actor.rwwpo.controller_variant=${RWWPO_CONTROLLER_VARIANT:-hard_rollback}"
   )
   if [[ ${RWWPO_ENABLE:-0} == 1 ]]; then
     TRAINER_OVERRIDES+=(actor_rollout_ref.actor.rwwpo.enable=true)

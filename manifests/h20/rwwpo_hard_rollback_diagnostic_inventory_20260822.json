@@ -1,0 +1,13 @@
+{
+  "status": "DIAGNOSTIC_ONLY",
+  "formal_training_health": "NO_GO",
+  "training_commit": "b485f2e6c179e3f4245ad05403c7b185d2022aec",
+  "run_id": "rwwpo_seed2026_metricfix1_b485f2e",
+  "controller_variant": "hard_rollback",
+  "nonzero_accepted_steps": [4, 7, 11, 12, 14, 17, 22],
+  "anchor_proposals_accepted": {"5": false, "10": false, "15": false, "20": false, "25": false},
+  "token_f1_delta": {"5": 0.04796341466160546, "10": 0.0058483182484724,
+    "15": -0.0034290237637408, "20": -0.05118760213385746,
+    "25": -0.05063115216726366, "mean": -0.01028720902937081},
+  "note": "Absolute H20 artifact paths and certificate SHA values must be materialized read-only on H20; absent values must never be guessed."
+}
