@@ -667,6 +667,12 @@ class DataParallelPPOActor(BasePPOActor):
                         torch.distributed.all_reduce(squared,op=torch.distributed.ReduceOp.SUM)
                         committed_displacement=float(squared.sqrt().item())
                     from recurrent.research.rwwpo_ledger import append_actual_loss_record
+                    behavior_point_max_delta=float((current_log_prob-old_log_prob)[response_mask].abs().max().item())
+                    if torch.distributed.is_initialized():
+                        worst=torch.tensor(behavior_point_max_delta,dtype=torch.float64,
+                                           device=torch.cuda.current_device())
+                        torch.distributed.all_reduce(worst,op=torch.distributed.ReduceOp.MAX)
+                        behavior_point_max_delta=float(worst.item())
                     append_actual_loss_record(
                         ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
                         mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
@@ -716,7 +722,7 @@ class DataParallelPPOActor(BasePPOActor):
                                              "rwwpo/alpha_committed": float(alpha_committed),
                                              "rwwpo/post_min_prefix_ess": min(row["ess_fraction"] for row in post_prefix_stats),
                                              "rwwpo/post_max_abs_prefix_log_ratio": max(row["max_abs_log_ratio"] for row in post_prefix_stats),
-                                             "rwwpo/behavior_point_max_delta": float((current_log_prob-old_log_prob)[response_mask].abs().max().item()),
+                                             "rwwpo/behavior_point_max_delta": behavior_point_max_delta,
                                              "rwwpo/scheduler_managed_transactionally": 1.0})
                     # The legacy non-RWWPO path appends its final scalar metric
                     # dictionary once more after the minibatch loop.  Do not let

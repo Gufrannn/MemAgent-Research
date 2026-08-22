@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, re, statistics, sys
+import argparse, hashlib, json, re, statistics, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.h20.audit_rwwpo_actual_loss import audit
@@ -7,6 +7,10 @@ from recurrent.research.gate_a_execution import validate_jsonl_chain,checkpoint_
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--run-root",required=True); p.add_argument("--actual-ledger-dir",required=True); p.add_argument("--execution-ledger",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--expected-schema-version",required=True); p.add_argument("--expected-objective",required=True); p.add_argument("--expected-controller",required=True); p.add_argument("--target-step",type=int,required=True); p.add_argument("--output",required=True); a=p.parse_args()
+    head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()
+    dirty=subprocess.check_output(["git","status","--porcelain"],text=True).strip()
+    if head!=a.expected_commit: raise SystemExit("RWWPO_AUDIT_NO_GO:checkout commit")
+    if dirty: raise SystemExit("RWWPO_AUDIT_NO_GO:dirty checkout")
     ck=Path(a.run_root)/f"global_step_{a.target_step}"
     if not (ck.joinpath("actor").is_dir() and ck.joinpath("data.pt").is_file()): raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint")
     ledgers=sorted(Path(a.actual_ledger_dir).glob("actual_loss_rank*.jsonl"))

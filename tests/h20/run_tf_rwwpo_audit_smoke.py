@@ -3,10 +3,13 @@
 import hashlib
 import json
 import math
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from tools.h20.audit_rwwpo_actual_loss import audit
+from recurrent.research.gate_a_execution import append_jsonl, checkpoint_inventory
 
 
 def signed(row):
@@ -66,6 +69,45 @@ def main():
         try: audit(paths,require_method=True)
         except ValueError as exc: assert "post-step prefix" in str(exc) or "selected trial" in str(exc)
         else: raise AssertionError("forged committed logprob was accepted")
+    # Full formal CLI: actual rows, transaction markers, execution chain,
+    # checkpoint inventory, ledger anchors, weight sync, and checkout binding.
+    with tempfile.TemporaryDirectory() as raw:
+        root=Path(raw); ledger=root/"actual"; ledger.mkdir(); run=root/"run"; ck=run/"global_step_1"
+        (ck/"actor").mkdir(parents=True); (ck/"actor"/"model_world_size_2_rank_0.pt").write_bytes(b"m0")
+        (ck/"actor"/"model_world_size_2_rank_1.pt").write_bytes(b"m1"); (ck/"data.pt").write_bytes(b"data")
+        anchors={}
+        for rank in (0,1):
+            actual_path=ledger/f"actual_loss_rank{rank}.jsonl"
+            actual_payload=(json.dumps(make_row(rank),sort_keys=True,separators=(",",":"))+"\n").encode()
+            actual_path.write_bytes(actual_payload)
+            identity={"schema_version":"rwwpo-transaction-v1","attempt_id":"tf_smoke","rank":rank,
+                      "global_step":1,"epoch":0,"minibatch":0}
+            marker_rows=[]; previous="0"*64
+            for phase,model in (("intent","a"*64),("complete","e"*64)):
+                row={**identity,"phase":phase,"model_digest":model,"previous_record_sha256":previous}
+                row=signed(row); previous=row["record_sha256"]; marker_rows.append(row)
+            transaction_path=ledger/f"transaction_rank{rank}.jsonl"
+            transaction_payload=b"".join((json.dumps(row,sort_keys=True,separators=(",",":"))+"\n").encode() for row in marker_rows)
+            transaction_path.write_bytes(transaction_payload)
+            for path,payload,tail,count in ((actual_path,actual_payload,json.loads(actual_payload)["record_sha256"],1),
+                                            (transaction_path,transaction_payload,marker_rows[-1]["record_sha256"],2)):
+                anchors[path.name]={"record_count":count,"prefix_sha256":hashlib.sha256(payload).hexdigest(),"tail_sha256":tail}
+        head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()
+        execution=root/"execution.jsonl"
+        append_jsonl(execution,{"record_type":"weight_sync_summary","git_commit":head,"global_step":1,
+                                "sync_kind":"post_actor_update","worker_ranks":[0,1],"sampled_tensor_digest":"f"*64})
+        append_jsonl(execution,{"record_type":"checkpoint_inventory","git_commit":head,"global_step":1,
+                                "inventory":checkpoint_inventory(ck),"rwwpo_ledger_anchors":anchors})
+        output=root/"health.json"
+        command=[sys.executable,"tools/h20/audit_rwwpo_run.py","--run-root",str(run),
+                 "--actual-ledger-dir",str(ledger),"--execution-ledger",str(execution),
+                 "--expected-commit",head,"--expected-schema-version","rwwpo-actual-loss-v2",
+                 "--expected-objective","whole_prefix","--expected-controller","feasible_backtracking",
+                 "--target-step","1","--output",str(output)]
+        subprocess.run(command,check=True)
+        assert json.loads(output.read_text())["status"]=="PASS"
+        bad=command.copy(); bad[bad.index("whole_prefix")]="original_tokenwise"
+        assert subprocess.run(bad,capture_output=True,text=True).returncode!=0
     print("TF_RWWPO_AUDIT_SMOKE_PASS")
 
 
