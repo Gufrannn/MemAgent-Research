@@ -5,6 +5,10 @@ import argparse, copy, json, os, re, subprocess, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT))
 from recurrent.research.cosi import canonical_sha256, sha256_file
+from recurrent.research.coral_evidence import (
+    validate_original_training_authority,
+    validate_stable_s128_authority,
+)
 
 BRANCH="h20/qwen25-7b-cosi-t25-frozen-20260822"
 EXPECTED_TRAINING = {
@@ -124,7 +128,7 @@ def emit_method_overrides(work, gpu_pair, stage):
         "PHASE": phase, "EXP": experiment,
         "RUN_SEED": "2026", "TRAIN_BATCH_SIZE": "4", "ROLLOUT_N": "2",
         "PPO_MINI_BATCH_SIZE": "4", "N_GPUS": "2", "FSDP_SIZE": "2",
-        "FRESH_TOTAL_STEPS": "5", "SAVE_FREQ": "1", "MAX_ACTOR_CKPT_TO_KEEP": "30",
+        "FRESH_TOTAL_STEPS": "25", "SAVE_FREQ": "5", "MAX_ACTOR_CKPT_TO_KEEP": "30",
         "REWARD_MANAGER": "naive", "GPU_MEMORY_UTILIZATION": "0.55",
     }
     if phase == "resume":
@@ -330,7 +334,7 @@ def validate_continuation_binding(t5_preflight, *, expected_commit,
                                   s128_manifest_sha256, model_inventory_sha256,
                                   protocol_comparison_sha256,
                                   method_nonwhitelist_config_sha256,
-                                  baseline_index_sha256, gpu_pair):
+                                  evidence_authority_sha256, gpu_pair):
     expected = {
         "stage": "t5",
         "git_commit": expected_commit,
@@ -341,7 +345,7 @@ def validate_continuation_binding(t5_preflight, *, expected_commit,
         "fresh_base_model_tokenizer_inventory_sha256": model_inventory_sha256,
         "original_protocol_comparison_sha256": protocol_comparison_sha256,
         "method_nonwhitelist_config_sha256": method_nonwhitelist_config_sha256,
-        "baseline_index_sha256": baseline_index_sha256,
+        "evidence_authority_sha256": evidence_authority_sha256,
         "gpu_pair": gpu_pair,
     }
     if not isinstance(t5_preflight, dict) or any(
@@ -353,11 +357,8 @@ def main():
     env=os.environ; required=[
         "MEMAGENT_COSI_WORK_ROOT", "MEMAGENT_COSI_REPO_DIR",
         "MEMAGENT_COSI_EXPECTED_COMMIT", "MEMAGENT_COSI_GPU_PAIR",
-        "MEMAGENT_COSI_BASELINE_INDEX", "MEMAGENT_COSI_BASELINE_INDEX_SHA256",
         "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST",
         "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256",
-        "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE",
-        "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE_SHA256",
         "MEMAGENT_COSI_S128_RESOLVED_MANIFEST",
         "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256",
     ]
@@ -388,26 +389,27 @@ def main():
         env, "MEMAGENT_COSI_S128_RESOLVED_MANIFEST",
         "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256", "S128 resolved manifest",
     )
-    baseline_index_path = _sha_binding(
-        env, "MEMAGENT_COSI_BASELINE_INDEX", "MEMAGENT_COSI_BASELINE_INDEX_SHA256",
-        "Original baseline bundle index",
-    )
-    baseline_index_sha = sha256_file(baseline_index_path)
-    original_p0_path = _sha_binding(
-        env, "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE",
-        "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE_SHA256", "Original P0 certificate",
-    )
     original=json.loads(original_path.read_text())
     s128_resolved=json.loads(s128_resolved_path.read_text())
-    from recurrent.research.stable_eval_identity import validate_resolved_manifest
-    validate_resolved_manifest(s128_resolved)
+    authority = manifest.get("evidence_authority")
+    if not isinstance(authority, dict):
+        raise ValueError("COSI_NO_GO: shared evidence authority missing")
+    original_authority = validate_original_training_authority(
+        authority.get("original_training", {}), resolved_path=original_path,
+        expected_resolved_sha256=env["MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256"],
+    )
+    stable_authority = validate_stable_s128_authority(
+        authority.get("stable_s128", {}), resolved_path=s128_resolved_path,
+        expected_resolved_sha256=env["MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256"],
+    )
+    s128_resolved = stable_authority["resolved"]
     if s128_resolved.get("eval_manifest_hash") != EXPECTED_EVALUATION["eval_manifest_hash"]:
         raise ValueError("COSI_NO_GO: authenticated S128 eval protocol drift")
     protocol_evidence = validate_original_protocol(manifest, original)
     model_inventory_sha = validate_local_artifacts(work, manifest, protocol_evidence)
     method_overrides = emit_method_overrides(work, gpu, a.stage)
     resolved_config_evidence = validate_resolved_original_copy(
-        json.loads(original_p0_path.read_text()), method_overrides,
+        original_authority["p0"], method_overrides,
     )
     resolved_config_comparison_sha = canonical_sha256(resolved_config_evidence)
     cert=work/"logs"/"cosi_preflight"/"certificates"; gates={}
@@ -445,7 +447,11 @@ def main():
     original_manifest_sha = sha256_file(original_path)
     s128_resolved_manifest_sha = sha256_file(s128_resolved_path)
     if a.stage=="continue":
-        gates["t5"]=authenticated(cert/"t5_health.json","COSI_T5_HEALTH_PASS")
+        run_id = os.environ.get("MEMAGENT_COSI_RUN_ID", "coral_seed2026_primary_v1")
+        gates["t5"]=authenticated(
+            work/"logs"/"coral"/run_id/"certificates"/"t5_health.json",
+            "COSI_T5_HEALTH_PASS",
+        )
         t5_preflight=authenticated(cert/"p0_t5.json","COSI_T5_P0_PASS")
         comparison_receipt = {
             key: {"method": left, "original": right}
@@ -455,14 +461,14 @@ def main():
             t5_preflight, expected_commit=expected,
             manifest_sha256=manifest_sha,
             original_manifest_sha256=original_manifest_sha,
-            original_p0_certificate_sha256=sha256_file(original_p0_path),
+            original_p0_certificate_sha256=original_authority["p0_sha256"],
             s128_manifest_sha256=s128_resolved_manifest_sha,
             model_inventory_sha256=model_inventory_sha,
             protocol_comparison_sha256=canonical_sha256(comparison_receipt),
             method_nonwhitelist_config_sha256=(
                 resolved_config_evidence["method_nonwhitelist_config_sha256"]
             ),
-            baseline_index_sha256=baseline_index_sha,
+            evidence_authority_sha256=canonical_sha256(authority),
             gpu_pair=gpu,
         )
         gates["t5_preflight"]=t5_preflight
@@ -470,7 +476,7 @@ def main():
         key: {"method": left, "original": right}
         for key, (left, right) in sorted(protocol_evidence["compared_leaves"].items())
     }
-    report={"schema":"memagent.cosi.preflight.v3","status":"PASS","decision":f"COSI_{a.stage.upper()}_P0_PASS","stage":a.stage,"git_commit":expected,"manifest_sha256":manifest_sha,"original_resolved_manifest_sha256":original_manifest_sha,"original_p0_certificate_sha256":sha256_file(original_p0_path),"s128_resolved_manifest_sha256":s128_resolved_manifest_sha,"baseline_index_sha256":baseline_index_sha,"fresh_base_model_tokenizer_inventory_sha256":model_inventory_sha,"original_protocol_comparison_sha256":canonical_sha256(comparison_receipt),"original_protocol_compared_leaves":sorted(comparison_receipt),"resolved_config_comparison_sha256":resolved_config_comparison_sha,"method_nonwhitelist_config_sha256":resolved_config_evidence["method_nonwhitelist_config_sha256"],"resolved_config_comparison":resolved_config_evidence,"gpu_pair":gpu,"gate_hashes":{k:v["report_sha256"] for k,v in gates.items()}}
+    report={"schema":"memagent.cosi.preflight.v4","status":"PASS","decision":f"COSI_{a.stage.upper()}_P0_PASS","stage":a.stage,"git_commit":expected,"manifest_sha256":manifest_sha,"original_resolved_manifest_sha256":original_manifest_sha,"original_p0_certificate_sha256":original_authority["p0_sha256"],"original_training_final_sha256":original_authority["final_sha256"],"original_training_ledger_sha256":original_authority["ledger_sha256"],"s128_resolved_manifest_sha256":s128_resolved_manifest_sha,"s128_final_sha256":stable_authority["final_sha256"],"s128_ledger_sha256":stable_authority["ledger_sha256"],"evidence_authority_sha256":canonical_sha256(authority),"fresh_base_model_tokenizer_inventory_sha256":model_inventory_sha,"original_protocol_comparison_sha256":canonical_sha256(comparison_receipt),"original_protocol_compared_leaves":sorted(comparison_receipt),"resolved_config_comparison_sha256":resolved_config_comparison_sha,"method_nonwhitelist_config_sha256":resolved_config_evidence["method_nonwhitelist_config_sha256"],"resolved_config_comparison":resolved_config_evidence,"gpu_pair":gpu,"gate_hashes":{k:v["report_sha256"] for k,v in gates.items()}}
     report["report_sha256"]=canonical_sha256(report)
     if a.write_certificate:
         cert.mkdir(parents=True,exist_ok=True); out=cert/f"p0_{a.stage}.json"

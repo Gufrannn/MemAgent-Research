@@ -1,0 +1,7 @@
+# CORAL release status
+
+- `43b722d`: **SUPERSEDED / NOT RELEASE**.
+- `d6cccf99d39859b6bc843fd3abee2d92e9f7e4e4`: **SUPERSEDED / NOT RELEASE** after the unified Original evidence and continuous-T25 protocol correction.
+- Only the exact remote SHA identified as `RELEASE` in the final handoff may be used on H20.
+
+The released entry must authenticate the shared read-only Original/S128 evidence roots, materialize the Original comparison curve from its certified artifact inventory, train Method once from the fresh base through T25, apply the cheap numerical/ledger/weight-sync T5 health check, and run all five fixed-S128 evaluations only after T25.

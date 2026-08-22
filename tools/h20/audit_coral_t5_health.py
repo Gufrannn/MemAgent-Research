@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
-"""Fail-closed CORAL T5 health and authenticated Original-T5 comparison."""
+"""Cheap fail-closed T5 training-health audit; no evaluation or baseline access."""
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from recurrent.research.cosi import canonical_sha256, checkpoint_sha256, sha256_file, validate_ledger
+from recurrent.research.cosi import canonical_sha256, checkpoint_sha256, validate_ledger
 from recurrent.research.gate_a_execution import validate_jsonl_chain
-from tools.h20.audit_qwen25_7b_cosi import build_anchor_comparison
-
-
-def auth(path, decision):
-    value = json.loads(path.read_text())
-    unsigned = {key: child for key, child in value.items() if key != "report_sha256"}
-    if value.get("status") != "PASS" or value.get("decision") != decision \
-            or value.get("report_sha256") != canonical_sha256(unsigned):
-        raise ValueError(f"CORAL_T5_NO_GO:{path}")
-    return value
 
 
 def validate_role_mechanism(updates, gate_rows):
@@ -40,12 +29,14 @@ def validate_role_mechanism(updates, gate_rows):
                 or int(row.get("active_tokens", 0)) < 1 \
                 or int(row.get("inactive_tokens", 0)) < 1 \
                 or not math.isfinite(float(row.get("active_grad_norm", float("nan")))) \
-                or float(row["active_grad_norm"]) <= 0:
+                or float(row["active_grad_norm"]) <= 0 \
+                or not math.isfinite(float(row.get("active_pg_loss", float("nan")))):
             raise ValueError("CORAL_T5_NO_GO: role mechanism ledger")
     if validate_jsonl_chain(gate_rows):
         raise ValueError("CORAL_T5_NO_GO: Gate A ledger chain")
     post_sync = [row for row in gate_rows if row.get("record_type") == "weight_sync_summary"
-                 and row.get("sync_kind") == "post_actor_update"]
+                 and row.get("sync_kind") == "post_actor_update"
+                 and int(row.get("global_step", -1)) <= 5]
     if [(int(row["global_step"]), row["sampled_tensor_digest"]) for row in post_sync] != [
         (int(item["global_step"]), item["actor_vllm_sampled_tensor_digest"])
         for item in updates
@@ -58,58 +49,62 @@ def validate_role_mechanism(updates, gate_rows):
     return role_norms, post_sync
 
 
-def validate_t5_evaluation(evaluation, baseline, checkpoint_hash):
-    if evaluation.get("step") != 5 \
-            or evaluation.get("checkpoint_inventory_sha256") != checkpoint_hash:
-        raise ValueError("CORAL_T5_NO_GO: method eval/checkpoint binding")
-    return build_anchor_comparison(5, evaluation, baseline)
+def select_t5_updates(all_updates, *, exact_boundary):
+    if exact_boundary and [int(row.get("global_step", -1)) for row in all_updates] \
+            != [1, 2, 3, 4, 5]:
+        raise ValueError("CORAL_T5_NO_GO: recovery requires exact step5 ledger boundary")
+    return [row for row in all_updates if int(row.get("global_step", -1)) <= 5]
+
+
+def validate_exact_gate_boundary(gate_rows):
+    advanced = [row for row in gate_rows
+                if type(row.get("global_step")) is int and row["global_step"] > 5]
+    if advanced:
+        raise ValueError("CORAL_T5_NO_GO: Gate-A ledger advanced beyond exact step5 boundary")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", required=True)
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--baseline-import", required=True)
-    parser.add_argument("--method-eval", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--exact-boundary", action="store_true")
     args = parser.parse_args()
     root = Path(args.run_root)
     rows = validate_ledger(root / "coral_execution_ledger.jsonl")
-    updates = [row["payload"] for row in rows if row["payload"].get("event") == "coral_role_update"]
+    all_updates = [row["payload"] for row in rows
+                   if row["payload"].get("event") == "coral_role_update"]
+    updates = select_t5_updates(all_updates, exact_boundary=args.exact_boundary)
     gate_rows = [json.loads(line) for line in (root / "gate_a_execution_ledger.jsonl").read_text().splitlines() if line.strip()]
+    if args.exact_boundary:
+        validate_exact_gate_boundary(gate_rows)
     role_norms, post_sync = validate_role_mechanism(updates, gate_rows)
-    baseline_path = Path(args.baseline_import)
-    expected_baseline_sha = os.environ.get("MEMAGENT_COSI_BASELINE_REPORT_SHA256", "")
-    if re.fullmatch(r"[0-9a-f]{64}", expected_baseline_sha) is None \
-            or sha256_file(baseline_path) != expected_baseline_sha:
-        raise ValueError("CORAL_T5_NO_GO: external baseline report binding")
-    baseline = auth(baseline_path, "COSI_BASELINE_IMPORT_PASS")
-    evaluation = auth(Path(args.method_eval), "CORAL_S128_EVAL_PASS")
+    checkpoint = Path(args.checkpoint)
+    if not (checkpoint / "actor").is_dir() or not (checkpoint / "data.pt").is_file():
+        raise ValueError("CORAL_T5_NO_GO: incomplete T5 checkpoint")
     checkpoint_hash = checkpoint_sha256(args.checkpoint)
-    comparison = validate_t5_evaluation(evaluation, baseline, checkpoint_hash)
-    method_f1 = comparison["method"]["token_f1"]
-    original_f1 = comparison["original"]["token_f1"]
-    passed = method_f1 >= original_f1 - 0.02
     report = {
-        "schema": "memagent.coral.t5-health.v2",
-        "status": "PASS" if passed else "FAIL",
-        "decision": "COSI_T5_HEALTH_PASS" if passed else "CORAL_T5_NO_GO",
+        "schema": "memagent.coral.t5-health.v3",
+        "status": "PASS", "decision": "COSI_T5_HEALTH_PASS",
         "checkpoint_sha256": checkpoint_hash,
         "memory_writer_updates": 3, "terminal_answer_updates": 2,
         "minimum_active_gradient_norm_by_role": role_norms,
-        "method_token_f1": method_f1, "original_token_f1": original_f1,
-        "token_f1_delta": method_f1 - original_f1,
-        "anchor_comparison": comparison,
+        "finite_policy_loss_updates": 5,
         "weight_sync_records": len(post_sync),
+        "evaluation_performed": False, "original_baseline_accessed": False,
     }
     report["report_sha256"] = canonical_sha256(report)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("x") as stream:
-        json.dump(report, stream, indent=2, sort_keys=True)
-        stream.write("\n")
+    if output.exists():
+        if json.loads(output.read_text(encoding="utf-8")) != report:
+            raise ValueError("CORAL_T5_NO_GO: existing health certificate differs")
+    else:
+        with output.open("x") as stream:
+            json.dump(report, stream, indent=2, sort_keys=True)
+            stream.write("\n")
     print(json.dumps(report, sort_keys=True))
-    return 0 if passed else 2
+    return 0
 
 
 if __name__ == "__main__":

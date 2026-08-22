@@ -1,10 +1,11 @@
-import copy
 import tempfile
 import unittest
 from pathlib import Path
 
 from recurrent.research.gate_a_execution import append_jsonl
-from tools.h20.audit_coral_t5_health import validate_role_mechanism, validate_t5_evaluation
+from tools.h20.audit_coral_t5_health import (
+    select_t5_updates, validate_exact_gate_boundary, validate_role_mechanism,
+)
 
 
 def updates():
@@ -15,6 +16,7 @@ def updates():
             "active_tokens": 10,
             "inactive_tokens": 9,
             "active_grad_norm": 0.25,
+            "active_pg_loss": 0.125,
             "actor_vllm_sampled_tensor_digest": f"{step:x}" * 64,
         }
         for step in range(1, 6)
@@ -35,47 +37,36 @@ def gate_rows(source):
 
 
 class CoralT5HealthTests(unittest.TestCase):
-    def test_t5_evaluation_protocol_and_finite_metrics(self):
-        metric = {
-            "denominator": 128, "normalized_exact_match": 0.2,
-            "token_f1": 0.4, "format_success": 0.8,
-            "historical_sub_exact_match_diagnostic": 0.5,
-        }
-        baseline = {
-            "eval_manifest_hash": "a" * 64,
-            "stable_inventory_sha256": "b" * 64,
-            "aggregates": {"Original5": copy.deepcopy(metric)},
-        }
-        evaluation = {
-            "step": 5, "checkpoint_inventory_sha256": "c" * 64,
-            "eval_manifest_hash": "a" * 64,
-            "stable_inventory_sha256": "b" * 64,
-            "metrics": copy.deepcopy(metric),
-        }
-        validate_t5_evaluation(evaluation, baseline, "c" * 64)
-        for field, replacement in (
-            ("eval_manifest_hash", "d" * 64),
-            ("stable_inventory_sha256", "e" * 64),
-            ("checkpoint_inventory_sha256", "f" * 64),
-        ):
-            value = copy.deepcopy(evaluation); value[field] = replacement
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                validate_t5_evaluation(value, baseline, "c" * 64)
-        value = copy.deepcopy(evaluation); value["metrics"]["token_f1"] = float("inf")
-        with self.assertRaises(ValueError):
-            validate_t5_evaluation(value, baseline, "c" * 64)
-
     def test_active_roles_and_weight_sync_pass(self):
         value = updates()
         norms, sync = validate_role_mechanism(value, gate_rows(value))
         self.assertEqual(set(norms), {"memory_writer", "terminal_answer"})
         self.assertEqual(len(sync), 5)
 
+    def test_recovery_accepts_only_exact_step5_boundary(self):
+        original = updates()
+        self.assertEqual(len(select_t5_updates(original, exact_boundary=True)), 5)
+        with self.assertRaisesRegex(ValueError, "exact step5"):
+            select_t5_updates(original + [{"global_step": 6}], exact_boundary=True)
+        with self.assertRaisesRegex(ValueError, "exact step5"):
+            select_t5_updates(original[:-1], exact_boundary=True)
+        self.assertEqual(len(select_t5_updates(original + [{"global_step": 6}],
+                                               exact_boundary=False)), 5)
+        validate_exact_gate_boundary(gate_rows(original))
+        asymmetric = gate_rows(original + [{
+            **original[-1], "global_step": 6,
+            "actor_vllm_sampled_tensor_digest": "6" * 64,
+        }])
+        with self.assertRaisesRegex(ValueError, "Gate-A ledger advanced"):
+            validate_exact_gate_boundary(asymmetric)
+
     def test_method_inactive_schedule_seed_and_sync_tampering_fail(self):
         original = updates()
         cases = []
+        import copy
         value = copy.deepcopy(original); value[0]["active_tokens"] = 0; cases.append((value, gate_rows(original)))
         value = copy.deepcopy(original); value[1]["active_grad_norm"] = 0.0; cases.append((value, gate_rows(original)))
+        value = copy.deepcopy(original); value[1]["active_pg_loss"] = float("nan"); cases.append((value, gate_rows(original)))
         value = copy.deepcopy(original); value[2]["phase"] = "terminal_answer"; cases.append((value, gate_rows(original)))
         value = copy.deepcopy(original); value[3]["actor_vllm_sampled_tensor_digest"] = "f" * 64; cases.append((value, gate_rows(original)))
         value = copy.deepcopy(original); rows = gate_rows(value); rows[0]["sampled_tensor_digest"] = "e" * 64; cases.append((value, rows))

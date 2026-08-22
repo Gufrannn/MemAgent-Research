@@ -145,12 +145,18 @@ class CoralFrozenContractTests(unittest.TestCase):
             self.assertNotIn(forbidden,common)
 
     def test_t5_is_fresh_and_continuation_is_exact_t5(self):
-        t5=(ROOT/"scripts/h20/run_qwen25_7b_cosi_t5.sh").read_text()
+        t5=(ROOT/"scripts/h20/run_qwen25_7b_cosi_t25.sh").read_text()
         cont=(ROOT/"scripts/h20/resume_qwen25_7b_cosi_t5_to_t25.sh").read_text()
-        self.assertIn("PHASE=fresh",t5);self.assertNotIn("Original3",t5)
+        self.assertIn("PHASE=fresh",t5);self.assertIn("FRESH_TOTAL_STEPS=25",t5)
+        self.assertIn("for step in 5 10 15 20 25",t5);self.assertNotIn("Original3",t5)
         self.assertIn("RESUME_FROM=$OUTPUT/global_step_5",cont)
         self.assertIn("RESUME_TOTAL_STEPS=25",cont)
         self.assertIn("--stage continue",cont)
+        self.assertIn("--exact-boundary",cont)
+        old_t5=(ROOT/"scripts/h20/run_qwen25_7b_cosi_t5.sh").read_text()
+        old_audit=(ROOT/"scripts/h20/audit_qwen25_7b_coral_t5.sh").read_text()
+        self.assertIn("superseded",old_t5)
+        self.assertIn("superseded",old_audit)
 
     def test_e1_real_entry_owns_measurements_and_checkpoint_binding(self):
         entry=(ROOT/"scripts/h20/run_qwen25_7b_coral_e1_producer.sh").read_text()
@@ -193,14 +199,17 @@ class CoralFrozenContractTests(unittest.TestCase):
             "MEMAGENT_COSI_E0_REPORT_SHA256",
             "MEMAGENT_COSI_E1_REPORT_SHA256",
             "MEMAGENT_COSI_BASELINE_REPORT_SHA256",
-            "MEMAGENT_COSI_BASELINE_INDEX_SHA256",
-            "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256",
-            "MEMAGENT_COSI_ORIGINAL_P0_CERTIFICATE_SHA256",
-            "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256",
         ):
             self.assertIn(variable, preflight)
             self.assertIn(f"export {variable}=<EXTERNALLY_ISSUED_", runbook)
             self.assertNotIn(f"export {variable}=$(shasum", runbook)
+        self.assertIn("MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256", preflight)
+        self.assertIn("<READ_ONLY_FROZEN_ORIGINAL_T25_RESOLVED_64HEX>", runbook)
+        self.assertIn(
+            "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256="
+            "6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411",
+            runbook,
+        )
         self.assertIn("must arrive through a trusted channel independent", runbook)
 
     def test_exhaustive_resolved_original_diff_allows_only_explicit_whitelist(self):
@@ -246,7 +255,7 @@ class CoralFrozenContractTests(unittest.TestCase):
             "fresh_base_model_tokenizer_inventory_sha256": "e" * 64,
             "original_protocol_comparison_sha256": "f" * 64,
             "method_nonwhitelist_config_sha256": "2" * 64,
-            "baseline_index_sha256": "1" * 64,
+            "evidence_authority_sha256": "1" * 64,
             "gpu_pair": [2, 7],
         }
         arguments = {
@@ -258,7 +267,7 @@ class CoralFrozenContractTests(unittest.TestCase):
             "model_inventory_sha256": "e" * 64,
             "protocol_comparison_sha256": "f" * 64,
             "method_nonwhitelist_config_sha256": "2" * 64,
-            "baseline_index_sha256": "1" * 64,
+            "evidence_authority_sha256": "1" * 64,
             "gpu_pair": [2, 7],
         }
         validate_continuation_binding(value, **arguments)
@@ -271,7 +280,7 @@ class CoralFrozenContractTests(unittest.TestCase):
             ("fresh_base_model_tokenizer_inventory_sha256", "2" * 64),
             ("original_protocol_comparison_sha256", "3" * 64),
             ("method_nonwhitelist_config_sha256", "5" * 64),
-            ("baseline_index_sha256", "4" * 64),
+            ("evidence_authority_sha256", "4" * 64),
             ("gpu_pair", [3, 7]),
         ):
             tampered = dict(value)
