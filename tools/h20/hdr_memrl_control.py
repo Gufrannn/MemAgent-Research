@@ -24,6 +24,12 @@ def append(path, rec):
     append_jsonl(path,rec)
 def git(*a): return subprocess.check_output(["git","-C",str(ROOT),*a],text=True).strip()
 
+def assert_suite_row_identity(row, suite_row, identity_row):
+    if str(suite_row["stable_root_id_receipt"])!=str(row["root_id"]): raise HDRContractError("method Stable-S128 root/order permutation")
+    if int(suite_row["horizon_id"])!=int(row["horizon"]): raise HDRContractError("method Stable-S128 horizon permutation")
+    if row.get("stable_id")!=f"{row['root_id']}:h{row['horizon']}": raise HDRContractError("method Stable-S128 stable_id mismatch")
+    if suite_row.get("ground_truth_hash")!=identity_row["ground_truth_hash"]: raise HDRContractError("method Stable-S128 ground-truth identity mismatch")
+
 def manifest_checked(path):
     m=load(path)
     if m.get("branch") != "h20/qwen25-7b-hdr-memrl-t25-frozen-20260822": raise HDRContractError("wrong frozen branch")
@@ -320,7 +326,7 @@ def final_audit(a):
         if root_ledger.is_file():
             hits=[r for r in rr if r.get("record_type")=="audit" and r.get("anchor")==step and all(r.get(k)==v for k,v in cert.items())]
             if len(hits)!=1: failures.append(f"anchor health/root-ledger binding mismatch {step}")
-        for field in ("checkpoint_binding_sha256","merge_receipt_sha256","method_s128_sha256","method_horizons_sha256","method_suite_sha256","method_receipts_sha256","stable_resolved_sha256","validation_parquet_sha256","baseline_import_sha256"):
+        for field in ("checkpoint_binding_sha256","merge_receipt_sha256","method_s128_sha256","method_horizons_sha256","method_suite_sha256","method_receipts_sha256","horizon_suite_sha256","horizon_receipts_sha256","stable_resolved_sha256","validation_parquet_sha256","baseline_import_sha256"):
             if not HEX64.fullmatch(str(cert.get(field,""))): failures.append(f"anchor health missing input SHA {step}/{field}")
         if cert.get("stable_resolved_sha256")!="6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411" or cert.get("validation_parquet_sha256")!="54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6": failures.append(f"anchor frozen S128 authority mismatch {step}")
         if baseline_path.is_file() and digest(baseline_path)!=cert.get("baseline_import_sha256"): failures.append(f"anchor baseline import SHA mismatch {step}")
@@ -330,7 +336,7 @@ def final_audit(a):
         for path,field in ((eval_root/f"t{step}_merge_receipt.json","merge_receipt_sha256"),(eval_root/f"t{step}_s128_nominal.json","method_s128_sha256"),(eval_root/f"t{step}_horizons.json","method_horizons_sha256")):
             if not path.is_file() or digest(path)!=cert.get(field): failures.append(f"anchor health input tamper {step}/{path.name}")
         suite_root=root/"eval"
-        for path,field in ((suite_root/"fixed_s128_nominal_h8.parquet","method_suite_sha256"),(suite_root/"fixed_s128_nominal_receipts.json","method_receipts_sha256")):
+        for path,field in ((suite_root/"fixed_s128_nominal_h8.parquet","method_suite_sha256"),(suite_root/"fixed_s128_nominal_receipts.json","method_receipts_sha256"),(suite_root/"fixed_s128_all_horizons.parquet","horizon_suite_sha256"),(suite_root/"fixed_s128_all_receipts.json","horizon_receipts_sha256")):
             if not path.is_file() or digest(path)!=cert.get(field): failures.append(f"anchor frozen suite tamper {step}/{path.name}")
     report={"status":"FAIL" if failures else "PASS","decision":"HDR_FINAL_AUDIT_FAIL" if failures else "HDR_FINAL_AUDIT_PASS","failures":failures,"git_commit":git("rev-parse","HEAD")}
     write_json(a.report,report); print(json.dumps(report,sort_keys=True))
@@ -367,6 +373,7 @@ def health_gate(a):
     for row in method_rows:
         order=int(row.get("source_order_index",-1)); ident=by_order.get(order); sr=suite_by_order.get(order)
         if ident is None or sr is None or int(row.get("raw_row_position",-1))!=int(ident["raw_row_position"]) or int(sr["raw_row_position"])!=int(ident["raw_row_position"]): raise HDRContractError("method Stable-S128 row identity mismatch")
+        assert_suite_row_identity(row,sr,ident)
         if row.get("identity_resolved_sha256")!=digest(a.stable_resolved) or row.get("suite_sha256")!=suite_sha or sr.get("identity_resolved_sha256")!=digest(a.stable_resolved): raise HDRContractError("method suite/identity SHA mismatch")
         reward=raw.iloc[int(ident["raw_row_position"])]["reward_model"]
         if isinstance(reward,str): reward=json.loads(reward)
@@ -395,7 +402,16 @@ def health_gate(a):
         r=x.get("receipt",{})
         hrs.append(HorizonReceipt(str(r["root_id"]),int(r["horizon"]),str(r["terminal_query_sha256"]),str(r["evidence_sha256"]),int(r["evidence_token_count"]),tuple(map(tuple,r["chunk_bounds"])),tuple(r["chunk_sha256"]),tuple(tuple(map(int,c)) for c in r["chunks"])))
     validate_evidence_equated(hrs,sorted({a.nominal,*a.unseen,8,12,16,32}))
+    horizon_suite_sha=digest(a.horizon_suite); horizon_receipt_rows=load(a.horizon_receipts); horizon_suite_df=pd.read_parquet(a.horizon_suite)
+    horizon_suite_map={(int(r["source_order_index"]),int(r["horizon_id"])):r for _,r in horizon_suite_df.iterrows()}
+    horizon_receipt_map={(str(x["root_id"]),int(x["horizon"])):x for x in horizon_receipt_rows}
+    if len(horizon_receipt_rows)!=128*6: raise HDRContractError("all-horizon receipt closure mismatch")
     for row in hrows:
+        order=int(row.get("source_order_index",-1)); ident=by_order.get(order)
+        sr=horizon_suite_map.get((order,int(row["horizon"])))
+        if ident is None or sr is None or int(row.get("raw_row_position",-1))!=int(ident["raw_row_position"]) or row.get("identity_resolved_sha256")!=digest(a.stable_resolved) or row.get("suite_sha256")!=horizon_suite_sha: raise HDRContractError("method horizon Stable-S128 identity mismatch")
+        assert_suite_row_identity(row,sr,ident)
+        if row.get("receipt")!=horizon_receipt_map.get((str(row["root_id"]),int(row["horizon"]))): raise HDRContractError("method horizon receipt authority mismatch")
         if "prediction" in row: row.update(prediction_metrics(str(row["prediction"]),str(row["gold"])))
     heval=evaluate_horizons(hrows,a.nominal,a.unseen)
     method_by_order={int(x["source_order_index"]):x for x in method_rows}; original_by_order={int(x["source_order_index"]):x for x in authority_rows}
@@ -414,7 +430,7 @@ def health_gate(a):
         if float(heval["worst"]["token_f1"]) < float(uniform_eval["worst"]["token_f1"])+.02: failures.append("uniform_erm_worst_gain")
         if float(method["token_f1"]) < float(original["token_f1"])-.01: failures.append("t25_nominal_one_point_floor")
     prefix="HDR" if a.variant=="dro" else "UNIFORM"
-    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"paired_descriptive_method_minus_original":paired,"method_horizons":heval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"merge_receipt_sha256":digest(a.merge_receipt),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"method_suite_sha256":digest(a.method_suite),"method_receipts_sha256":digest(a.method_receipts),"stable_resolved_sha256":digest(a.stable_resolved),"validation_parquet_sha256":digest(a.validation_parquet),"baseline_import_sha256":digest(a.baseline_import),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
+    report={"status":"FAIL" if failures else "PASS","decision":f"{prefix}_T{a.anchor}_HEALTH_FAIL" if failures else f"{prefix}_T{a.anchor}_HEALTH_PASS","variant":a.variant,"anchor":a.anchor,"method_s128":method,"original_s128":original,"paired_descriptive_method_minus_original":paired,"method_horizons":heval,"uniform_horizons":uniform,"failures":failures,"git_commit":git("rev-parse","HEAD"),"checkpoint_binding_sha256":digest(a.checkpoint_binding),"merge_receipt_sha256":digest(a.merge_receipt),"method_s128_sha256":digest(a.method_s128),"method_horizons_sha256":digest(a.method_horizons),"method_suite_sha256":digest(a.method_suite),"method_receipts_sha256":digest(a.method_receipts),"horizon_suite_sha256":digest(a.horizon_suite),"horizon_receipts_sha256":digest(a.horizon_receipts),"stable_resolved_sha256":digest(a.stable_resolved),"validation_parquet_sha256":digest(a.validation_parquet),"baseline_import_sha256":digest(a.baseline_import),"model_path":str(Path(a.model_path).resolve()),"seed":a.seed}
     write_json(a.output,report); append(a.ledger,{"record_type":"audit",**report})
     if failures: raise SystemExit(4)
 
@@ -427,7 +443,7 @@ def main():
     q=s.add_parser("train-health"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--output-root",required=True); q.add_argument("--weight-sync-ledger",required=True); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=train_health)
     q=s.add_parser("evaluate"); q.add_argument("--rows",required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.set_defaults(fn=ev)
     q=s.add_parser("final-audit"); q.add_argument("--run-root",required=True); q.add_argument("--output-root",required=True); q.add_argument("--report",required=True); q.set_defaults(fn=final_audit)
-    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--merge-receipt",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--method-suite",required=True); q.add_argument("--method-receipts",required=True); q.add_argument("--stable-resolved",required=True); q.add_argument("--validation-parquet",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
+    q=s.add_parser("health-gate"); q.add_argument("--variant",choices=["dro","uniform"],default="dro"); q.add_argument("--anchor",type=int,choices=[5,10,15,20,25],required=True); q.add_argument("--checkpoint-binding",required=True); q.add_argument("--merge-receipt",required=True); q.add_argument("--baseline-import",required=True); q.add_argument("--method-s128",required=True); q.add_argument("--method-horizons",required=True); q.add_argument("--method-suite",required=True); q.add_argument("--method-receipts",required=True); q.add_argument("--horizon-suite",required=True); q.add_argument("--horizon-receipts",required=True); q.add_argument("--stable-resolved",required=True); q.add_argument("--validation-parquet",required=True); q.add_argument("--uniform-horizons"); q.add_argument("--model-path",required=True); q.add_argument("--seed",type=int,required=True); q.add_argument("--nominal",type=int,required=True); q.add_argument("--unseen",type=int,nargs="*",default=[]); q.add_argument("--output",required=True); q.add_argument("--ledger",required=True); q.set_defaults(fn=health_gate)
     a=p.parse_args()
     try: a.fn(a)
     except HDRContractError as e: print(f"HDR_NO_GO:{e}",file=sys.stderr); raise SystemExit(2)

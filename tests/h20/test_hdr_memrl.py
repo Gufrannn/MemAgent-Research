@@ -5,6 +5,7 @@ import pytest
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from recurrent.research.hdr_memrl import *
+from tools.h20.hdr_memrl_control import assert_suite_row_identity
 
 def suite(hs=(2,4), roots=3):
     out=[]
@@ -114,3 +115,12 @@ def test_runbook_trains_once_then_evaluates_all_anchors():
     assert text.count("HDR_TARGET_STEP=25 bash scripts/h20/run_qwen25_7b_hdr_memrl.sh")==1
     assert "for HDR_ANCHOR in 5 10 15 20 25" in text
     assert text.index("HDR_TARGET_STEP=25") < text.index("baseline-import") < text.index("for HDR_ANCHOR")
+
+def test_health_rejects_authorized_root_swap_between_source_orders():
+    identity={"ground_truth_hash":"a"*64}
+    suite_row={"stable_root_id_receipt":"1"*64,"horizon_id":8,"ground_truth_hash":"a"*64}
+    honest={"root_id":"1"*64,"horizon":8,"stable_id":f"{'1'*64}:h8"}
+    assert_suite_row_identity(honest,suite_row,identity)
+    swapped={"root_id":"2"*64,"horizon":8,"stable_id":f"{'2'*64}:h8"}
+    with pytest.raises(HDRContractError,match="root/order permutation"):
+        assert_suite_row_identity(swapped,suite_row,identity)
