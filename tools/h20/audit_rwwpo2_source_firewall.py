@@ -128,6 +128,19 @@ def main():
     seed_signature=transaction_source.split("def logical_transaction_seed",1)
     if len(seed_signature)!=2 or "attempt" in seed_signature[1].split(")",1)[0]:
         violations.append("attempt in logical seed signature")
+    numeric_oracle=(ROOT/"tools/h20/calibrate_rwwpo2_numeric_oracle.py").read_text(
+        encoding="utf-8")
+    for token in ("ROOT = Path(__file__).resolve().parents[2]",
+                  "sys.path.insert(0, str(ROOT))",
+                  "from verl.trainer.ppo.core_algos import"):
+        if token not in numeric_oracle:
+            violations.append("numeric oracle direct entry:"+token)
+    if all(token in numeric_oracle for token in (
+            "sys.path.insert(0, str(ROOT))",
+            "from verl.trainer.ppo.core_algos import")) \
+            and numeric_oracle.index("sys.path.insert(0, str(ROOT))") > \
+                numeric_oracle.index("from verl.trainer.ppo.core_algos import"):
+        violations.append("numeric oracle repo bootstrap order")
     launcher=(ROOT/"scripts/h20/run_qwen25_7b_rwwpo2.sh").read_text(encoding="utf-8")
     for token in (
         'VAL="$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet"',

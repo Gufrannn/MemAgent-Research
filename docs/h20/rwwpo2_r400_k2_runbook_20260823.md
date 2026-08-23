@@ -80,11 +80,21 @@ bash -n scripts/h20/rwwpo2_common.sh \
   experiments/7b_gate_a/run_gate_a.sh
 git diff --check
 test -z "$(git status --porcelain)"
+
+"$RWWPO_PYTHON" -m pytest --version
+"$RWWPO_PYTHON" -m pytest -q \
+  tests/h20/test_rwwpo2_program.py \
+  tests/h20/test_rwwpo2_tensor_ledger.py \
+  tests/h20/test_rwwpo_core.py \
+  tests/h20/test_rwwpo_entrypoints.py \
+  tests/h20/test_rwwpo_transaction.py \
+  tests/h20/test_tf_rwwpo_budget_leakage.py \
+  recurrent/research/tests/test_actor_batch.py
 ```
 
-Run the full repository test command recorded in the release review before
-using GPUs. A missing local `pytest` or `torch` installation is not a substitute
-for the H20-environment test.
+The pytest command above is a mandatory related-regression gate before using
+GPUs. A missing `pytest` or `torch` installation is a `NO_GO`; a later hand-written
+`echo PASS` is not evidence that the suite ran.
 
 ## 3. One-time CPU evidence and data-boundary audit
 
@@ -92,7 +102,13 @@ Use a new evidence ID. Its output root is append-only.
 
 ```bash
 export RWWPO_EVIDENCE_ID=rwwpo2_evidence_${RWWPO_EXPECTED_COMMIT:0:8}_r1
+[[ $RWWPO_EVIDENCE_ID =~ ^rwwpo2_evidence_[a-z0-9_-]+$ ]] || {
+  echo 'RWWPO2_EVIDENCE_NO_GO:empty or invalid evidence ID' >&2; exit 1;
+}
 export RWWPO_EVIDENCE_ROOT="$RWWPO_WORK_ROOT/logs/rwwpo2_evidence/$RWWPO_EVIDENCE_ID"
+[[ $RWWPO_EVIDENCE_ROOT == "$RWWPO_WORK_ROOT/logs/rwwpo2_evidence/"?* ]] || {
+  echo 'RWWPO2_EVIDENCE_NO_GO:evidence root is not a child root' >&2; exit 1;
+}
 test ! -e "$RWWPO_EVIDENCE_ROOT"
 mkdir -p "$RWWPO_EVIDENCE_ROOT"
 

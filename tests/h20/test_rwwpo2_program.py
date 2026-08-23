@@ -1,5 +1,8 @@
 import copy
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import jsonschema
@@ -199,6 +202,11 @@ def test_completed_attempt_prefix_keeps_same_round_anchor_then_stops_at_future(t
 def test_numeric_oracle_calibrates_the_registered_projection_statistic():
     producer = (ROOT / "tools/h20/calibrate_rwwpo2_numeric_oracle.py").read_text()
     auditor = (ROOT / "tools/h20/audit_rwwpo2_numeric_oracle.py").read_text()
+    assert "ROOT = Path(__file__).resolve().parents[2]" in producer
+    assert "sys.path.insert(0, str(ROOT))" in producer
+    assert producer.index("sys.path.insert(0, str(ROOT))") < producer.index(
+        "from verl.trainer.ppo.core_algos import"
+    )
     for token in ("repeated_gradient_projection_relative_l2",
                   "save_load_gradient_projection_relative_l2",
                   "behavior_actual_loss_logprob_max_abs",
@@ -208,6 +216,22 @@ def test_numeric_oracle_calibrates_the_registered_projection_statistic():
         assert token in producer and token in auditor
     assert "gradient_sketch_relative_l2" not in producer
     assert "threshold_multiplier" in producer and "threshold reconstruction" in auditor
+
+
+def test_numeric_oracle_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path):
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/h20/calibrate_rwwpo2_numeric_oracle.py"),
+         "--help"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--expected-commit" in result.stdout
 
 
 def test_runtime_uses_distinct_behavior_coefficient_and_parameter_tolerances():
