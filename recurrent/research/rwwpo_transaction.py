@@ -336,11 +336,13 @@ def largest_tested_feasible(trials, proposal_zero=False, alpha_grid=ALPHA_GRID):
     order = tuple(float(value) for value in alpha_grid)
     if order != tuple(sorted(order, reverse=True)) or len(set(order)) != len(order):
         raise ValueError("alpha grid must be unique and descending")
+    tested_order = []
     for alpha in order:
         if alpha not in trials:
             raise ValueError(f"alpha {alpha} was not actually tested")
+        tested_order.append(alpha)
         if bool(trials[alpha]):
             if proposal_zero:
-                return TrialDecision(0.0, False, True, order)
-            return TrialDecision(alpha, True, False, order)
-    return TrialDecision(0.0, False, bool(proposal_zero), order)
+                return TrialDecision(0.0, False, True, tuple(tested_order))
+            return TrialDecision(alpha, True, False, tuple(tested_order))
+    return TrialDecision(0.0, False, bool(proposal_zero), tuple(tested_order))

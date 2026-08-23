@@ -39,9 +39,15 @@ def test_nonmonotone_feasibility_chooses_largest_tested():
     assert largest_tested_feasible(feasible).alpha == 0.5
 
 
-def test_untested_candidate_is_fail_closed():
+def test_descending_prefix_can_stop_at_first_feasible_candidate():
+    decision = largest_tested_feasible({1.0: False, 0.5: True})
+    assert decision.alpha == 0.5
+    assert decision.tested == (1.0, 0.5)
+
+
+def test_skipped_untested_candidate_is_fail_closed():
     with pytest.raises(ValueError, match="not actually tested"):
-        largest_tested_feasible({1.0: False, 0.5: True})
+        largest_tested_feasible({1.0: False, 0.25: True})
 
 
 def test_zero_proposal_cannot_be_accepted():

@@ -6,8 +6,9 @@ from tools.h20.audit_rwwpo_baseline_bundle import safe_file as audit_safe_file
 
 ROOT=Path(__file__).resolve().parents[2]
 
-def run(script,*args,env=None):
-    return subprocess.run([str(script),*map(str,args)],cwd=ROOT,text=True,capture_output=True,env=env)
+def run(script,*args,env=None,cwd=ROOT):
+    return subprocess.run([str(script),*map(str,args)],cwd=cwd,text=True,
+                          capture_output=True,env=env)
 
 def test_preflight_rejects_noncanonical_gpu_pair(tmp_path):
     for name,decision in (("e0","RWWPO_E0_PASS"),("e1","RWWPO_E1_PASS")):
@@ -22,7 +23,7 @@ def test_preflight_rejects_noncanonical_gpu_pair(tmp_path):
 def test_actual_ledger_rejects_hash_tamper(tmp_path):
     row={"schema_version":"rwwpo-actual-loss-v1","attempt_id":"t5_primary","mode":"rwwpo_method","global_step":1,"rank":0,"epoch":0,"minibatch":0,"old_log_prob":[[0.]],"current_log_prob":[[.1]],"response_mask":[[1.]],"writer_mask":[[1.]],"answer_mask":[[0.]],"trajectory_turn":[0],"sample_index":[0],"advantages":[[1.]],"denominator":1,"prefix_stats":[{"turn":0,"batch_size":1,"ess_fraction":1.,"chi2":0.}],"q_min":.5,"constraint_pass":True,"record_sha256":"0"*64}
     path=tmp_path/"bad.jsonl"; path.write_text(json.dumps(row)+"\n")
-    result=run(ROOT/"tools/h20/audit_rwwpo_actual_loss.py",path)
+    result=run(ROOT/"tools/h20/audit_rwwpo_actual_loss.py",path,cwd=tmp_path)
     assert result.returncode != 0 and "hash mismatch" in result.stderr
 
 def test_launcher_requires_semantic_identity_and_explicit_pair():
@@ -44,7 +45,7 @@ def test_actual_ledger_rejects_forged_post_acceptance(tmp_path):
          "post_prefix_rows":[{"turn":0,"sample_index":0,"log_ratio":0.1,"prefix_token_count":1}],"post_prefix_stats":[stat],
          "q_min":0.5,"writer_log_ratio_cap":4.0,"constraint_pass":True,"accepted":False}
     path=tmp_path/"forged.jsonl"; path.write_text(json.dumps(_signed(row))+"\n")
-    result=run(ROOT/"tools/h20/audit_rwwpo_actual_loss.py",path)
+    result=run(ROOT/"tools/h20/audit_rwwpo_actual_loss.py",path,cwd=tmp_path)
     assert result.returncode != 0 and "accepted decision" in result.stderr
 
 def test_compare_rejects_forged_receipt(tmp_path):
@@ -196,7 +197,17 @@ def test_transactional_scheduler_is_not_advanced_by_worker():
     actor=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
     worker=(ROOT/"verl/workers/fsdp_workers.py").read_text()
     assert "self.actor_lr_scheduler.step()" in actor
-    assert 'if not self.config.actor.get("rwwpo", {}).get("enable", False)' in worker
+    assert 'rwwpo_cfg = self.config.actor.get("rwwpo", {})' in worker
+    assert 'if not rwwpo_cfg.get("enable", False):' in worker
+    assert worker.index('if not rwwpo_cfg.get("enable", False):') < \
+        worker.index('self.actor_lr_scheduler.step()')
+
+
+def test_actual_loss_auditor_bootstraps_repo_before_project_import():
+    source=(ROOT/"tools/h20/audit_rwwpo_actual_loss.py").read_text()
+    assert "Path(__file__).resolve().parents[2]" in source
+    assert source.index("sys.path.insert") < source.index(
+        "from recurrent.research.rwwpo_transaction")
 
 def test_transaction_audit_rejects_interrupted_trial():
     text=(ROOT/"tools/h20/audit_rwwpo_run.py").read_text()

@@ -110,6 +110,16 @@ def main():
         encoding="utf-8")
     actual_auditor=(ROOT/"tools/h20/audit_rwwpo_actual_loss.py").read_text(
         encoding="utf-8")
+    for token in ("ROOT = Path(__file__).resolve().parents[2]",
+                  "sys.path.insert(0, str(ROOT))"):
+        if token not in actual_auditor:
+            violations.append("actual-loss direct entry:"+token)
+    if all(token in actual_auditor for token in (
+            "sys.path.insert(0, str(ROOT))",
+            "from recurrent.research.rwwpo_transaction")) \
+            and actual_auditor.index("sys.path.insert(0, str(ROOT))") > \
+                actual_auditor.index("from recurrent.research.rwwpo_transaction"):
+        violations.append("actual-loss repo bootstrap order")
     for token in ("ref_log_prob",):
         if token not in ledger_source:
             violations.append("actual-loss tensor ledger:"+token)

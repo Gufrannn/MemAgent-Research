@@ -5,7 +5,16 @@ import hashlib
 import json
 import math
 import re
+import sys
 from pathlib import Path
+
+# Direct-file invocations put tools/h20, rather than the repository root, on
+# sys.path.  Bootstrap the authenticated repository before importing project
+# modules so the formal user-facing auditor does not depend on ambient
+# PYTHONPATH or an editable install.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import torch
 
@@ -118,8 +127,7 @@ def validate_v3_schema(receipt):
     global _V3_VALIDATOR
     if _V3_VALIDATOR is None:
         import jsonschema
-        schema_path = Path(__file__).resolve().parents[2] / \
-            "rwwpo2_actual_loss_receipt.schema.json"
+        schema_path = ROOT / "rwwpo2_actual_loss_receipt.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         jsonschema.Draft202012Validator.check_schema(schema)
         _V3_VALIDATOR = jsonschema.Draft202012Validator(schema)

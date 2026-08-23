@@ -196,7 +196,10 @@ def test_v3_self_reported_extra_optimizer_step_is_rejected(tmp_path):
     path=tmp_path/"actual_loss_rank1.jsonl"
     _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
         optimizer_step_calls=2))
-    with pytest.raises(ValueError,match="loss/optimizer-step evidence"):
+    # The schema is intentionally the first line of defense.  A future schema
+    # relaxation must still reach the independent semantic step-count check.
+    with pytest.raises(ValueError,match=(
+            "receipt schema failure|loss/optimizer-step evidence")):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
 
 
