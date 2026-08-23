@@ -230,3 +230,31 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         torch.distributed.barrier()
 
         self.previous_saved_paths.append(local_path)
+
+    def save_model_checkpoint_only(self, local_path: str) -> dict:
+        """Write one immutable scientific actor shard without optimizer state."""
+        if local_path is None or not os.path.isabs(local_path):
+            raise ValueError("scientific actor anchor requires an absolute path")
+        local_path = self.local_mkdir(local_path)
+        torch.distributed.barrier()
+        state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT,
+                                      state_dict_cfg):
+                model_state_dict = self.model.state_dict()
+                model_path = os.path.join(
+                    local_path,
+                    f"model_world_size_{self.world_size}_rank_{self.rank}.pt")
+                if os.path.lexists(model_path):
+                    raise FileExistsError(f"scientific actor anchor already exists: {model_path}")
+                torch.save(model_state_dict, model_path)
+        torch.distributed.barrier()
+        raw_size = os.path.getsize(model_path)
+        digest = hashlib.sha256()
+        with open(model_path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {"rank":int(self.rank),"world_size":int(self.world_size),
+                "path":os.path.realpath(model_path),"size":int(raw_size),
+                "sha256":digest.hexdigest()}

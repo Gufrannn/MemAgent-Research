@@ -83,8 +83,10 @@ IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
 
 GLOBAL_ROLLOUT_BATCH_SIZE=$((TRAIN_BATCH_SIZE * ROLLOUT_N))
 GLOBAL_ROLLOUT_MINI_BATCH_SIZE=$((PPO_MINI_BATCH_SIZE * ROLLOUT_N))
-[[ $TRAIN_BATCH_SIZE -gt 0 && $ROLLOUT_N -gt 0 && $PPO_MINI_BATCH_SIZE -gt 0 && $PPO_EPOCHS -eq 1 ]] || {
-  echo "[GATE_A_BATCH_DIAG] batch sizes must be positive and PPO_EPOCHS must equal 1: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE PPO_EPOCHS=$PPO_EPOCHS" >&2
+EXPECTED_PPO_EPOCHS=1
+if [[ ${RWWPO_PROGRAM_VERSION:-legacy} == rwwpo2-k2 ]]; then EXPECTED_PPO_EPOCHS=2; fi
+[[ $TRAIN_BATCH_SIZE -gt 0 && $ROLLOUT_N -gt 0 && $PPO_MINI_BATCH_SIZE -gt 0 && $PPO_EPOCHS -eq $EXPECTED_PPO_EPOCHS ]] || {
+  echo "[GATE_A_BATCH_DIAG] batch sizes must be positive and PPO_EPOCHS must equal $EXPECTED_PPO_EPOCHS for ${RWWPO_PROGRAM_VERSION:-legacy}: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE PPO_EPOCHS=$PPO_EPOCHS" >&2
   exit 50
 }
 [[ $((TRAIN_BATCH_SIZE % PPO_MINI_BATCH_SIZE)) -eq 0 ]] || {
@@ -200,6 +202,22 @@ if [[ ${RWWPO_ENABLE:-0} == 1 || ${RWWPO_COLLECT_ORIGINAL:-0} == 1 ]]; then
     "actor_rollout_ref.actor.rwwpo.attempt_id=$RWWPO_ATTEMPT_ID"
     "actor_rollout_ref.actor.rwwpo.objective_variant=${RWWPO_OBJECTIVE_VARIANT:-whole_prefix}"
     "actor_rollout_ref.actor.rwwpo.controller_variant=${RWWPO_CONTROLLER_VARIANT:-hard_rollback}"
+    "actor_rollout_ref.actor.rwwpo.program_version=${RWWPO_PROGRAM_VERSION:-legacy}"
+    "actor_rollout_ref.actor.rwwpo.cell=${RWWPO_CELL:-legacy}"
+    "actor_rollout_ref.actor.rwwpo.experiment_seed=$RUN_SEED"
+    "actor_rollout_ref.actor.rwwpo.inner_transactions_per_round=${RWWPO_INNER_TRANSACTIONS:-1}"
+    "actor_rollout_ref.actor.rwwpo.lineage_start_round=${RWWPO_LINEAGE_START_ROUND:-1}"
+    "actor_rollout_ref.actor.rwwpo.root_q_min=${RWWPO_ROOT_Q_MIN:-${RWWPO_Q_MIN}}"
+    "actor_rollout_ref.actor.rwwpo.behavior_gradient_tolerance=${RWWPO_BEHAVIOR_GRADIENT_TOLERANCE:-1e-7}"
+    "actor_rollout_ref.actor.rwwpo.behavior_coefficient_tolerance=${RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE:-1e-9}"
+    "actor_rollout_ref.actor.rwwpo.tau_theta=${RWWPO_TAU_THETA:-null}"
+    "actor_rollout_ref.actor.rwwpo.tau_logprob=${RWWPO_TAU_LOGPROB:-null}"
+    "actor_rollout_ref.actor.rwwpo.tau_gradient=${RWWPO_TAU_GRADIENT:-null}"
+    "actor_rollout_ref.actor.rwwpo.proposal_schedule.kind=${RWWPO_PROPOSAL_SCHEDULE_KIND:-constant_with_linear_warmup}"
+    "actor_rollout_ref.actor.rwwpo.proposal_schedule.base_lr=${RWWPO_PROPOSAL_BASE_LR:-1e-6}"
+    "actor_rollout_ref.actor.rwwpo.proposal_schedule.warmup_proposals=${RWWPO_PROPOSAL_WARMUP:-2}"
+    "actor_rollout_ref.actor.rwwpo.proposal_schedule.total_proposals=${RWWPO_PROPOSAL_TOTAL:-800}"
+    "actor_rollout_ref.actor.rwwpo.r50_shadow_every_round_through=${RWWPO_R50_SHADOW_THROUGH:-50}"
     "actor_rollout_ref.actor.rwwpo.max_trial_forward_wall_seconds=${RWWPO_MAX_TRIAL_FORWARD_SECONDS:-600}"
   )
   if [[ ${RWWPO_ENABLE:-0} == 1 ]]; then

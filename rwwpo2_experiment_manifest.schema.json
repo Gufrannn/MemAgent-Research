@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RWWPO-2 R400-K2 frozen experiment manifest",
+  "type": "object",
+  "required": [
+    "schema_version", "program", "branch", "status", "method_cells",
+    "method", "training", "checkpointing", "performance", "model", "data",
+    "gpu", "backend"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "program": {"const": "RWWPO-2"},
+    "branch": {"const": "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"},
+    "status": {"const": "IMPLEMENTATION_PENDING_NO_H20"},
+    "method_cells": {
+      "const": {
+        "D": {"objective_variant": "original_tokenwise", "controller_variant": "none"},
+        "C": {"objective_variant": "original_tokenwise", "controller_variant": "feasible_backtracking"},
+        "E": {"objective_variant": "per_write_joint", "controller_variant": "feasible_backtracking"},
+        "B": {"objective_variant": "whole_prefix", "controller_variant": "feasible_backtracking"},
+        "A": {"objective_variant": "whole_prefix", "controller_variant": "hard_rollback", "maximum_round": 50}
+      }
+    },
+    "method": {
+      "type": "object",
+      "required": [
+        "enabled_from_update", "inner_transactions_per_round",
+        "optimizer_minibatches_per_inner_transaction",
+        "optimizer_steps_per_inner_transaction", "old_log_prob_refresh",
+        "advantage_refresh", "denominator_refresh", "proposal_clock",
+        "proposal_schedule", "logical_seed_fields",
+        "attempt_id_in_algorithmic_seed", "q_min", "root_q_min",
+        "writer_log_ratio_cap", "alpha_grid", "shadow_host_rounds",
+        "r50_shadow_every_round_through", "numeric_thresholds",
+        "maximum_root_loo_feasibility_flip_fraction",
+        "r50_minimum_eligible_rounds_per_host",
+        "r50_minimum_exposed_rounds_per_host",
+        "r50_minimum_exposure_rate_per_host",
+        "r50_minimum_geometry_activation_count_given_exposed",
+        "r50_minimum_geometry_activation_rate_given_exposed",
+        "allowed_differences"
+      ],
+      "properties": {
+        "enabled_from_update": {"const": 1},
+        "inner_transactions_per_round": {"const": 2},
+        "optimizer_minibatches_per_inner_transaction": {"const": 1},
+        "optimizer_steps_per_inner_transaction": {"const": 1},
+        "old_log_prob_refresh": {"const": "once_per_rollout_round"},
+        "advantage_refresh": {"const": "once_per_rollout_round"},
+        "denominator_refresh": {"const": "once_per_rollout_round"},
+        "proposal_clock": {"const": "2*(round_id-1)+inner_id"},
+        "proposal_schedule": {
+          "const": {
+            "kind": "constant_with_linear_warmup",
+            "base_lr": 0.000001,
+            "warmup_proposals": 2,
+            "total_proposals": 800
+          }
+        },
+        "logical_seed_fields": {
+          "const": ["experiment_seed", "round_id", "inner_id", "rank", "stream"]
+        },
+        "attempt_id_in_algorithmic_seed": {"const": false},
+        "q_min": {"const": 0.5},
+        "root_q_min": {"const": 0.5},
+        "writer_log_ratio_cap": {"const": 4.0},
+        "alpha_grid": {"const": [1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125]},
+        "shadow_host_rounds": {"const": [1, 10, 25, 50, 100, 200, 300, 400]},
+        "r50_shadow_every_round_through": {"const": 50},
+        "numeric_thresholds": {
+          "const": "PENDING_PRE_R50_BF16_FSDP_ORACLE_FAILS_GPU_PREFLIGHT"
+        },
+        "maximum_root_loo_feasibility_flip_fraction": {"const": 0.25},
+        "r50_minimum_eligible_rounds_per_host": {"const": 40},
+        "r50_minimum_exposed_rounds_per_host": {"const": 10},
+        "r50_minimum_exposure_rate_per_host": {"const": 0.2},
+        "r50_minimum_geometry_activation_count_given_exposed": {"const": 5},
+        "r50_minimum_geometry_activation_rate_given_exposed": {"const": 0.5},
+        "allowed_differences": {
+          "const": [
+            "writer_surrogate", "prefix_constraint", "transactional_controller",
+            "two_inner_transactions", "stateless_proposal_clock",
+            "actual_loss_tensor_ledger", "experiment_identity", "output_paths"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "training": {
+      "type": "object",
+      "required": [
+        "mechanism_seeds", "confirmatory_seed_count_minimum",
+        "confirmatory_seed_values", "train_batch_size", "rollout_n",
+        "ppo_mini_batch_size", "ppo_epochs", "target_rounds",
+        "r50_mechanism_gate", "planned_prompt_groups_per_seed_cell",
+        "planned_trajectories_per_seed_cell",
+        "maximum_actor_proposals_per_seed_cell", "critic_optimizer_updates",
+        "auxiliary_fit_updates", "chunk_size", "max_chunks",
+        "max_prompt_length", "runtime_effective_prompt_filter_length",
+        "max_response_length", "learning_rate", "loss_agg_mode",
+        "clip_ratio", "clip_ratio_low", "clip_ratio_high", "clip_ratio_c",
+        "use_kl_loss", "kl_loss_type", "kl_loss_coefficient",
+        "entropy_coefficient", "shuffle"
+      ],
+      "properties": {
+        "mechanism_seeds": {"const": [2026, 2027, 2028]},
+        "confirmatory_seed_count_minimum": {"const": 8},
+        "confirmatory_seed_values": {"const": [2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033]},
+        "train_batch_size": {"const": 4},
+        "rollout_n": {"const": 2},
+        "ppo_mini_batch_size": {"const": 4},
+        "ppo_epochs": {"const": 2},
+        "target_rounds": {"const": 400},
+        "r50_mechanism_gate": {"const": 50},
+        "planned_prompt_groups_per_seed_cell": {"const": 1600},
+        "planned_trajectories_per_seed_cell": {"const": 3200},
+        "maximum_actor_proposals_per_seed_cell": {"const": 800},
+        "critic_optimizer_updates": {"const": 0},
+        "auxiliary_fit_updates": {"const": 0},
+        "chunk_size": {"const": 5000},
+        "max_chunks": {"const": 8},
+        "max_prompt_length": {"const": 8192},
+        "runtime_effective_prompt_filter_length": {"const": 40000},
+        "max_response_length": {"const": 1024},
+        "learning_rate": {"const": 0.000001},
+        "loss_agg_mode": {"const": "token-mean"},
+        "clip_ratio": {"const": 0.2},
+        "clip_ratio_low": {"const": 0.2},
+        "clip_ratio_high": {"const": 0.2},
+        "clip_ratio_c": {"const": 3.0},
+        "use_kl_loss": {"const": true},
+        "kl_loss_type": {"const": "low_var_kl"},
+        "kl_loss_coefficient": {"const": 0.001},
+        "entropy_coefficient": {"const": 0.0},
+        "shuffle": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "checkpointing": {
+      "const": {
+        "full_recovery_frequency_rounds": 10,
+        "full_recovery_keep": 2,
+        "scientific_actor_anchors": [5, 10, 15, 20, 25, 50, 100, 200, 300, 400],
+        "resume_requires_complete_audit": true,
+        "attempt_roots_append_only": true
+      }
+    },
+    "performance": {
+      "const": {
+        "s128_role": "adaptive_development_only_forbidden_during_r50_and_r400_training",
+        "confirmation_minimum_examples": 512,
+        "confirmation_status": "PENDING_SEALED_DISJOINT_MATERIALIZATION",
+        "confirmation_generation_seed": 918273645,
+        "confirmation_decoding": {"do_sample": false, "temperature": 0.0, "top_p": 1.0, "n": 1},
+        "primary_metric": "macro_token_f1",
+        "key_secondary": "strict_normalized_exact_match",
+        "co_primary_contrasts": ["B-D", "B-E"],
+        "confirmatory_unit": "paired_training_seed_difference_in_root_macro_token_f1",
+        "family_wise_procedure": "one_sided_exact_paired_sign_flip_plus_holm_0.05",
+        "sign_flip_assumption": "margin_centered_seed_differences_are_independent_and_sign_symmetric_under_the_boundary_null",
+        "minimum_effects": {"B-D": 0.02, "B-E": 0.01},
+        "zero_handling": "retain_zero_centered_seed_differences_in_all_sign_flip_assignments",
+        "holm_ordering": "ascending_raw_exact_p_then_step_down_at_family_alpha_0.05"
+      }
+    },
+    "model": {
+      "const": {
+        "id": "Qwen/Qwen2.5-7B-Instruct",
+        "revision": "a09a35458c702b33eeacc393d103063234e8bc28"
+      }
+    },
+    "data": {
+      "const": {
+        "train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
+        "s128_sha256": "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6",
+        "train_s128_content_overlap": "PENDING_H20_CONTENT_HASH_AUDIT",
+        "confirmatory_inventory": "PENDING"
+      }
+    },
+    "gpu": {
+      "const": {
+        "count": 2,
+        "dynamic_explicit_pair": true,
+        "canonical_ascending": true,
+        "lock_template": "locks/memagent_h20_gpu_N.lock"
+      }
+    },
+    "backend": {
+      "const": {"rollout": "vllm", "strict": true, "hf_fallback": false}
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,16 +1,20 @@
-# Paper I working draft — Prefix-Divergence Trust Regions for State-Writing Policies
+# Paper I working draft — Controlled Off-Behavior Geometry for State-Writing Policies
 
-> **Post-diagnostic revision.** The binary hard-rollback implementation has now
+> **RWWPO-2 revision (2026-08-23).** The frozen long-study contract is now
+> `rwwpo2_r400_k2_preregistration_20260823.md`. The binary hard-rollback implementation has
 > produced a formally NO-GO, diagnostic-only T5–T25 run: seven nonzero commits,
 > no accepted anchor proposal, and mean fixed-S128 F1 delta -0.01029 versus the
 > certified Original curve.  These observations do not establish causality.
-> The active algorithm proposal is the transactional feasible-step controller
-> specified in `tf_rwwpo_revision_20260822.md`; no TF-RWWPO result exists yet.
+> The old K1 run identifies controller behavior only: under the frozen
+> single-pass assumptions, tokenwise, per-write, and whole-path objectives are
+> algorithmically degenerate. The active proposal is R400-K2 with tokenwise,
+> per-write, whole-path, controller, and no-controller cells. No RWWPO-2 result
+> exists yet.
 > Because those five S128 anchor results were inspected before the controller
 > revision, S128 is now a development benchmark for this method family, not a
 > blind final test.
 
-**Scientific status (2026-08-22): PAPER-FRAMING GO; empirical claims remain conditional on Method evidence.** Sequence-level and
+**Scientific status (2026-08-23): PAPER-FRAMING GO; RWWPO-2 is unrun and every empirical claim remains conditional.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
 GSsPO. “Use a joint ratio for a writer response” is therefore not a sufficient
 novelty claim. The viable residual is narrower and harder: a free-text writer
@@ -33,25 +37,24 @@ and sub-sequence-level objectives correct related granularity mismatches for
 single responses and multi-turn reasoning, but they do not distinguish a text
 segment that *creates future occupancy* from a terminal segment that only
 reports an answer. We study this distinction in recurrent memory writing. We
-show algebraically that tokenwise clipping is factorization-dependent and does
-not bound the likelihood ratio of a trajectory prefix of materialized writes.
-We then formulate Recurrent Whole-Write Policy Optimization (RWWPO), which uses
-the exact joint likelihood ratio of the writer prefix while leaving terminal
-answer tokens under the accepted tokenwise PPO objective. Its normalization is
-chosen so that, at the behavior policy, the writer gradient is exactly equal—not
-merely proportional—to Original PPO; only higher-order update geometry changes.
-RWWPO pairs this surrogate with per-turn prefix ESS, an absolute prefix-log-ratio
-cap, and chi-square certificates
-computed from the actual loss tensors. The empirical claim is deliberately
-conditional. We run an early-budget, single-seed pilot from the same fresh
-Qwen2.5-7B base for at most 25 global optimizer proposals (100 prompt groups and
-200 sampled trajectories), retain five checkpoints, and use the Method's actual-loss ledger to test whether
-prefix behavior adds information beyond token KL, clipping, and length. After
-this pilot, all five checkpoints are evaluated on the already-adaptive S128
-development protocol and
-compared with the certified read-only Original curve and matched granularity
-ablations. A missing mechanism signal or negative training result is a
-falsification outcome rather than hidden tuning.
+first prove a single-pass degeneracy: at the behavior policy, tokenwise,
+per-write, and whole-writer-path surrogates have the same exact parameter
+gradient and therefore induce the same deterministic transition under a common
+complete state. This converts an apparent method result into a sharper design
+requirement—objective geometry is identifiable only after a controlled
+off-behavior transaction. RWWPO-2 reuses each behavior batch for two audited
+full-batch actor transactions, combines an Original tokenwise answer objective
+with alternative writer geometries, and realizes a descending grid of actual
+parameter proposals subject to per-turn prefix ESS, prompt-root ESS, and
+absolute log-ratio feasibility. We preregister controller-only, per-write,
+whole-path, no-controller, and hard-rollback cells; same-host shadow gradients;
+attempt-independent proposal clocks; and authenticated checkpoint-DAG replay.
+R50 is a performance-free mechanism gate. Conditional on that gate, R400 is an
+eight-seed paired medium-budget study—not a convergence claim—with macro
+token-F1 co-primary contrasts B-D and B-E on a separately sealed, disjoint
+confirmation set. No RWWPO-2 performance result is reported here; insufficient
+exposure, unstable root support, or either failed co-primary test falsifies the
+full claim.
 
 ## 1. Introduction
 
@@ -99,15 +102,16 @@ and chi-square reports the corresponding second-moment inflation.
 
 The algorithmic design follows from this role distinction. For writer tokens,
 RWWPO sums current-minus-old log probabilities over each whole write and then
-over all materialized writes up to turn (t). The writer surrogate uses the
-final available writer-prefix ratio for a trajectory. For final-answer tokens,
-it preserves Original tokenwise clipped PPO. Both components share Original's
-active-token denominator. This denominator is not cosmetic. At the behavior
-point every importance ratio equals one, and differentiating the joint
-log-likelihood yields the sum of the same token score functions as Original.
-With the shared denominator, the writer gradients are exactly equal. Thus a
-comparison isolates higher-order geometry instead of silently changing writer
-loss scale.
+over all materialized writes up to turn (t). For final-answer tokens it
+preserves Original tokenwise clipped PPO, and both components share Original's
+active-token denominator. At the behavior point every importance ratio is one,
+so tokenwise, per-write, and whole-path writer gradients are exactly equal.
+This is not only a scale-matching property: with one deterministic transaction
+per behavior batch, identical complete state and an objective-blind controller,
+the three variants are algorithmically degenerate. RWWPO-2 therefore performs
+exactly two full-batch transactions on the same frozen behavior batch. Inner 1
+tests the equality; inner 2 exposes the higher-order geometry only if inner 1
+made a numerically real move.
 
 The second component is an identification protocol rather than another reward.
 For every optimizer epoch and minibatch, we record the old and current
@@ -120,28 +124,26 @@ prefix collapse; whether collapse is explained only by length; and whether a
 constraint leaves nonzero update aperture rather than freezing the writer.
 
 The current evidence does not answer those questions. The accepted Original
-run establishes a corrected fresh-base T0-to-T25 curve on a fixed S128 development
-set, and existing Capture32 evidence concerns a different same-candidate
-mechanism. Neither contains actual-loss current log-probabilities across PPO
-epochs. We therefore do not claim that RWWPO improves performance, or even that
-the target phenomenon occurs. E0 tests exact gradients, mask closure, and the
-disabled-path equivalence. Original actual-loss tensors do not exist and are not
-a main-experiment prerequisite. Prefix diagnostics are computed from the
-Method's own append-only on-policy actual-loss ledger. An independently
-authorized Original collection-only run may be reported as a finite diagnostic,
-but never as the certified Original baseline.
+run establishes a corrected fresh-base T0-to-T25 curve on S128, and the old K1
+RWWPO run provides only a controller diagnostic. Its inspected five-anchor S128
+curve informed the K2 pivot; S128 is consequently development-only. We do not
+claim that RWWPO-2 improves performance or that the target off-behavior mechanism
+occurs. E0 tests behavior-point full parameter gradients, transition-kernel
+closure, proposal clocks, and replay seeds. Prefix diagnostics come only from
+the Method's append-only tensor ledger; Original internal tensors are not a
+main-experiment prerequisite.
 
-The empirical screening study starts Method from the same fresh Qwen2.5-7B base used by
-Original, enables RWWPO at update 1, and holds data order, rollout seeds,
-reward, tokenizer, effective batch, trajectory budget, and evaluation protocol
-fixed. T25 is an early-budget anchor, not evidence of sufficient training or
-convergence: the frozen run has one seed, 25 global proposals, one PPO epoch
-and one global optimizer minibatch per step, with no learned critic or auxiliary
-model. We compare five development anchors (T5/10/15/20/25), test joint-only and matched
-trust-region alternatives, and evaluate a small RULER Variable Tracking suite as
-an external state-transition stress test. A T5 degradation larger than two F1
-points, a permanently saturated constraint, or a writer with zero update
-aperture falsifies the method under the preregistered contract.
+The new study starts every cell from the same fresh Qwen2.5-7B base and enables
+its assignment at update 1 while holding data order, logical rollout seeds,
+reward, tokenizer, batch, and proposal budget fixed. Each rollout round receives
+two full-batch actor transactions, yielding at most 800 proposals through R400.
+R50 uses three paired mechanism seeds across D/C/E/B/A and reads no performance
+benchmark. Only after finite numerics, common-host gradient equality,
+off-behavior exposure, root-support stability, controller aperture, distributed
+sync, and recovery replay pass do B/D/E continue to R400 for eight paired seeds.
+The final set contains at least 512 unseen content/root-disjoint examples and is
+opened once. This is a medium-budget confirmatory design, not evidence of
+optimization convergence.
 
 Subject to those gates, the intended contributions are:
 
@@ -152,8 +154,8 @@ Subject to those gates, the intended contributions are:
    Original final-answer PPO—with a prefix trust-region controller.
 3. **Identification:** an actual-loss, per-epoch/minibatch ledger that makes the
    proposed recurrent trust-region mechanism independently reconstructible.
-4. **Evidence:** conditional same-budget multi-anchor tests and an external
-   variable-tracking stress test, including negative results and failure bounds.
+4. **Evidence:** a performance-free R50 mechanism gate and conditional
+   eight-seed R400 confirmation with explicit negative-result boundaries.
 
 ## 2. Problem formulation and proposed propositions
 
@@ -230,41 +232,39 @@ or MERGE into a broader structure-aware policy-optimization study.
 
 | Artifact | Rows / curves | Columns / axes | Claim tested |
 |---|---|---|---|
-| E0 table | Original, RWWPO, RWWPO-off | loss, gradient max error, cosine, mask closure, finite difference | exact first order and off equivalence |
-| Method mechanism table | turns 1..T; length bins | ESS, chi-square, token KL, clipfrac, joint aperture | phenomenon exists beyond length/local diagnostics |
-| Method predictive table | held-out update groups | collapse prediction / partial R² | prefix statistic adds information |
-| Development curve | Original, RWWPO | adaptive S128 EM/F1/format at T0/5/10/15/20/25 | early-budget descriptive performance |
-| Mechanism curve | methods × anchors | ESS quantiles, saturation, writer grad, aperture | method active, not frozen |
-| Matched baselines | Original, GSPO-style, GSsPO/per-write, joint-only, token-KL matched | T5/T25 and mechanism | isolate recurrent prefix constraint |
-| Ablations | end-prefix-only, all-token-prefix, answer-only sham, fixed penalty, controller | same metrics | component attribution |
-| External validity | Original/RWWPO on frozen RULER Variable Tracking | accuracy by horizon/rewrite count | state-transition relevance |
+| E0 table | common-host C/E/B and off-behavior probe | full logprob/parameter-gradient error, optimizer-state induction, clock/seed replay | K1 degeneracy and K2 identifiability |
+| R50 mechanism matrix | D/C/E/B/A × three seeds | exposure, conditional shadow separation, root ESS/LOO, accepted alpha, salvage/reject | mechanism exists with nonzero aperture |
+| Same-host geometry | both inner transactions of every R50 round, separately by host cell | coefficient difference, cosine, deterministic gradient projections | local whole-path geometry beyond per-write |
+| Recovery table | interrupted/replayed attempts | logical seed, proposal clock, accepted clock, checkpoint/tensor-ledger prefix | attempt-invariant authenticated DAG replay |
+| R400 learning curves | B/D/E (plus explanatory C) × frozen anchors | training health only; no adaptive performance selection | same-budget dynamics without convergence claim |
+| One-time confirmation | B/D/E × eight paired seeds | macro token-F1, strict EM, precision/recall, format | B-D utility and B-E whole-path-package assignment |
 
-All development-performance aggregates are recomputed from prediction rows of the certified
-read-only baseline bundle after per-file SHA verification. Dense reward is never
-reported as performance. S128 has already informed the hard-rollback-to-
-backtracking pivot, so it is not an untouched final test. Formal confirmation
-beyond screening requires at least three fresh seeds and a separately
-preregistered, content-disjoint confirmation set that is accessed only after
-code, thresholds, and checkpoint-selection rules are frozen.
+Dense reward is never reported as performance. S128 has already informed the
+hard-rollback-to-K2 pivot, so it is not an untouched final test and is forbidden
+during R50/R400 training. Formal confirmation uses eight preregistered paired
+training seeds and a separately sealed, at-least-512-root confirmation set that
+is content/root-disjoint from actor training, S128, Capture32, and prior
+inspected inventories. It is accessed only after code, thresholds, mechanism
+analyses, and checkpoint rules are frozen.
 
 ### Preregistered gates
 
-- **E0 PASS:** max absolute writer-gradient error at behavior point within the
-  dtype-specific tolerance; closure of response = writer disjoint-union answer;
-  RWWPO disabled follows byte-for-byte Original control flow and passes relevant
-  regressions.
-- **T5 health PASS:** finite loss/gradients; at least four of updates 1--5 are
-  nonzero commits; median committed alpha is at least 1/8; no majority of
-  nonzero commits uses only alpha <= 1/32; every committed prefix satisfies
-  ESS >= 0.5 and the frozen cap; behavior-point identity, rank agreement,
-  rollback digests, checkpoint inventory, append-only ledger anchors, and
-  weight sync all close. No S128 performance is consulted at this gate.
-- **T25 development-screen success:** T25 S128 F1 +0.02 and five-anchor S128
-  mean +0.01, with no anchor worse than Original by more than 0.02. Passing this
-  screen is neither convergence evidence nor a confirmatory paper result.
-- **Immediate NO-GO:** Method prefix diagnostics add no signal beyond local
-  diagnostics; method is stable only at effectively zero writer step; missing
-  tensors are presented as evidence; or a numeric/contract failure occurs.
+- **E0 PASS:** behavior-point C/E/B full logprob and full parameter gradients
+  agree within the predeclared CPU tolerance; exact common-gradient transition
+  induction, stateless proposal clock, and attempt-independent seeds close.
+- **R50 mechanism PASS:** all five cells and all three mechanism seeds have at
+  least 40 eligible rounds, 10 exposed rounds, exposure rate 0.20, five
+  activated exposed rounds, activation rate 0.50, root-LOO flip fraction at
+  most 0.25, and at least one B proposal salvaged relative to hard rollback.
+  No S128 or confirmatory performance is read.
+- **R400 confirm eligibility:** R50 PASS; unseen confirmation seal PASS; exact
+  B/D/E eight-seed coverage; all attempt-DAG, tensor-ledger, checkpoint,
+  accepted-clock, and weight-sync audits PASS.
+- **Full claim PASS:** both one-sided paired-seed macro-F1 contrasts B-D and B-E
+  pass margin-centered exact sign-flip tests with Holm family-wise correction
+  at 0.05, using margins +0.02/+0.01 respectively. Either failure rejects the
+  full claim. The longitudinal B-E result is an assignment contrast; local
+  same-host shadows, not performance alone, identify geometry activation.
 
 ## References / primary links reviewed
 

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RWWPO-2 tensor-backed actual-loss receipt",
+  "type": "object",
+  "required": [
+    "schema_version", "program_version", "attempt_id", "mode",
+    "objective_variant", "controller_variant", "host_variant",
+    "global_step", "rank", "epoch", "minibatch", "inner_id",
+    "proposal_clock", "logical_seed", "experiment_seed",
+    "accepted_optimizer_clock_before", "accepted_optimizer_clock_after",
+    "behavior_batch_digest", "denominator", "prefix_rows", "prefix_stats",
+    "post_prefix_rows", "post_prefix_stats", "root_q_min", "q_min",
+    "writer_log_ratio_cap", "constraint_pass", "accepted", "alpha_grid",
+    "alpha_test_order", "alpha_committed", "accepted_nonzero",
+    "proposal_zero", "trial_evidence", "tensor_shard", "pre_digests",
+    "commit_digests", "mechanism_diagnostics", "previous_record_sha256",
+    "record_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "rwwpo-actual-loss-v3"},
+    "program_version": {"const": "rwwpo2-k2"},
+    "attempt_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{5,63}$"},
+    "mode": {"const": "rwwpo_method"},
+    "objective_variant": {"enum": ["original_tokenwise", "per_write_joint", "whole_prefix"]},
+    "controller_variant": {"enum": ["none", "hard_rollback", "feasible_backtracking"]},
+    "host_variant": {"enum": ["A", "B", "C", "D", "E"]},
+    "global_step": {"type": "integer", "minimum": 1, "maximum": 400},
+    "rank": {"enum": [0, 1]},
+    "epoch": {"enum": [0, 1]},
+    "minibatch": {"const": 0},
+    "inner_id": {"enum": [1, 2]},
+    "proposal_clock": {"type": "integer", "minimum": 1, "maximum": 800},
+    "logical_seed": {"type": "integer", "minimum": 0},
+    "experiment_seed": {"enum": [2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033]},
+    "accepted_optimizer_clock_before": {"type": "integer", "minimum": 0},
+    "accepted_optimizer_clock_after": {"type": "integer", "minimum": 0},
+    "behavior_batch_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "denominator": {"type": "integer", "minimum": 1},
+    "q_min": {"const": 0.5},
+    "root_q_min": {"const": 0.5},
+    "writer_log_ratio_cap": {"const": 4.0},
+    "constraint_pass": {"type": "boolean"},
+    "accepted": {"type": "boolean"},
+    "accepted_nonzero": {"type": "boolean"},
+    "proposal_zero": {"type": "boolean"},
+    "alpha_grid": {"const": [1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125]},
+    "alpha_committed": {"enum": [0.0, 1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125]},
+    "tensor_shard": {
+      "type": "object",
+      "required": ["relative_path", "sha256", "size", "inventory"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^tensor_shards/rank[01]/round_[0-9]{4}_inner_[12]\\.pt$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 1},
+        "inventory": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "mechanism_diagnostics": {
+      "type": "object",
+      "required": ["policy_loss", "surrogate_loss", "shared_kl_loss", "actual_loss_contract", "active_logprob_gradient_l2", "optimizer_step_calls", "shadow_coefficients", "inner1_exposure", "proposal_lr"],
+      "properties": {
+        "policy_loss": {"type": "number"},
+        "surrogate_loss": {"type": "number"},
+        "shared_kl_loss": {"type": "number"},
+        "actual_loss_contract": {
+          "const": {
+            "loss_agg_mode": "token-mean",
+            "cliprange": 0.2,
+            "cliprange_low": 0.2,
+            "cliprange_high": 0.2,
+            "clip_ratio_c": 3.0,
+            "writer_log_ratio_cap": 4.0,
+            "use_kl_loss": true,
+            "kl_loss_type": "low_var_kl",
+            "kl_loss_coefficient": 0.001,
+            "entropy_coefficient": 0.0
+          }
+        },
+        "active_logprob_gradient_l2": {"type": "number", "minimum": 0},
+        "optimizer_step_calls": {"const": 1},
+        "proposal_lr": {"type": "number", "exclusiveMinimum": 0},
+        "shadow_coefficients": {"type": "object"},
+        "inner1_exposure": {"type": ["object", "null"]}
+      }
+    },
+    "previous_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

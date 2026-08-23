@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
@@ -483,6 +484,9 @@ class RayPPOTrainer:
                     f"actual={actual_config_sha}, expected={expected_config_sha}"
                 )
             self._stable_eval_runtime_config_sha256 = actual_config_sha
+            self._stable_eval_pre_dataset_max_prompt_length = int(
+                config.data.max_prompt_length
+            )
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
 
@@ -521,6 +525,22 @@ class RayPPOTrainer:
 
         self._validate_config()
         self._create_dataloader()
+        if early_eval_identity is not None and bool(
+            early_eval_identity.get("enabled", False)
+        ):
+            self._stable_eval_post_dataset_max_prompt_length = int(
+                self.config.data.max_prompt_length
+            )
+            expected_effective = int(self.recurrent_config.max_chunks) * int(
+                self.recurrent_config.chunk_size
+            )
+            if self._stable_eval_post_dataset_max_prompt_length != expected_effective:
+                raise ValueError(
+                    "strict stable evaluation MemoryDataset effective prompt limit "
+                    f"differs from recurrent contract: actual="
+                    f"{self._stable_eval_post_dataset_max_prompt_length}, "
+                    f"expected={expected_effective}"
+                )
 
     def _validate_config(self):
         config = self.config
@@ -1317,12 +1337,169 @@ class RayPPOTrainer:
                         tail=json.loads(lines[-1])["record_sha256"]
                         rwwpo_anchors[os.path.basename(path)]={"record_count":len(lines),
                             "prefix_sha256":hashlib.sha256(payload).hexdigest(),"tail_sha256":tail}
+            rwwpo_tensor_inventory=None
+            rwwpo_rollout_seed_anchor=None
+            if (bool(rwwpo_cfg.get("enable",False)) and
+                    str(rwwpo_cfg.get("program_version",""))=="rwwpo2-k2"):
+                from recurrent.research.rwwpo_ledger import tensor_shard_inventory
+                rwwpo_tensor_inventory=tensor_shard_inventory(
+                    ledger_dir,start_round=int(rwwpo_cfg.get("lineage_start_round",1)),
+                    through_round=int(self.global_steps))
+                seed_path=os.path.join(
+                    str(self.config.trainer.default_local_dir),
+                    "rollout_seed_audit.jsonl")
+                if not os.path.isfile(seed_path) or os.path.islink(seed_path):
+                    raise RuntimeError("RWWPO2_CHECKPOINT_ROLLOUT_SEED_LEDGER_MISSING")
+                seed_payload=open(seed_path,"rb").read()
+                seed_lines=[line for line in seed_payload.splitlines(keepends=True)
+                            if line.strip()]
+                if not seed_lines:
+                    raise RuntimeError("RWWPO2_CHECKPOINT_ROLLOUT_SEED_LEDGER_EMPTY")
+                rwwpo_rollout_seed_anchor={
+                    "record_count":len(seed_lines),
+                    "prefix_sha256":hashlib.sha256(b"".join(seed_lines)).hexdigest(),
+                    "terminal_record_sha256":hashlib.sha256(
+                        seed_lines[-1].rstrip(b"\r\n")).hexdigest(),
+                }
             append_gate_a_record(
                 "checkpoint_inventory",
                 global_step=int(self.global_steps),
                 inventory=checkpoint_inventory(local_global_step_folder),
+                rwwpo2_resolved_contract_file_sha256=(
+                    os.environ.get("RWWPO_RESOLVED_CONTRACT_SHA256")
+                    if str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2"
+                    else None),
+                rwwpo2_resolved_contract_report_sha256=(
+                    os.environ.get("RWWPO_RESOLVED_CONTRACT_REPORT_SHA256")
+                    if str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2"
+                    else None),
+                rwwpo2_source_manifest_sha256=(
+                    os.environ.get("RWWPO_SOURCE_MANIFEST_SHA256")
+                    if str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2"
+                    else None),
                 rwwpo_ledger_anchors=rwwpo_anchors,
+                rwwpo_tensor_inventory=rwwpo_tensor_inventory,
+                rwwpo_rollout_seed_anchor=rwwpo_rollout_seed_anchor,
             )
+            self._prune_rwwpo2_recovery_roots()
+
+    def _prune_rwwpo2_recovery_roots(self):
+        """Keep exactly the newest two authenticated full recovery roots."""
+        rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
+        if not (bool(rwwpo_cfg.get("enable",False)) and
+                str(rwwpo_cfg.get("program_version",""))=="rwwpo2-k2"):
+            return
+        output_root=os.path.realpath(str(self.config.trainer.default_local_dir))
+        candidates=[]
+        for name in os.listdir(output_root):
+            match=re.fullmatch(r"global_step_([0-9]+)",name)
+            if match:
+                candidates.append((int(match.group(1)),os.path.join(output_root,name)))
+        complete=[item for item in candidates if os.path.isdir(os.path.join(item[1],"actor"))
+                  and os.path.isfile(os.path.join(item[1],"data.pt"))]
+        keep={step for step,_ in sorted(complete)[-2:]}
+        execution_path=os.path.realpath(os.environ["GATE_A_EXECUTION_LEDGER"])
+        events=[json.loads(line) for line in open(execution_path,encoding="utf-8") if line.strip()]
+        authenticated={int(row["global_step"]):row for row in events
+                       if row.get("record_type")=="checkpoint_inventory"}
+        for step,path in sorted(candidates):
+            if step in keep:
+                continue
+            if step % 10 != 0 or step not in authenticated:
+                raise RuntimeError(f"RWWPO2_REFUSE_UNAUTHENTICATED_RECOVERY_PRUNE:{path}")
+            if os.path.dirname(os.path.realpath(path)) != output_root:
+                raise RuntimeError(f"RWWPO2_RECOVERY_PRUNE_PATH_ESCAPE:{path}")
+            anchored=authenticated[step]
+            shutil.rmtree(path)
+            append_gate_a_record(
+                "rwwpo2_recovery_pruned",global_step=int(self.global_steps),
+                pruned_round=int(step),pruned_root=os.path.realpath(path),
+                checkpoint_inventory_record_sha256=anchored["record_sha256"],
+                scientific_anchor_preserved=True)
+
+    def _save_rwwpo2_actor_anchor(self):
+        rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
+        if not (bool(rwwpo_cfg.get("enable",False)) and
+                str(rwwpo_cfg.get("program_version",""))=="rwwpo2-k2"):
+            return
+        anchors={int(value) for value in self.config.trainer.get(
+            "rwwpo2_scientific_anchors",[])}
+        if int(self.global_steps) not in anchors:
+            return
+        # Multiples of ten are already materialized as full recovery roots a
+        # few lines later in fit(). Defer them and hard-link only their model
+        # shards after the authenticated checkpoint event, avoiding a second
+        # 7B actor copy while preserving an immutable scientific anchor.
+        if int(self.global_steps) % 10 == 0:
+            return
+        anchor_root=os.path.join(
+            self.config.trainer.default_local_dir,"scientific_anchors",
+            f"round_{int(self.global_steps)}","actor")
+        if os.path.lexists(anchor_root):
+            raise RuntimeError(f"RWWPO2_SCIENTIFIC_ANCHOR_ALREADY_EXISTS:{anchor_root}")
+        acknowledgements=self.actor_rollout_wg.save_model_checkpoint_only(anchor_root)
+        if sorted(int(row["rank"]) for row in acknowledgements)!=[0,1]:
+            raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_RANK_CLOSURE")
+        from recurrent.research.gate_a_execution import (
+            append_gate_a_record,checkpoint_inventory)
+        inventory=checkpoint_inventory(os.path.dirname(anchor_root))
+        append_gate_a_record(
+            "rwwpo2_actor_anchor_inventory",global_step=int(self.global_steps),
+            anchor_root=os.path.realpath(os.path.dirname(anchor_root)),
+            inventory=inventory,worker_acknowledgements=acknowledgements,
+            storage_kind="direct_actor_only_checkpoint")
+
+    def _link_rwwpo2_actor_anchor_from_recovery(self):
+        """Preserve a multiple-of-ten model anchor without duplicating blocks."""
+        rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
+        if not (bool(rwwpo_cfg.get("enable",False)) and
+                str(rwwpo_cfg.get("program_version",""))=="rwwpo2-k2"):
+            return
+        step=int(self.global_steps)
+        anchors={int(value) for value in self.config.trainer.get(
+            "rwwpo2_scientific_anchors",[])}
+        if step not in anchors or step % 10 != 0:
+            return
+        output_root=os.path.realpath(str(self.config.trainer.default_local_dir))
+        recovery_root=os.path.join(output_root,f"global_step_{step}")
+        source_actor=os.path.join(recovery_root,"actor")
+        anchor_root=os.path.join(output_root,"scientific_anchors",f"round_{step}")
+        anchor_actor=os.path.join(anchor_root,"actor")
+        if os.path.lexists(anchor_root):
+            raise RuntimeError(f"RWWPO2_SCIENTIFIC_ANCHOR_ALREADY_EXISTS:{anchor_root}")
+        if os.path.dirname(os.path.realpath(recovery_root))!=output_root \
+                or not os.path.isdir(source_actor):
+            raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_RECOVERY_SOURCE_INVALID")
+        model_names=sorted(name for name in os.listdir(source_actor)
+                           if re.fullmatch(r"model_world_size_2_rank_[01]\.pt",name))
+        if model_names!=["model_world_size_2_rank_0.pt","model_world_size_2_rank_1.pt"]:
+            raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_MODEL_RANK_CLOSURE")
+        os.makedirs(anchor_actor,exist_ok=False)
+        for name in model_names:
+            source=os.path.join(source_actor,name)
+            target=os.path.join(anchor_actor,name)
+            if os.path.islink(source) or not os.path.isfile(source):
+                raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_SOURCE_SYMLINK_OR_MISSING")
+            os.link(source,target)
+            if os.stat(source).st_ino!=os.stat(target).st_ino:
+                raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_HARDLINK_FAILED")
+        from recurrent.research.gate_a_execution import (
+            append_gate_a_record,checkpoint_inventory)
+        execution_path=os.path.realpath(os.environ["GATE_A_EXECUTION_LEDGER"])
+        events=[json.loads(line) for line in open(execution_path,encoding="utf-8")
+                if line.strip()]
+        checkpoint_events=[row for row in events
+                           if row.get("record_type")=="checkpoint_inventory"
+                           and int(row.get("global_step",-1))==step]
+        if len(checkpoint_events)!=1:
+            raise RuntimeError("RWWPO2_SCIENTIFIC_ANCHOR_CHECKPOINT_BINDING")
+        inventory=checkpoint_inventory(anchor_root)
+        append_gate_a_record(
+            "rwwpo2_actor_anchor_inventory",global_step=step,
+            anchor_root=os.path.realpath(anchor_root),inventory=inventory,
+            worker_acknowledgements=[],storage_kind="hardlink_from_recovery_model_shards",
+            source_recovery_checkpoint_inventory_record_sha256=
+                checkpoint_events[0]["record_sha256"])
 
     def _audit_gate_a_weight_sync(self, *, global_step: int, actor_version: int, sync_kind: str) -> None:
         from recurrent.research.gate_a_execution import append_gate_a_record, gate_a_enabled
@@ -1341,6 +1518,14 @@ class RayPPOTrainer:
             ack["actor_rollout_sampled_tensor_digest"] for ack in acknowledgements
         }
         vllm_digests = {ack["vllm_sampled_tensor_digest"] for ack in acknowledgements}
+        rwwpo2_clocks = {
+            tuple(int(value) for value in ack.get("rwwpo2_accepted_optimizer_clocks", []))
+            for ack in acknowledgements
+        }
+        param_group_lrs = {
+            tuple(float(value) for value in ack.get("optimizer_param_group_lrs", []))
+            for ack in acknowledgements
+        }
         if actual_ranks != expected_ranks:
             raise RuntimeError(
                 f"Gate A vLLM acknowledgement ranks mismatch: expected={expected_ranks}, actual={actual_ranks}"
@@ -1355,6 +1540,12 @@ class RayPPOTrainer:
                 "Gate A effective actor-rollout/vLLM sampled-tensor digests diverged: "
                 f"actor_rollout={sorted(actor_digests)}, vllm={sorted(vllm_digests)}"
             )
+        rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
+        if str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2":
+            if len(rwwpo2_clocks) != 1 or len(next(iter(rwwpo2_clocks), ())) != 1:
+                raise RuntimeError("RWWPO2 accepted optimizer clock differs across ranks/groups")
+            if len(param_group_lrs) != 1 or not next(iter(param_group_lrs), ()):
+                raise RuntimeError("RWWPO2 proposal LR differs across ranks/groups")
         append_gate_a_record(
             "weight_sync_summary",
             global_step=int(global_step),
@@ -1363,6 +1554,12 @@ class RayPPOTrainer:
             worker_ranks=actual_ranks,
             sampled_tensor_digest=next(iter(actor_digests)),
             actor_master_sampled_tensor_digest=next(iter(actor_master_digests)),
+            rwwpo2_accepted_optimizer_clocks=(
+                list(next(iter(rwwpo2_clocks))) if rwwpo2_clocks else []
+            ),
+            optimizer_param_group_lrs=(
+                list(next(iter(param_group_lrs))) if param_group_lrs else []
+            ),
         )
         self._gate_a_synced_actor_version = int(actor_version)
         self._gate_a_synced_actor_digest = next(iter(actor_digests))
@@ -1599,12 +1796,44 @@ class RayPPOTrainer:
         print(f"Setting global step to {self.global_steps}")
         print(f"Resuming from {global_step_folder}")
 
+        rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
+        lineage_parent = None
+        if (bool(rwwpo_cfg.get("enable", False)) and
+                str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2"):
+            lineage_path = os.environ.get("RWWPO_LINEAGE_PARENT_RECEIPT", "")
+            if not lineage_path or not os.path.isabs(lineage_path):
+                raise RuntimeError("RWWPO2_RESUME_MISSING_LINEAGE_PARENT_RECEIPT")
+            lineage_path = os.path.realpath(lineage_path)
+            lineage_parent = json.loads(open(lineage_path, encoding="utf-8").read())
+            declared = lineage_parent.pop("report_sha256", None)
+            actual = hashlib.sha256(json.dumps(
+                lineage_parent, sort_keys=True, separators=(",", ":"),
+                allow_nan=False).encode()).hexdigest()
+            if (declared != actual or lineage_parent.get("status") != "PASS" or
+                    lineage_parent.get("decision") != "RWWPO2_LINEAGE_PARENT_PASS" or
+                    lineage_parent.get("git_commit") != os.environ.get("GATE_A_GIT_COMMIT") or
+                    os.path.realpath(str(lineage_parent.get("checkpoint_path", ""))) !=
+                    os.path.realpath(global_step_folder) or
+                    str(lineage_parent.get("cell")) != str(rwwpo_cfg.get("cell")) or
+                    int(lineage_parent.get("experiment_seed", -1)) !=
+                    int(rwwpo_cfg.get("experiment_seed", -2))):
+                raise RuntimeError("RWWPO2_RESUME_LINEAGE_PARENT_IDENTITY_DRIFT")
+            lineage_parent["report_sha256"] = declared
+            lineage_parent["file_sha256"] = hashlib.sha256(
+                open(lineage_path, "rb").read()).hexdigest()
+            lineage_parent["path"] = lineage_path
+
         actor_path = os.path.join(global_step_folder, "actor")
         critic_path = os.path.join(global_step_folder, "critic")
         # load actor
         actor_load_acks = self.actor_rollout_wg.load_checkpoint(
             actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
         )
+        if lineage_parent is not None:
+            expected_clock = int(lineage_parent["accepted_optimizer_clock_at_checkpoint"])
+            for acknowledgement in actor_load_acks:
+                if acknowledgement.get("rwwpo2_accepted_optimizer_clocks") != [expected_clock]:
+                    raise RuntimeError("RWWPO2_RESUME_ACCEPTED_OPTIMIZER_CLOCK_DRIFT")
         # load critic
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
@@ -1626,6 +1855,21 @@ class RayPPOTrainer:
                     actor_load_worker_acks=actor_load_acks,
                     data_loaded=True,
                     data_sha256=sha256_file(dataloader_local_path),
+                    rwwpo2_lineage_parent=(
+                        {
+                            "path": lineage_parent["path"],
+                            "file_sha256": lineage_parent["file_sha256"],
+                            "report_sha256": lineage_parent["report_sha256"],
+                            "checkpoint_inventory_event_sha256": lineage_parent[
+                                "checkpoint_inventory_event_sha256"
+                            ],
+                            "accepted_optimizer_clock_at_checkpoint": lineage_parent[
+                                "accepted_optimizer_clock_at_checkpoint"
+                            ],
+                            "failed_suffix_imported": False,
+                        }
+                        if lineage_parent is not None else None
+                    ),
                 )
         else:
             print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
@@ -1734,6 +1978,12 @@ class RayPPOTrainer:
                         "attempt_id": str(eval_identity_config.attempt_id),
                         "eval_manifest_hash": str(eval_identity_config.expected_manifest_hash),
                         "resolved_runtime_config_sha256": self._stable_eval_runtime_config_sha256,
+                        "hydra_pre_dataset_max_prompt_length": (
+                            self._stable_eval_pre_dataset_max_prompt_length
+                        ),
+                        "memory_dataset_effective_max_prompt_length": (
+                            self._stable_eval_post_dataset_max_prompt_length
+                        ),
                         "global_step": int(self.global_steps),
                         "actor_update_calls": int(self._actor_update_calls),
                         "optimizer_step_calls": 0,
@@ -2270,6 +2520,7 @@ class RayPPOTrainer:
                             actor_version=self.global_steps,
                             sync_kind="post_actor_update",
                         )
+                        self._save_rwwpo2_actor_anchor()
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
@@ -2298,12 +2549,14 @@ class RayPPOTrainer:
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
                         with _timer("save_checkpoint", timing_raw):
                             self._save_checkpoint()
+                            self._link_rwwpo2_actor_anchor_from_recovery()
 
                     # Cheap in-training T5 mechanism gate.  It uses no S128
                     # performance and therefore cannot select the method by eval.
                     rwwpo_cfg = self.config.actor_rollout_ref.actor.get("rwwpo", {})
                     if bool(rwwpo_cfg.get("enable", False)) and str(
-                        rwwpo_cfg.get("controller_variant", "hard_rollback")) == "feasible_backtracking":
+                        rwwpo_cfg.get("controller_variant", "hard_rollback")) == "feasible_backtracking" and str(
+                        rwwpo_cfg.get("program_version", "")) != "rwwpo2-k2":
                         def rwwpo_t5_fail(reason):
                             from recurrent.research.gate_a_execution import append_gate_a_record
                             append_gate_a_record("rwwpo_t5_health_failure",global_step=int(self.global_steps),

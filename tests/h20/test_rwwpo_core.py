@@ -31,6 +31,41 @@ def test_behavior_point_writer_gradient_exactly_matches_original():
                                original_grad[final.unsqueeze(-1) & response], rtol=0, atol=1e-12)
 
 
+def test_behavior_point_c_e_b_gradients_are_exactly_equal():
+    old, response, final, writer, sample, turn, adv = _batch()
+    gradients = []
+    for objective in ("whole_prefix", "per_write_joint"):
+        current = old.clone().requires_grad_(True)
+        loss, _ = compute_rwwpo_policy_loss(
+            old, current, adv, response, writer, final, sample, turn,
+            0.2, 0.2, 0.2, writer_objective=objective,
+        )
+        gradients.append(torch.autograd.grad(loss, current)[0])
+    current = old.clone().requires_grad_(True)
+    loss, *_ = compute_policy_loss(old, current, adv, response, 0.2, 0.2, 0.2,
+                                   loss_agg_mode="token-mean")
+    gradients.append(torch.autograd.grad(loss, current)[0])
+    for actual in gradients[1:]:
+        torch.testing.assert_close(actual, gradients[0], rtol=0, atol=1e-12)
+
+
+def test_k2_off_behavior_separates_per_write_and_whole_path():
+    old, response, final, writer, sample, turn, adv = _batch()
+    current = (old + writer * torch.tensor([[0.1], [-0.2], [0.3], [0.0], [0.0]],
+                                            dtype=old.dtype)).requires_grad_(True)
+    whole, _ = compute_rwwpo_policy_loss(
+        old, current, adv, response, writer, final, sample, turn,
+        0.2, 0.2, 0.2, writer_objective="whole_prefix",
+    )
+    whole_gradient, = torch.autograd.grad(whole, current, retain_graph=True)
+    per_write, _ = compute_rwwpo_policy_loss(
+        old, current, adv, response, writer, final, sample, turn,
+        0.2, 0.2, 0.2, writer_objective="per_write_joint",
+    )
+    per_write_gradient, = torch.autograd.grad(per_write, current)
+    assert not torch.allclose(whole_gradient[writer], per_write_gradient[writer], rtol=0, atol=1e-12)
+
+
 def test_mask_closure_is_fail_closed():
     old, response, final, writer, sample, turn, adv = _batch()
     writer = writer.clone()

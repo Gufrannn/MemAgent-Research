@@ -38,7 +38,10 @@ from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_in
 from verl.workers.actor import BasePPOActor
 from recurrent.research.rwwpo_transaction import (
     ALPHA_GRID, digest, displacement_norm,
-    parameter_snapshot, restore_rng, rng_snapshot, set_interpolated_parameters,
+    logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
+    prefix_distribution_stats, proposal_clock, relative_displacement_norm, restore_rng, rng_snapshot,
+    seed_transaction_rng, set_interpolated_parameters,
+    set_stateless_proposal_lr, writer_logprob_rms_sufficient_statistics,
 )
 
 __all__ = ["DataParallelPPOActor"]
@@ -65,7 +68,7 @@ class DataParallelPPOActor(BasePPOActor):
             else verl_F.entropy_from_logits
         )
 
-    def _snapshot_local_optimizer_step(self):
+    def _snapshot_local_optimizer_step(self, *, include_scheduler=True):
         """CPU snapshot of local FSDP shards and optimizer for reject/rollback."""
         def cpu_clone(value):
             if torch.is_tensor(value):
@@ -78,14 +81,15 @@ class DataParallelPPOActor(BasePPOActor):
                 return tuple(cpu_clone(item) for item in value)
             return value
         params = [param.detach().cpu().clone() for param in self.actor_module.parameters()]
-        scheduler = cpu_clone(self.actor_lr_scheduler.state_dict()) if self.actor_lr_scheduler is not None else None
+        scheduler = (cpu_clone(self.actor_lr_scheduler.state_dict())
+                     if include_scheduler and self.actor_lr_scheduler is not None else None)
         return params, cpu_clone(self.actor_optimizer.state_dict()), scheduler
 
-    def _transaction_digests(self, snapshot, rng_state):
+    def _transaction_digests(self, snapshot, rng_state, scheduler_evidence=None):
         return {
             "model": digest(snapshot[0]),
             "optimizer": digest(snapshot[1]),
-            "scheduler": digest(snapshot[2]),
+            "scheduler": digest(snapshot[2] if scheduler_evidence is None else scheduler_evidence),
             "scaler": "not_applicable_bfloat16",
             "rng": digest(rng_state),
         }
@@ -290,13 +294,15 @@ class DataParallelPPOActor(BasePPOActor):
         rwwpo_collect_original = bool(rwwpo_config.get("collect_original_only", False))
         rwwpo_objective = str(rwwpo_config.get("objective_variant", "whole_prefix"))
         rwwpo_controller = str(rwwpo_config.get("controller_variant", "hard_rollback"))
-        if rwwpo_objective not in ("whole_prefix", "original_tokenwise"):
+        if rwwpo_objective not in ("whole_prefix", "per_write_joint", "original_tokenwise"):
             raise ValueError("RWWPO unknown objective_variant")
-        if rwwpo_controller not in ("hard_rollback", "feasible_backtracking"):
+        if rwwpo_controller not in ("none", "hard_rollback", "feasible_backtracking"):
             raise ValueError("RWWPO unknown controller_variant")
         if rwwpo_enabled and rwwpo_collect_original:
             raise ValueError("RWWPO method and Original collection modes are mutually exclusive")
         rwwpo_capture = rwwpo_enabled or rwwpo_collect_original
+        rwwpo2_enabled = bool(rwwpo_enabled and
+                              str(rwwpo_config.get("program_version", "")) == "rwwpo2-k2")
         if rwwpo_capture:
             select_keys.extend(["final_mask", "sample_index", "trajectory_turn", "rwwpo_global_step",
                                 "rwwpo_example_identity_hash", "rwwpo_trajectory_identity_hash"])
@@ -306,6 +312,27 @@ class DataParallelPPOActor(BasePPOActor):
                 raise ValueError("RWWPO requires an explicit append-only actual-loss ledger_dir")
             if not rwwpo_config.get("attempt_id"):
                 raise ValueError("RWWPO requires an explicit semantic attempt_id")
+            if rwwpo2_enabled:
+                if int(self.config.ppo_epochs) != 2:
+                    raise ValueError("RWWPO-2 requires exactly two inner actor transactions")
+                if int(rwwpo_config.get("inner_transactions_per_round", 0)) != 2:
+                    raise ValueError("RWWPO-2 K2 manifest/runtime mismatch")
+                if (not bool(self.config.use_kl_loss)
+                        or str(self.config.kl_loss_type) != "low_var_kl"
+                        or float(self.config.kl_loss_coef) != 0.001
+                        or float(self.config.entropy_coeff) != 0.0
+                        or float(self.config.clip_ratio) != 0.2
+                        or float(self.config.clip_ratio_low) != 0.2
+                        or float(self.config.clip_ratio_high) != 0.2
+                        or float(self.config.get("clip_ratio_c", 3.0)) != 3.0):
+                    raise ValueError("RWWPO-2 complete actual-loss contract drift")
+                required_schedule = {"kind", "base_lr", "warmup_proposals", "total_proposals"}
+                if set(rwwpo_config.get("proposal_schedule", {})) != required_schedule:
+                    raise ValueError("RWWPO-2 requires a complete stateless proposal schedule")
+                for threshold in ("tau_theta", "tau_logprob", "tau_gradient"):
+                    value = rwwpo_config.get(threshold)
+                    if value is None or float(value) < 0:
+                        raise ValueError(f"RWWPO-2 requires calibrated {threshold}")
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -362,8 +389,8 @@ class DataParallelPPOActor(BasePPOActor):
                 slot = min(range(target_sections), key=lambda idx: loads[idx])
                 bins[slot].append(group); loads[slot] += len(group)
             dataloader = [batch[torch.cat(parts)] for parts in bins if parts]
-            if rwwpo_controller == "feasible_backtracking" and len(dataloader) != 1:
-                raise ValueError("RWWPO transactional scheduler semantics require one optimizer minibatch per update")
+            if rwwpo_enabled and len(dataloader) != 1:
+                raise ValueError("RWWPO transactions require one full optimizer minibatch per inner update")
         elif padded:
             from recurrent.utils import td_split
             dataloader = td_split(batch, self.config.train_batch_size // self.config.ppo_mini_batch_size)
@@ -371,6 +398,8 @@ class DataParallelPPOActor(BasePPOActor):
             dataloader = batch.split(self.config.ppo_mini_batch_size)
 
         metrics = {}
+        rwwpo2_frozen_batch_digest = None
+        rwwpo2_inner1_exposure = None
         for epoch in range(self.config.ppo_epochs):
             for batch_idx, data in enumerate(dataloader):
                 # split batch into micro_batches
@@ -420,6 +449,42 @@ class DataParallelPPOActor(BasePPOActor):
                 mini_batch_token_nums = data['response_mask'].sum()
 
                 if rwwpo_capture:
+                    transaction_optimizer_step_calls = 0
+                    round_id = int(data["rwwpo_global_step"][0].item())
+                    inner_id = int(epoch + 1)
+                    logical_proposal_id = None
+                    proposal_lr = None
+                    logical_seed = None
+                    scheduler_evidence = None
+                    accepted_optimizer_clock_before = None
+                    if rwwpo2_enabled:
+                        logical_proposal_id = proposal_clock(round_id, inner_id)
+                        schedule = dict(rwwpo_config["proposal_schedule"])
+                        proposal_lr = set_stateless_proposal_lr(
+                            self.actor_optimizer,
+                            base_lr=float(schedule["base_lr"]),
+                            warmup_proposals=int(schedule["warmup_proposals"]),
+                            total_proposals=int(schedule["total_proposals"]),
+                            proposal_id=logical_proposal_id,
+                            kind=str(schedule["kind"]),
+                        )
+                        clocks = {int(group.get("rwwpo2_accepted_optimizer_clock", 0))
+                                  for group in self.actor_optimizer.param_groups}
+                        if len(clocks) != 1:
+                            raise RuntimeError("RWWPO2_ACCEPTED_OPTIMIZER_CLOCK_DRIFT")
+                        accepted_optimizer_clock_before = next(iter(clocks))
+                        logical_seed = logical_transaction_seed(
+                            experiment_seed=int(rwwpo_config.get("experiment_seed", 2026)),
+                            round_id=round_id, inner_id=inner_id, rank=rank,
+                            stream="actor_transaction",
+                        )
+                        seed_transaction_rng(logical_seed)
+                        scheduler_evidence = {
+                            "kind": "stateless_proposal_clock_v1",
+                            "proposal_clock": logical_proposal_id,
+                            "lr": proposal_lr,
+                            "schedule": schedule,
+                        }
                     if self.config.entropy_coeff != 0:
                         raise ValueError("RWWPO streaming exact-gradient path requires frozen entropy_coeff=0")
                     forwarded = []
@@ -433,11 +498,16 @@ class DataParallelPPOActor(BasePPOActor):
                         # with respect to these logits is injected in a streaming second
                         # pass below, bounding activation memory independently of the
                         # number of recurrent turns.
+                        # Every later replay restores the exact RNG state that
+                        # preceded this materialization.  Qwen currently has
+                        # zero dropout, but the K1 transition-kernel theorem
+                        # must not silently depend on that architecture detail.
+                        forward_rng = rng_snapshot()
                         with torch.no_grad():
                             _, current = self._forward_micro_batch(
                                 micro_batch=micro_data, temperature=temperature,
                                 calculate_entropy=False)
-                        forwarded.append((micro_data, current.detach()))
+                        forwarded.append((micro_data, current.detach(), forward_rng))
                     def joined(key):
                         return torch.cat([item[0][key] for item in forwarded], dim=0)
                     current_log_prob = torch.cat([item[1] for item in forwarded], dim=0).requires_grad_(True)
@@ -445,7 +515,22 @@ class DataParallelPPOActor(BasePPOActor):
                     response_mask = joined("response_mask").bool()
                     final_mask = joined("final_mask").bool()
                     writer_mask = response_mask & (~final_mask).unsqueeze(-1)
-                    policy_loss, rwwpo_metrics = compute_rwwpo_policy_loss(
+                    frozen_digest = digest({
+                        "old_log_prob": old_log_prob,
+                        "ref_log_prob": joined("ref_log_prob") if self.config.use_kl_loss else None,
+                        "advantages": joined("advantages"),
+                        "response_mask": response_mask,
+                        "writer_mask": writer_mask,
+                        "final_mask": final_mask,
+                        "sample_index": joined("sample_index"),
+                        "trajectory_turn": joined("trajectory_turn"),
+                    })
+                    if rwwpo2_enabled:
+                        if rwwpo2_frozen_batch_digest is None:
+                            rwwpo2_frozen_batch_digest = frozen_digest
+                        elif frozen_digest != rwwpo2_frozen_batch_digest:
+                            raise RuntimeError("RWWPO2_BEHAVIOR_BATCH_MUTATED_BETWEEN_INNER_UPDATES")
+                    whole_candidate_loss, whole_metrics = compute_rwwpo_policy_loss(
                         old_log_prob=old_log_prob, log_prob=current_log_prob,
                         advantages=joined("advantages"), response_mask=response_mask,
                         writer_mask=writer_mask, final_mask=final_mask,
@@ -454,94 +539,219 @@ class DataParallelPPOActor(BasePPOActor):
                         cliprange_low=self.config.clip_ratio_low,
                         cliprange_high=self.config.clip_ratio_high,
                         clip_ratio_c=self.config.get("clip_ratio_c", 3.0),
-                        writer_log_ratio_cap=float(rwwpo_config.get("writer_log_ratio_cap", 4.0)))
-                    rwwpo_candidate_loss = policy_loss
+                        writer_log_ratio_cap=float(rwwpo_config.get("writer_log_ratio_cap", 4.0)),
+                        writer_objective="whole_prefix")
                     original_candidate_loss, original_clipfrac, original_kl, original_lower = compute_policy_loss(
                             old_log_prob=old_log_prob, log_prob=current_log_prob,
                             advantages=joined("advantages"), response_mask=response_mask,
                             cliprange=self.config.clip_ratio, cliprange_low=self.config.clip_ratio_low,
                             cliprange_high=self.config.clip_ratio_high,
                             clip_ratio_c=self.config.get("clip_ratio_c", 3.0), loss_agg_mode="token-mean")
-                    rwwpo_coefficient, = torch.autograd.grad(rwwpo_candidate_loss, current_log_prob,
-                                                             retain_graph=True)
-                    original_coefficient, = torch.autograd.grad(original_candidate_loss, current_log_prob,
-                                                                 retain_graph=True)
-                    active = response_mask
-                    coefficient_cosine = torch.nn.functional.cosine_similarity(
-                        rwwpo_coefficient[active].reshape(1,-1),
-                        original_coefficient[active].reshape(1,-1)).item()
-                    if rwwpo_collect_original or rwwpo_objective == "original_tokenwise":
-                        policy_loss = original_candidate_loss
-                        rwwpo_metrics["answer_clipfrac"] = original_clipfrac
-                        rwwpo_metrics["answer_ppo_kl"] = original_kl
-                        rwwpo_metrics["answer_clipfrac_lower"] = original_lower
+                    per_write_candidate_loss, per_write_metrics = compute_rwwpo_policy_loss(
+                        old_log_prob=old_log_prob, log_prob=current_log_prob,
+                        advantages=joined("advantages"), response_mask=response_mask,
+                        writer_mask=writer_mask, final_mask=final_mask,
+                        sample_index=joined("sample_index"), trajectory_turn=joined("trajectory_turn"),
+                        cliprange=self.config.clip_ratio,
+                        cliprange_low=self.config.clip_ratio_low,
+                        cliprange_high=self.config.clip_ratio_high,
+                        clip_ratio_c=self.config.get("clip_ratio_c", 3.0),
+                        writer_log_ratio_cap=float(rwwpo_config.get("writer_log_ratio_cap", 4.0)),
+                        writer_objective="per_write_joint")
+                    shared_additive_loss = current_log_prob.sum() * 0.0
                     if self.config.use_kl_loss:
                         ref_log_prob = joined("ref_log_prob")
                         kld = kl_penalty(logprob=current_log_prob, ref_logprob=ref_log_prob,
                                          kl_penalty=self.config.kl_loss_type)
                         kl_loss = agg_loss(kld, response_mask, "token-mean")
-                        policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
+                        shared_additive_loss = kl_loss * self.config.kl_loss_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_loss_coef
+                    whole_coefficient, = torch.autograd.grad(
+                        whole_candidate_loss + shared_additive_loss,
+                        current_log_prob, retain_graph=True)
+                    original_coefficient, = torch.autograd.grad(
+                        original_candidate_loss + shared_additive_loss,
+                        current_log_prob, retain_graph=True)
+                    per_write_coefficient, = torch.autograd.grad(
+                        per_write_candidate_loss + shared_additive_loss,
+                        current_log_prob, retain_graph=True)
+                    if rwwpo_objective == "whole_prefix":
+                        policy_loss, rwwpo_metrics = whole_candidate_loss, whole_metrics
+                    elif rwwpo_objective == "per_write_joint":
+                        policy_loss, rwwpo_metrics = per_write_candidate_loss, per_write_metrics
+                    else:
+                        policy_loss, rwwpo_metrics = original_candidate_loss, whole_metrics
+                    policy_loss = policy_loss + shared_additive_loss
+                    active = response_mask
+                    coefficient_cosine = torch.nn.functional.cosine_similarity(
+                        whole_coefficient[active].reshape(1,-1),
+                        original_coefficient[active].reshape(1,-1)).item()
+                    def coefficient_pair(left, right):
+                        l = left[active].detach().double().flatten()
+                        r = right[active].detach().double().flatten()
+                        return {
+                            "max_abs": float((l-r).abs().max().item()),
+                            "relative_l2": float((l-r).norm().item() / max(l.norm().item(), 1e-30)),
+                            "cosine": float(torch.nn.functional.cosine_similarity(
+                                l.reshape(1,-1), r.reshape(1,-1)).item()),
+                        }
+                    shadow_coefficient_diagnostics = {
+                        "C_vs_B": coefficient_pair(original_coefficient, whole_coefficient),
+                        "C_vs_E": coefficient_pair(original_coefficient, per_write_coefficient),
+                        "B_vs_E": coefficient_pair(whole_coefficient, per_write_coefficient),
+                        "host_variant": str(rwwpo_config.get("cell", "legacy")),
+                        "host_point": ("behavior" if inner_id == 1 else (
+                            "off_behavior" if bool((rwwpo2_inner1_exposure or {}).get(
+                                "off_behavior_exposed",False)) else "behavior_unexposed")),
+                    }
+                    if rwwpo2_enabled and inner_id == 1:
+                        tolerance = float(rwwpo_config.get(
+                            "behavior_coefficient_tolerance", 1e-9
+                        ))
+                        if max(shadow_coefficient_diagnostics[name]["max_abs"]
+                               for name in ("C_vs_B", "C_vs_E", "B_vs_E")) > tolerance:
+                            raise RuntimeError("RWWPO2_BEHAVIOR_POINT_SHADOW_GRADIENT_MISMATCH")
+                    if rwwpo_collect_original or rwwpo_objective == "original_tokenwise":
+                        rwwpo_metrics["answer_clipfrac"] = original_clipfrac
+                        rwwpo_metrics["answer_ppo_kl"] = original_kl
+                        rwwpo_metrics["answer_clipfrac_lower"] = original_lower
                     if not torch.isfinite(policy_loss):
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite policy loss")
                     if not torch.isfinite(current_log_prob[response_mask]).all():
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite active-token log probability")
+                    def with_root_identities(prefix_rows):
+                        identities = joined("rwwpo_example_identity_hash").detach().cpu().tolist()
+                        sample_ids = joined("sample_index").detach().cpu().tolist()
+                        root_by_sample = {}
+                        for sid, root in zip(sample_ids, identities):
+                            if sid in root_by_sample and root_by_sample[sid] != root:
+                                raise RuntimeError("RWWPO2_ROOT_IDENTITY_DRIFT_WITHIN_TRAJECTORY")
+                            root_by_sample[sid] = root
+                        annotated = []
+                        for row in prefix_rows:
+                            if row["sample_index"] not in root_by_sample:
+                                raise RuntimeError("RWWPO2_PREFIX_ROOT_IDENTITY_MISSING")
+                            annotated.append({**row, "root_identity_hash": str(
+                                root_by_sample[row["sample_index"]])})
+                        return annotated
+                    q_min = float(rwwpo_config.get("q_min", 0.5))
+                    root_q_min = float(rwwpo_config.get("root_q_min", q_min))
+                    ratio_cap = float(rwwpo_config.get("writer_log_ratio_cap", 4.0))
                     def build_global_stats(prefix_rows):
+                        prefix_rows = with_root_identities(prefix_rows)
                         if torch.distributed.is_initialized():
                             gathered = [None] * torch.distributed.get_world_size()
                             torch.distributed.all_gather_object(gathered, prefix_rows)
                             prefix_rows = [row for rank_rows in gathered for row in rank_rows]
-                        result = []
-                        for turn in sorted({row["turn"] for row in prefix_rows}):
-                            turn_rows = [row for row in prefix_rows if row["turn"] == turn]
-                            values = torch.tensor([row["log_ratio"] for row in turn_rows], dtype=torch.float64)
-                            weights = torch.softmax(values, dim=0); count = len(values)
-                            chi2 = float((count * weights.square().sum() - 1).item())
-                            result.append({"turn": turn, "batch_size": count,
-                                "ess_fraction": 1.0 / (1.0 + chi2), "chi2": chi2,
-                                "max_abs_log_ratio": float(values.abs().max().item()),
-                                "mean_log_ratio": float(values.mean().item())})
-                        return result
-                    global_prefix_stats = build_global_stats(rwwpo_metrics["prefix_log_ratios"])
-                    q_min = float(rwwpo_config.get("q_min", 0.5))
-                    ratio_cap = float(rwwpo_config.get("writer_log_ratio_cap", 4.0))
+                        return prefix_distribution_stats(
+                            prefix_rows, q_min=q_min, root_q_min=root_q_min,
+                            log_ratio_cap=ratio_cap)
+                    local_prefix_rows = with_root_identities(rwwpo_metrics["prefix_log_ratios"])
+                    global_prefix_stats = build_global_stats(local_prefix_rows)
                     constraint_pass = rwwpo_collect_original or all(
-                        row["ess_fraction"] >= q_min and row["max_abs_log_ratio"] <= ratio_cap
+                        row["feasible"]
                         for row in global_prefix_stats)
-                    if rwwpo_enabled and not constraint_pass:
+                    if (rwwpo_enabled and rwwpo_controller != "none"
+                            and not constraint_pass):
                         self.actor_optimizer.zero_grad()
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
+                    def stream_parameter_gradient(coefficient):
+                        gradient_cursor = 0
+                        for micro_data, _, forward_rng in forwarded:
+                            restore_rng(forward_rng)
+                            _, live_log_prob = self._forward_micro_batch(
+                                micro_batch=micro_data, temperature=temperature,
+                                calculate_entropy=False)
+                            next_cursor = gradient_cursor + live_log_prob.shape[0]
+                            (live_log_prob * coefficient[
+                                gradient_cursor:next_cursor]).sum().backward()
+                            gradient_cursor = next_cursor
+                        if gradient_cursor != current_log_prob.shape[0]:
+                            raise RuntimeError("RWWPO_STREAMING_GRADIENT_ALIGNMENT_FAILURE")
+
+                    def current_parameter_gradient_sketch():
+                        values=torch.zeros(4,dtype=torch.float64,
+                                           device=torch.cuda.current_device())
+                        for parameter_index,parameter in enumerate(self.actor_module.parameters()):
+                            if parameter.grad is None:
+                                continue
+                            gradient=parameter.grad.detach().double().flatten()
+                            coordinate=torch.arange(
+                                gradient.numel(),device=gradient.device,dtype=torch.int64)
+                            alternating=((coordinate+parameter_index)&1).double().mul_(2).sub_(1)
+                            sawtooth=(((coordinate+17*parameter_index)%257).double()-128.0)/128.0
+                            values[0]+=gradient.square().sum()
+                            values[1]+=gradient.sum()
+                            values[2]+=(gradient*alternating).sum()
+                            values[3]+=(gradient*sawtooth).sum()
+                        if torch.distributed.is_initialized():
+                            torch.distributed.all_reduce(values,op=torch.distributed.ReduceOp.SUM)
+                        return {"l2":float(values[0].sqrt().item()),
+                                "sum":float(values[1].item()),
+                                "alternating_projection":float(values[2].item()),
+                                "sawtooth_projection":float(values[3].item())}
+
+                    shadow_parameter_gradient_sketches={}
+                    shadow_anchor = round_id in {
+                        int(value) for value in rwwpo_config.get("shadow_host_rounds", [])
+                    }
+                    r50_host_shadow = round_id <= int(
+                        rwwpo_config.get("r50_shadow_every_round_through", 0)
+                    )
+                    if rwwpo2_enabled and (shadow_anchor or r50_host_shadow):
+                        shadow_rng=rng_snapshot()
+                        for label,coefficient in (
+                                ("C",original_coefficient),("E",per_write_coefficient),
+                                ("B",whole_coefficient)):
+                            self.actor_optimizer.zero_grad()
+                            restore_rng(shadow_rng)
+                            stream_parameter_gradient(coefficient)
+                            shadow_parameter_gradient_sketches[label]=current_parameter_gradient_sketch()
+                        self.actor_optimizer.zero_grad()
+                        restore_rng(shadow_rng)
+                        if inner_id==1:
+                            tolerance=float(rwwpo_config.get("behavior_gradient_tolerance",1e-7))
+                            fields=("sum","alternating_projection","sawtooth_projection")
+                            control=shadow_parameter_gradient_sketches["C"]
+                            control_norm=max(sum(float(control[field])**2
+                                                 for field in fields)**0.5,1e-30)
+                            def projected_relative(left,right):
+                                return (sum((float(left[field])-float(right[field]))**2
+                                            for field in fields)**0.5/control_norm)
+                            if (max(projected_relative(
+                                    shadow_parameter_gradient_sketches[left],
+                                    shadow_parameter_gradient_sketches[right])
+                                   for left,right in (("C","E"),("C","B"),("B","E")))
+                                    > tolerance):
+                                raise RuntimeError("RWWPO2_BEHAVIOR_PARAMETER_GRADIENT_SKETCH_MISMATCH")
+
                     logprob_gradient, = torch.autograd.grad(policy_loss, current_log_prob)
                     if not torch.isfinite(logprob_gradient[response_mask]).all():
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite logprob gradient")
-                    gradient_cursor = 0
-                    for micro_data, _ in forwarded:
-                        _, live_log_prob = self._forward_micro_batch(
-                            micro_batch=micro_data, temperature=temperature,
-                            calculate_entropy=False)
-                        next_cursor = gradient_cursor + live_log_prob.shape[0]
-                        injected_loss = (live_log_prob *
-                                         logprob_gradient[gradient_cursor:next_cursor]).sum()
-                        injected_loss.backward()
-                        gradient_cursor = next_cursor
-                    if gradient_cursor != current_log_prob.shape[0]:
-                        raise RuntimeError("RWWPO_STREAMING_GRADIENT_ALIGNMENT_FAILURE")
-                    snapshot = self._snapshot_local_optimizer_step() if rwwpo_capture else None
+                    stream_parameter_gradient(logprob_gradient)
+                    snapshot = (self._snapshot_local_optimizer_step(include_scheduler=not rwwpo2_enabled)
+                                if rwwpo_capture else None)
                     pre_rng = rng_snapshot() if rwwpo_capture else None
-                    pre_digests = self._transaction_digests(snapshot, pre_rng) if rwwpo_capture else {}
+                    pre_digests = (self._transaction_digests(
+                        snapshot, pre_rng, scheduler_evidence=scheduler_evidence)
+                        if rwwpo_capture else {})
                     if rwwpo_enabled:
                         from recurrent.research.rwwpo_ledger import append_transaction_marker
                         append_transaction_marker(
                             ledger_dir=rwwpo_config.get("ledger_dir"),attempt_id=rwwpo_config.get("attempt_id"),
                             rank=rank,global_step=int(joined("rwwpo_global_step")[0].item()),epoch=epoch,
-                            minibatch=batch_idx,phase="intent",model_digest=pre_digests["model"])
+                            minibatch=batch_idx,phase="intent",model_digest=pre_digests["model"],
+                            inner_id=inner_id, proposal_clock=logical_proposal_id)
+                    transaction_optimizer_step_calls += 1
                     grad_norm = self._optimizer_step()
+                    if rwwpo2_enabled and transaction_optimizer_step_calls != 1:
+                        raise RuntimeError("RWWPO2_OPTIMIZER_STEP_COUNT_DRIFT")
                     if not torch.isfinite(grad_norm):
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite gradient norm")
                     post_log_prob = current_log_prob.detach()
                     post_prefix_stats = global_prefix_stats
-                    post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]
+                    post_prefix_rows = local_prefix_rows
                     accepted = True
                     alpha_committed = 1.0
                     trial_rows = []
@@ -575,18 +785,22 @@ class DataParallelPPOActor(BasePPOActor):
                                     writer_mask, final_mask, joined("sample_index"), joined("trajectory_turn"),
                                     self.config.clip_ratio, self.config.clip_ratio_low,
                                     self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
-                                    writer_log_ratio_cap=ratio_cap)
-                            stats = build_global_stats(trial_metrics["prefix_log_ratios"])
-                            feasible = all(row["ess_fraction"] >= q_min and
-                                           row["max_abs_log_ratio"] <= ratio_cap for row in stats)
+                                    writer_log_ratio_cap=ratio_cap,
+                                    writer_objective=(rwwpo_objective
+                                                      if rwwpo_objective != "original_tokenwise"
+                                                      else "whole_prefix"))
+                            trial_prefix_rows = with_root_identities(
+                                trial_metrics["prefix_log_ratios"])
+                            stats = build_global_stats(trial_prefix_rows)
+                            feasible = all(row["feasible"] for row in stats)
                             tested[alpha] = feasible
                             trial_rows.append({"alpha": alpha, "feasible": feasible,
-                                "log_prob": trial_log_prob.detach().cpu().tolist(),
-                                "prefix_rows": trial_metrics["prefix_log_ratios"], "prefix_stats": stats})
+                                "log_prob": trial_log_prob.detach().cpu(),
+                                "prefix_rows": trial_prefix_rows, "prefix_stats": stats})
                             if alpha == 1.0:
                                 full_log_prob = trial_log_prob.detach()
-                            if feasible and chosen_payload is None:
-                                chosen_payload = (trial_log_prob.detach(), trial_metrics["prefix_log_ratios"], stats)
+                            if (feasible or rwwpo_controller == "none") and chosen_payload is None:
+                                chosen_payload = (trial_log_prob.detach(), trial_prefix_rows, stats)
                             if rwwpo_controller == "feasible_backtracking" and feasible:
                                 # Descending fixed grid: this is the largest tested feasible point.
                                 break
@@ -602,8 +816,11 @@ class DataParallelPPOActor(BasePPOActor):
                             decision = next((a for a in candidates if tested.get(a)), 0.0)
                             alpha_committed = 0.0 if proposal_zero else float(decision)
                             accepted = alpha_committed > 0.0
-                        else:
+                        elif rwwpo_controller == "hard_rollback":
                             accepted = bool(tested[1.0]) and not proposal_zero
+                            alpha_committed = 1.0 if accepted else 0.0
+                        else:
+                            accepted = not proposal_zero
                             alpha_committed = 1.0 if accepted else 0.0
                         if accepted:
                             set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha_committed)
@@ -612,7 +829,7 @@ class DataParallelPPOActor(BasePPOActor):
                             self._restore_local_optimizer_step(snapshot)
                             restore_rng(pre_rng)
                             post_log_prob = current_log_prob.detach()
-                            post_prefix_rows = rwwpo_metrics["prefix_log_ratios"]
+                            post_prefix_rows = local_prefix_rows
                             post_prefix_stats = global_prefix_stats
                         # All ranks must make the same transactional decision.
                         if torch.distributed.is_initialized():
@@ -623,12 +840,19 @@ class DataParallelPPOActor(BasePPOActor):
                                 restore_rng(pre_rng)
                                 raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
                         commit_params = parameter_snapshot(self.actor_module)
-                        if accepted and self.actor_lr_scheduler is not None:
+                        if accepted and rwwpo2_enabled:
+                            for group in self.actor_optimizer.param_groups:
+                                group["rwwpo2_accepted_optimizer_clock"] = (
+                                    accepted_optimizer_clock_before + 1)
+                        if accepted and self.actor_lr_scheduler is not None and not rwwpo2_enabled:
                             self.actor_lr_scheduler.step()
+                        commit_scheduler_evidence = scheduler_evidence
                         commit_digests = {"model": digest(commit_params),
                                           "optimizer": digest(self.actor_optimizer.state_dict()),
-                                          "scheduler": digest(self.actor_lr_scheduler.state_dict())
-                                          if self.actor_lr_scheduler is not None else digest(None),
+                                          "scheduler": digest(commit_scheduler_evidence)
+                                          if rwwpo2_enabled else (
+                                              digest(self.actor_lr_scheduler.state_dict())
+                                              if self.actor_lr_scheduler is not None else digest(None)),
                                           "scaler": "not_applicable_bfloat16",
                                           "rng": digest(rng_snapshot())}
                         if not accepted and commit_digests != pre_digests:
@@ -644,12 +868,15 @@ class DataParallelPPOActor(BasePPOActor):
                                 writer_mask, final_mask, joined("sample_index"), joined("trajectory_turn"),
                                 self.config.clip_ratio, self.config.clip_ratio_low,
                                 self.config.clip_ratio_high, self.config.get("clip_ratio_c", 3.0),
-                                writer_log_ratio_cap=ratio_cap)
-                        post_prefix_rows = post_metrics["prefix_log_ratios"]
+                                writer_log_ratio_cap=ratio_cap,
+                                writer_objective=(rwwpo_objective
+                                                  if rwwpo_objective != "original_tokenwise"
+                                                  else "whole_prefix"))
+                        post_prefix_rows = with_root_identities(post_metrics["prefix_log_ratios"])
                         post_prefix_stats = build_global_stats(post_prefix_rows)
                         full_log_prob = post_log_prob
                         trial_rows = [{"alpha": 1.0, "feasible": True,
-                                       "log_prob": post_log_prob.detach().cpu().tolist(),
+                                       "log_prob": post_log_prob.detach().cpu(),
                                        "prefix_rows": post_prefix_rows, "prefix_stats": post_prefix_stats}]
                         accepted = not proposal_zero
                         alpha_committed = 1.0 if accepted else 0.0
@@ -661,11 +888,38 @@ class DataParallelPPOActor(BasePPOActor):
                                           "scaler": "not_applicable_bfloat16", "rng": digest(rng_snapshot())}
                         trial_forward_wall_seconds = 0.0
                     committed_displacement=displacement_norm(snapshot[0],commit_params)
+                    relative_committed_displacement=relative_displacement_norm(snapshot[0],commit_params)
                     if torch.distributed.is_initialized():
-                        squared=torch.tensor(committed_displacement**2,dtype=torch.float64,
-                                             device=torch.cuda.current_device())
-                        torch.distributed.all_reduce(squared,op=torch.distributed.ReduceOp.SUM)
-                        committed_displacement=float(squared.sqrt().item())
+                        displacement_values=torch.tensor([
+                            committed_displacement**2,
+                            sum(float(before.double().square().sum()) for before in snapshot[0]),
+                        ],dtype=torch.float64,device=torch.cuda.current_device())
+                        torch.distributed.all_reduce(displacement_values,op=torch.distributed.ReduceOp.SUM)
+                        committed_displacement=float(displacement_values[0].sqrt().item())
+                        relative_committed_displacement=float(
+                            displacement_values[0].sqrt().item() /
+                            max(displacement_values[1].sqrt().item(),1e-30))
+                    local_writer_mse_sum, local_writer_trajectory_count = (
+                        writer_logprob_rms_sufficient_statistics(
+                            post_log_prob, current_log_prob, writer_mask,
+                            joined("sample_index")))
+                    writer_sums=torch.tensor([
+                        local_writer_mse_sum, float(local_writer_trajectory_count),
+                    ],dtype=torch.float64,device=torch.cuda.current_device())
+                    if torch.distributed.is_initialized():
+                        torch.distributed.all_reduce(writer_sums,op=torch.distributed.ReduceOp.SUM)
+                    committed_writer_rms=float((writer_sums[0]/writer_sums[1]).sqrt().item())
+                    if rwwpo2_enabled and inner_id==1:
+                        rwwpo2_inner1_exposure={
+                            "relative_parameter_displacement": relative_committed_displacement,
+                            "writer_logprob_rms": committed_writer_rms,
+                            "off_behavior_exposed": off_behavior_exposed(
+                                relative_parameter_displacement=relative_committed_displacement,
+                                writer_logprob_rms_value=committed_writer_rms,
+                                tau_theta=float(rwwpo_config["tau_theta"]),
+                                tau_logprob=float(rwwpo_config["tau_logprob"]),
+                            ),
+                        }
                     from recurrent.research.rwwpo_ledger import append_actual_loss_record
                     behavior_point_max_delta=float((current_log_prob-old_log_prob)[response_mask].abs().max().item())
                     if torch.distributed.is_initialized():
@@ -678,6 +932,7 @@ class DataParallelPPOActor(BasePPOActor):
                         mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
                         global_step=int(joined("rwwpo_global_step")[0].item()), epoch=epoch,
                         minibatch=batch_idx, old_log_prob=old_log_prob, current_log_prob=current_log_prob,
+                        ref_log_prob=(joined("ref_log_prob") if rwwpo2_enabled else None),
                         proposed_post_log_prob=full_log_prob if rwwpo_enabled else post_log_prob,
                         committed_log_prob=post_log_prob, response_mask=response_mask,
                         writer_mask=writer_mask, answer_mask=rwwpo_metrics["answer_mask"],
@@ -685,8 +940,9 @@ class DataParallelPPOActor(BasePPOActor):
                         example_identity_hash=joined("rwwpo_example_identity_hash"),
                         trajectory_identity_hash=joined("rwwpo_trajectory_identity_hash"),
                         advantages=joined("advantages"), denominator=rwwpo_metrics["denominator"].item(),
-                        prefix_rows=rwwpo_metrics["prefix_log_ratios"], prefix_stats=global_prefix_stats,
+                        prefix_rows=local_prefix_rows, prefix_stats=global_prefix_stats,
                         post_prefix_rows=post_prefix_rows, post_prefix_stats=post_prefix_stats, q_min=q_min,
+                        root_q_min=root_q_min,
                         writer_log_ratio_cap=ratio_cap,
                         constraint_pass=constraint_pass, accepted=accepted,
                         objective_variant=rwwpo_objective, controller_variant=rwwpo_controller,
@@ -698,32 +954,92 @@ class DataParallelPPOActor(BasePPOActor):
                         pre_digests=pre_digests, commit_digests=commit_digests,
                         trial_forward_wall_seconds=trial_forward_wall_seconds if rwwpo_enabled else 0.0,
                         mechanism_diagnostics={
+                            "policy_loss": float(policy_loss.detach().item()),
+                            "surrogate_loss": float(
+                                (policy_loss - shared_additive_loss).detach().item()),
+                            "shared_kl_loss": float(shared_additive_loss.detach().item()),
+                            "actual_loss_contract": {
+                                "loss_agg_mode": str(self.config.loss_agg_mode),
+                                "cliprange": float(self.config.clip_ratio),
+                                "cliprange_low": float(
+                                    self.config.clip_ratio if self.config.clip_ratio_low is None
+                                    else self.config.clip_ratio_low),
+                                "cliprange_high": float(
+                                    self.config.clip_ratio if self.config.clip_ratio_high is None
+                                    else self.config.clip_ratio_high),
+                                "clip_ratio_c": float(self.config.get("clip_ratio_c", 3.0)),
+                                "writer_log_ratio_cap": float(ratio_cap),
+                                "use_kl_loss": bool(self.config.use_kl_loss),
+                                "kl_loss_type": str(self.config.kl_loss_type),
+                                "kl_loss_coefficient": float(self.config.kl_loss_coef),
+                                "entropy_coefficient": float(self.config.entropy_coeff),
+                            },
+                            "active_logprob_gradient_l2": float(
+                                logprob_gradient[response_mask].detach().double().norm().item()),
+                            "optimizer_step_calls": transaction_optimizer_step_calls,
                             "token_approx_kl": rwwpo_metrics["token_approx_kl"],
                             "token_clipfrac": rwwpo_metrics["token_clipfrac"],
                             "per_write_rows": rwwpo_metrics["per_write_rows"],
                             "per_write_stats": rwwpo_metrics["per_write_stats"],
                             "covariance_diagnostics": rwwpo_metrics["covariance_diagnostics"],
                             "whole_prefix_tokenwise_gradient_cosine": coefficient_cosine,
-                        }, gradient_norm=float(grad_norm.detach().item()))
+                            "shadow_coefficients": shadow_coefficient_diagnostics,
+                            "shadow_parameter_gradient_sketches": shadow_parameter_gradient_sketches,
+                            "host_variant": str(rwwpo_config.get("cell", "legacy")),
+                            "behavior_batch_digest": frozen_digest,
+                            "round_id": round_id,
+                            "inner_id": inner_id,
+                            "proposal_clock": logical_proposal_id,
+                            "proposal_lr": proposal_lr,
+                            "logical_seed": logical_seed,
+                            "accepted_optimizer_clock_before": accepted_optimizer_clock_before,
+                            "accepted_optimizer_clock_after": (
+                                accepted_optimizer_clock_before + int(bool(accepted))
+                                if accepted_optimizer_clock_before is not None else None),
+                            "inner1_exposure": rwwpo2_inner1_exposure,
+                        }, gradient_norm=float(grad_norm.detach().item()),
+                        program_version=("rwwpo2-k2" if rwwpo2_enabled else "legacy"),
+                        inner_id=inner_id, proposal_clock=logical_proposal_id,
+                        accepted_optimizer_clock_before=accepted_optimizer_clock_before,
+                        accepted_optimizer_clock_after=(
+                            accepted_optimizer_clock_before + int(bool(accepted))
+                            if accepted_optimizer_clock_before is not None else None),
+                        logical_seed=logical_seed,
+                        experiment_seed=int(rwwpo_config.get("experiment_seed", 2026)),
+                        host_variant=str(rwwpo_config.get("cell", "legacy")),
+                        behavior_batch_digest=frozen_digest)
                     if rwwpo_enabled:
                         append_transaction_marker(
                             ledger_dir=rwwpo_config.get("ledger_dir"),attempt_id=rwwpo_config.get("attempt_id"),
                             rank=rank,global_step=int(joined("rwwpo_global_step")[0].item()),epoch=epoch,
-                            minibatch=batch_idx,phase="complete",model_digest=commit_digests["model"])
+                            minibatch=batch_idx,phase="complete",model_digest=commit_digests["model"],
+                            inner_id=inner_id, proposal_clock=logical_proposal_id)
                     append_to_dict(metrics, {
                         "actor/pg_loss": policy_loss.detach().item(),
                         "actor/pg_clipfrac": rwwpo_metrics["answer_clipfrac"].detach().item(),
                         "actor/ppo_kl": rwwpo_metrics["answer_ppo_kl"].detach().item(),
                         "actor/pg_clipfrac_lower": rwwpo_metrics["answer_clipfrac_lower"].detach().item(),
                         "rwwpo/min_prefix_ess": min(row["ess_fraction"] for row in global_prefix_stats),
+                        "rwwpo/min_prefix_root_ess": min(
+                            row["root_ess_fraction"] for row in global_prefix_stats),
+                        "rwwpo/max_root_loo_flip_fraction": max(
+                            row["root_loo_feasibility_flip_fraction"]
+                            for row in global_prefix_stats),
                     })
                     append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item(),
                                              "rwwpo/update_accepted": float(accepted),
                                              "rwwpo/alpha_committed": float(alpha_committed),
                                              "rwwpo/post_min_prefix_ess": min(row["ess_fraction"] for row in post_prefix_stats),
+                                             "rwwpo/post_min_prefix_root_ess": min(
+                                                 row["root_ess_fraction"] for row in post_prefix_stats),
                                              "rwwpo/post_max_abs_prefix_log_ratio": max(row["max_abs_log_ratio"] for row in post_prefix_stats),
                                              "rwwpo/behavior_point_max_delta": behavior_point_max_delta,
-                                             "rwwpo/scheduler_managed_transactionally": 1.0})
+                                             "rwwpo/scheduler_managed_transactionally": float(not rwwpo2_enabled),
+                                             "rwwpo/proposal_clock": float(logical_proposal_id or 0),
+                                             "rwwpo/proposal_lr": float(proposal_lr or 0),
+                                             "rwwpo/off_behavior_exposed": float(
+                                                 bool((rwwpo2_inner1_exposure or {}).get(
+                                                     "off_behavior_exposed",False)))})
                     # The legacy non-RWWPO path appends its final scalar metric
                     # dictionary once more after the minibatch loop.  Do not let
                     # that epilogue see this branch's GPU minibatch container:

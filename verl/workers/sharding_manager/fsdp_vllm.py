@@ -95,6 +95,8 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         optimizer_state_entry_count: int,
         optimizer_step_entry_count: int,
         optimizer_step_histogram: dict[str, int],
+        optimizer_param_group_lrs: list[float],
+        rwwpo2_accepted_optimizer_clocks: list[int],
         lr_scheduler_last_epoch: int | None,
     ) -> None:
         """Enable one fail-closed digest/ack record for the next weight sync."""
@@ -108,6 +110,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             "optimizer_state_entry_count": int(optimizer_state_entry_count),
             "optimizer_step_entry_count": int(optimizer_step_entry_count),
             "optimizer_step_histogram": dict(optimizer_step_histogram),
+            "optimizer_param_group_lrs": [float(value) for value in optimizer_param_group_lrs],
+            "rwwpo2_accepted_optimizer_clocks": [
+                int(value) for value in rwwpo2_accepted_optimizer_clocks
+            ],
             "lr_scheduler_last_epoch": lr_scheduler_last_epoch,
         }
 

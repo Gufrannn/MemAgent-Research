@@ -444,6 +444,7 @@ def compute_rwwpo_policy_loss(
     cliprange_high=None,
     clip_ratio_c=3.0,
     writer_log_ratio_cap=4.0,
+    writer_objective="whole_prefix",
 ):
     """RWWPO writer-prefix surrogate plus unchanged final-answer token PPO.
 
@@ -453,6 +454,8 @@ def compute_rwwpo_policy_loss(
     Each trajectory contributes its last available writer-prefix ratio.  Prefix
     ESS/chi-square statistics are returned for every observed writer turn.
     """
+    if writer_objective not in ("whole_prefix", "per_write_joint"):
+        raise ValueError("RWWPO writer objective must be whole_prefix or per_write_joint")
     tensors = (old_log_prob, log_prob, advantages, response_mask, writer_mask)
     if any(t.shape != response_mask.shape for t in tensors):
         raise ValueError("RWWPO token tensors and masks must have identical shapes")
@@ -499,8 +502,10 @@ def compute_rwwpo_policy_loss(
         advantages[row][writer_mask[row]].mean() for row in writer_rows
     ])
     trajectory_losses = []
+    writer_trajectory_count = 0
     prefix_rows = []
     for sid in torch.unique(sample_index[writer_rows], sorted=True):
+        writer_trajectory_count += 1
         rows = writer_rows[sample_index[writer_rows] == sid]
         order = torch.argsort(trajectory_turn[rows], stable=True)
         rows = rows[order]
@@ -514,10 +519,17 @@ def compute_rwwpo_policy_loss(
             raise ValueError("RWWPO exact-match contract requires one scalar advantage per trajectory")
         final_row = rows[-1]
         final_adv = advantages[final_row][writer_mask[final_row]].mean()
-        trajectory_losses.append(
-            -torch.exp(torch.clamp(prefix_log_ratio[-1], -writer_log_ratio_cap,
-                                   writer_log_ratio_cap)) * final_adv
-        )
+        if writer_objective == "whole_prefix":
+            trajectory_losses.append(
+                -torch.exp(torch.clamp(prefix_log_ratio[-1], -writer_log_ratio_cap,
+                                       writer_log_ratio_cap)) * final_adv
+            )
+        else:
+            trajectory_losses.extend(
+                -torch.exp(torch.clamp(writer_row_log_ratio[row], -writer_log_ratio_cap,
+                                       writer_log_ratio_cap)) * final_adv
+                for row in rows
+            )
         prefix_token_count = torch.cumsum(writer_mask[rows].sum(dim=-1), dim=0)
         for turn, value, tokens in zip(turns, prefix_log_ratio, prefix_token_count):
             prefix_rows.append((int(turn.item()), value, int(sid.item()), int(tokens.item())))
@@ -584,7 +596,8 @@ def compute_rwwpo_policy_loss(
         "answer_ppo_kl": answer_kl,
         "answer_clipfrac_lower": answer_clipfrac_lower,
         "denominator": denominator.detach(),
-        "writer_trajectory_count": len(trajectory_losses),
+        "writer_trajectory_count": writer_trajectory_count,
+        "writer_objective": writer_objective,
         "prefix_stats": prefix_stats,
         "per_write_rows": per_write_rows,
         "per_write_stats": per_write_stats,

@@ -65,6 +65,10 @@ def _optimizer_step_evidence(optimizer):
             continue
         step = state["step"]
         steps.append(int(step.item() if hasattr(step, "item") else step))
+    accepted_clocks = sorted({
+        int(group.get("rwwpo2_accepted_optimizer_clock", 0))
+        for group in optimizer.param_groups
+    })
     return {
         "optimizer_state_entry_count": len(optimizer.state),
         "optimizer_step_entry_count": len(steps),
@@ -73,6 +77,8 @@ def _optimizer_step_evidence(optimizer):
         "optimizer_step_histogram": {
             str(step): count for step, count in sorted(Counter(steps).items())
         },
+        "optimizer_param_group_lrs": [float(group["lr"]) for group in optimizer.param_groups],
+        "rwwpo2_accepted_optimizer_clocks": accepted_clocks,
     }
 
 
@@ -553,9 +559,18 @@ class ActorRolloutRefWorker(Worker):
 
             # Prefix-certified transactions advance the scheduler inside the
             # same commit/rollback boundary as model and optimizer state.
-            if not self.config.actor.get("rwwpo", {}).get("enable", False):
+            rwwpo_cfg = self.config.actor.get("rwwpo", {})
+            rwwpo2_enabled = bool(rwwpo_cfg.get("enable", False) and
+                                  str(rwwpo_cfg.get("program_version", "")) == "rwwpo2-k2")
+            if not rwwpo_cfg.get("enable", False):
                 self.actor_lr_scheduler.step()
-            lr = self.actor_lr_scheduler.get_last_lr()[0]
+            if rwwpo2_enabled:
+                param_group_lrs = {float(group["lr"]) for group in self.actor_optimizer.param_groups}
+                if len(param_group_lrs) != 1:
+                    raise RuntimeError("RWWPO2_PARAM_GROUP_LR_DRIFT_AFTER_UPDATE")
+                lr = next(iter(param_group_lrs))
+            else:
+                lr = self.actor_lr_scheduler.get_last_lr()[0]
             metrics["actor/lr"] = lr
 
             # TODO: here, we should return all metrics
@@ -625,6 +640,10 @@ class ActorRolloutRefWorker(Worker):
             optimizer_state_entry_count=optimizer_evidence["optimizer_state_entry_count"],
             optimizer_step_entry_count=optimizer_evidence["optimizer_step_entry_count"],
             optimizer_step_histogram=optimizer_evidence["optimizer_step_histogram"],
+            optimizer_param_group_lrs=optimizer_evidence["optimizer_param_group_lrs"],
+            rwwpo2_accepted_optimizer_clocks=optimizer_evidence[
+                "rwwpo2_accepted_optimizer_clocks"
+            ],
             lr_scheduler_last_epoch=(
                 int(self.actor_lr_scheduler.last_epoch) if self.actor_lr_scheduler is not None else None
             ),
@@ -713,6 +732,17 @@ class ActorRolloutRefWorker(Worker):
         torch.distributed.barrier()
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def save_model_checkpoint_only(self, local_path):
+        """Save an immutable actor-only scientific anchor on every FSDP rank."""
+        assert self._is_actor
+        if self._is_offload_param:
+            load_fsdp_model_to_gpu(self.actor_module_fsdp)
+        acknowledgement = self.checkpoint_manager.save_model_checkpoint_only(local_path)
+        if self._is_offload_param:
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+        return acknowledgement
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=False):

@@ -2,9 +2,10 @@
 import argparse, hashlib, json, re, statistics, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.h20.audit_rwwpo_actual_loss import audit
+from tools.h20.audit_rwwpo_actual_loss import audit,hydrate_authenticated_v3_receipt
 from recurrent.research.gate_a_execution import validate_jsonl_chain,checkpoint_inventory
 from recurrent.research.actor_batch import stable_identity_int64
+from recurrent.research.rwwpo_ledger import tensor_shard_inventory
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--run-root",required=True); p.add_argument("--actual-ledger-dir",required=True); p.add_argument("--execution-ledger",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--expected-schema-version",required=True); p.add_argument("--expected-objective",required=True); p.add_argument("--expected-controller",required=True); p.add_argument("--target-step",type=int,required=True); p.add_argument("--output",required=True); a=p.parse_args()
@@ -21,7 +22,12 @@ def main():
     if actual.get("controller_variants")!=[a.expected_controller]: raise SystemExit("RWWPO_AUDIT_NO_GO:controller identity")
     actual_rows=[]
     for ledger in ledgers:
-        actual_rows.extend(json.loads(line) for line in ledger.read_text().splitlines() if line.strip())
+        for line in ledger.read_text().splitlines():
+            if not line.strip(): continue
+            receipt=json.loads(line)
+            actual_rows.append(hydrate_authenticated_v3_receipt(receipt,ledger)
+                               if receipt.get("schema_version")=="rwwpo-actual-loss-v3"
+                               else receipt)
     seed_path=Path(a.run_root)/"rollout_seed_audit.jsonl"
     if not seed_path.is_file(): raise SystemExit("RWWPO_AUDIT_NO_GO:stable rollout identity ledger")
     seed_rows=[json.loads(line) for line in seed_path.read_text().splitlines() if line.strip()]
@@ -62,6 +68,13 @@ def main():
                 raise SystemExit("RWWPO_AUDIT_NO_GO:transaction marker chain")
             previous=declared
             identity=tuple(record[key] for key in ("attempt_id","rank","global_step","epoch","minibatch"))
+            if a.expected_schema_version=="rwwpo-actual-loss-v3":
+                actual_row=actual_identities.get(identity)
+                if actual_row is None or record.get("schema_version")!="rwwpo-transaction-v2":
+                    raise SystemExit("RWWPO_AUDIT_NO_GO:RWWPO-2 marker schema/identity")
+                if (int(record.get("inner_id",0))!=int(actual_row["inner_id"]) or
+                        int(record.get("proposal_clock",0))!=int(actual_row["proposal_clock"])):
+                    raise SystemExit("RWWPO_AUDIT_NO_GO:RWWPO-2 marker proposal coordinate")
             if record["phase"]=="intent":
                 if pending is not None: raise SystemExit("RWWPO_AUDIT_NO_GO:nested transaction intent")
                 pending=identity
@@ -88,6 +101,12 @@ def main():
     inventories=[row for row in events if row.get("record_type")=="checkpoint_inventory" and row.get("global_step")==a.target_step]
     current_inventory=checkpoint_inventory(ck)
     if not inventories or inventories[-1].get("inventory")!=current_inventory: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint inventory")
+    if a.expected_schema_version=="rwwpo-actual-loss-v3":
+        start_round=min(int(row["global_step"]) for row in actual_rows)
+        tensor_inventory=tensor_shard_inventory(
+            a.actual_ledger_dir,start_round=start_round,through_round=a.target_step)
+        if inventories[-1].get("rwwpo_tensor_inventory")!=tensor_inventory:
+            raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint tensor-shard inventory")
     anchors=inventories[-1].get("rwwpo_ledger_anchors",{})
     expected_anchor_names={f"{kind}_rank{rank}.jsonl" for kind in ("actual_loss","transaction") for rank in (0,1)}
     if set(anchors)!=expected_anchor_names: raise SystemExit("RWWPO_AUDIT_NO_GO:checkpoint ledger anchors")

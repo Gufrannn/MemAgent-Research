@@ -75,14 +75,17 @@ def _one_reference(prediction: str, reference: str) -> dict[str, float]:
     pred = normalize_answer(prediction)
     gold = normalize_answer(reference)
     if not pred or not gold:
-        return {"exact_match": 0.0, "token_f1": 0.0, "sub_exact_match": 0.0}
+        return {
+            "exact_match": 0.0, "token_f1": 0.0,
+            "precision": 0.0, "recall": 0.0, "sub_exact_match": 0.0,
+        }
     exact = float(pred == gold)
     pred_tokens, gold_tokens = pred.split(), gold.split()
     common = sum(
         (collections.Counter(pred_tokens) & collections.Counter(gold_tokens)).values()
     )
     if common == 0:
-        f1 = 0.0
+        precision = recall = f1 = 0.0
     else:
         precision = common / len(pred_tokens)
         recall = common / len(gold_tokens)
@@ -90,7 +93,11 @@ def _one_reference(prediction: str, reference: str) -> dict[str, float]:
     # Historical diagnostic only.  Explicit non-empty guards avoid the Python
     # truth that "" is a substring of every answer.
     sub_em = float(bool(pred and gold) and (pred in gold or gold in pred))
-    return {"exact_match": exact, "token_f1": f1, "sub_exact_match": sub_em}
+    return {
+        "exact_match": exact, "token_f1": f1,
+        "precision": precision, "recall": recall,
+        "sub_exact_match": sub_em,
+    }
 
 
 def score_terminal_output(output: object, ground_truth: object) -> dict[str, Any]:
@@ -99,13 +106,56 @@ def score_terminal_output(output: object, ground_truth: object) -> dict[str, Any
     candidates = [_one_reference(prediction, reference) for reference in references]
     if not candidates:
         candidates = [_one_reference("", "")]
+    # Precision/recall decompose the same reference choice that realizes F1;
+    # they are not independently maximized across aliases.
+    selected = max(
+        candidates,
+        key=lambda item: (
+            item["token_f1"], item["exact_match"],
+            item["precision"], item["recall"],
+        ),
+    )
     return {
         "prediction": prediction,
         "extraction_route": route,
         "format_success": float(format_success),
         "exact_match": max(item["exact_match"] for item in candidates),
         "token_f1": max(item["token_f1"] for item in candidates),
+        "precision": selected["precision"],
+        "recall": selected["recall"],
         "sub_exact_match": max(item["sub_exact_match"] for item in candidates),
+    }
+
+
+def summarize_hotpot_metrics(
+    rows: Sequence[Mapping[str, Any]], *, expected_denominator: int
+) -> dict[str, float | int]:
+    """Macro metrics over an exact, predeclared denominator."""
+    denominator = int(expected_denominator)
+    if denominator < 1 or len(rows) != denominator:
+        raise ValueError(
+            f"metric denominator must be exactly {denominator}, got {len(rows)}"
+        )
+    required = (
+        "exact_match", "token_f1", "precision", "recall",
+        "format_success", "sub_exact_match",
+    )
+    for index, row in enumerate(rows):
+        missing = [name for name in required if name not in row]
+        if missing:
+            raise ValueError(f"metric row {index} is missing {missing}")
+    return {
+        "denominator": denominator,
+        "normalized_exact_match": sum(float(row["exact_match"]) for row in rows)
+        / denominator,
+        "token_f1": sum(float(row["token_f1"]) for row in rows) / denominator,
+        "precision": sum(float(row["precision"]) for row in rows) / denominator,
+        "recall": sum(float(row["recall"]) for row in rows) / denominator,
+        "format_success": sum(float(row["format_success"]) for row in rows)
+        / denominator,
+        "historical_sub_exact_match_diagnostic": sum(
+            float(row["sub_exact_match"]) for row in rows
+        ) / denominator,
     }
 
 
@@ -117,6 +167,8 @@ def summarize_fixed_s128(rows: Sequence[Mapping[str, Any]]) -> dict[str, float |
         missing = [name for name in required if name not in row]
         if missing:
             raise ValueError(f"metric row {index} is missing {missing}")
+    # Preserve the certified S128 aggregate surface exactly. Precision/recall
+    # are available on rows but are not retroactively added to old reports.
     return {
         "denominator": 128,
         "normalized_exact_match": sum(float(row["exact_match"]) for row in rows) / 128,
