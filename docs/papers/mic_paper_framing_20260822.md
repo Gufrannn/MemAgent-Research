@@ -1,14 +1,15 @@
 # Paper II framing: Materialized Memory Innovation Credit
 
-Status: **REFRAME; Method execution GO after E0 and independent review.** This document is a
-preregistration and paper skeleton, not a statement of positive MIC results.
+Status: **REFRAME; early-budget single-seed pilot complete, final paper claim not
+established.** This document is a paper skeleton and claim-boundary record, not
+a statement that MIC converged or outperformed Original.
 
 ## Working title
 
 **Credit at the State Boundary: Leakage-Audited Innovation Critics for
 Recurrent Text Memory**
 
-## Abstract (205 words)
+## Abstract (234 words)
 
 Recurrent language agents repeatedly overwrite a free-text memory before
 answering a question. Existing outcome-based training commonly broadcasts one
@@ -29,10 +30,10 @@ machine precision. We state conditions under which the oracle increments are
 valid control variates and characterize approximation-error terms; we do not
 claim that Doob decomposition itself is new. Before training, an oracle toy MDP
 must show exact closure and absence of leakage. Method on-policy trajectories
-then provide falsifiable OOF mechanism diagnostics without requiring unavailable
-Original internals. We will
-compare fresh-from-base training under an identical budget at five checkpoints;
-otherwise the method is rejected. Results are intentionally left pending.
+provide falsifiable OOF mechanism diagnostics without Original internals. A
+fresh-base, 25-update run is an early-budget pilot, not evidence of convergence.
+Its fixed-S128 outputs are development evidence; a sealed test and E1
+certificate remain pending.
 
 ## 1. Introduction
 
@@ -116,10 +117,13 @@ turn/length baselines, a conventional scalar value critic, non-cross-fitted
 diagnostic fitting, shuffled states, MIC without answer-residual separation, and
 the full method. All methods use the same data order, samples, reward, tokenizer,
 rollout budget, and checkpoints. Performance is independently recomputed on the
-frozen S128 predictions using normalized exact match, token F1, and format
+fixed S128 predictions using normalized exact match, token F1, and format
 validity; critic losses and dense diagnostics are never reported as task
-performance. External validity is tested on a small frozen variable-tracking
-suite that stresses early deletion and late recovery.
+performance. Because all five MIC and Original S128 anchor aggregates have now
+been viewed, S128 is explicitly downgraded to an adaptive development benchmark.
+It cannot serve as a blind final test. External validity and final performance
+require newly sealed, content-deduplicated data that remain untouched until the
+T25 checkpoint and manifest are frozen.
 
 Our intended contributions are therefore conditional rather than asserted:
 
@@ -131,7 +135,9 @@ Our intended contributions are therefore conditional rather than asserted:
    critic claim without requiring Original-internal tensors.
 4. A same-budget five-anchor study of whether
    materialization-aligned credit improves performance or writer-gradient
-   variance. Numerical results remain `[PENDING E0/T5/T25/E1]`.
+   variance. E0 and the 25-update run are complete; E1, a sealed held-out test,
+   and multi-seed confirmation remain pending. No convergence or superiority
+   claim is currently licensed.
 
 ## 2. Problem formulation and propositions
 
@@ -266,8 +272,10 @@ not reproduced by simpler turn/length or conventional value baselines.
 ### E1: frozen Method on-policy trajectories
 
 The input bundle must be read-only and hash-authenticated. E1 is feasibility,
-not performance training. Fold assignment is stable-root grouped. Models and
-hyperparameters are selected without fixed-S128 task performance.
+not performance training. Fold assignment is stable-root grouped. The recorded
+run used its frozen hyperparameters without in-run S128 validation or early
+stopping. Pre-run human hyperparameter provenance is not completely certified,
+and subsequent S128 exposure makes it inadmissible for future model selection.
 
 | Table/figure | Rows | Columns / curves |
 |---|---|---|
@@ -296,6 +304,41 @@ not absorb all signal; machine-precision closure. Failure of prediction power is
 | Turn/length critic | `[pending]` | | | | | | |
 | Standard scalar value critic | `[pending]` | | | | | | |
 | MIC | `[pending]` | | | | | | |
+
+### Training-budget and benchmark-use boundary (post-run audit)
+
+The T25 checkpoint is an **early-budget pilot**. The frozen configuration has
+25 actor optimizer updates, four prompt groups per update, two independent
+rollouts per group, one PPO epoch, and one global PPO minibatch per update. This
+is 100 rollout groups and 200 trajectories. The MIC critic has no neural
+optimizer: it is cumulatively refit once per actor update using four
+stable-root folds (25 closed-form refits and, when all folds are occupied, 100
+ridge solves). Actual writer-turn and writer/answer-token counts must be read
+from the immutable T25 critic checkpoint and delivery ledger; they are not
+inferred from `max_chunks`.
+
+No training validation or performance early stopping ran (`val_before_train`
+false, `test_freq=-1`, fixed 25 updates). This prevents within-run
+checkpoint-selection leakage, but it does not establish convergence. It also
+does not repair adaptive benchmark use: researchers have inspected all five
+S128 Method aggregates and the Original curve. Accordingly S128 is now a
+development benchmark. Any claim of blind held-out evaluation, sufficient
+training, convergence, or population-level superiority/failure is forbidden.
+
+The read-only scientific audit hashes question, context, and ground truth for
+every actor-training and S128 row, reconstructs the exact actor/critic subset
+from the rollout seed ledger, and reports `train∩S128`, `critic-fit∩S128`, and
+adaptive-selection exposure. The authoritative H20 output is
+`$MIC_ROOT/certificates/scientific_evidence_audit.json`; overlap counts remain
+`PENDING` until that certificate is produced. The adaptive-use disclosure is
+`docs/papers/mic_adaptive_use_disclosure_20260823.json`.
+
+For the next final test, an independent operator must first freeze a manifest
+for an untouched, content-hash-deduplicated set disjoint from training, critic
+fitting, S128, and all selection data. The manifest SHA is committed before any
+generation. Only the already-frozen T25 checkpoint is evaluated, once, without
+per-anchor reveal or tuning. A separate preregistered MuSiQue/2WikiMultiHopQA
+evaluation is required for external validity.
 
 Required ablations: non-cross-fitted diagnostic (never a legal method), shuffled
 materialized states, pre-write rather than post-write state, MIC without answer
@@ -338,5 +381,8 @@ commit, manifest, experiment name, output root, and ledger; no result overwrite.
    include uninformative states, endogenous chunk selection, related-ID leakage,
    and answer-side compensation.
 
-Current decision: **REFRAME / METHOD EXECUTION GO**. E1 remains a falsifiable
-on-policy mechanism diagnostic rather than a dependency on Original internals.
+Current decision: **REFRAME / EARLY-BUDGET PILOT ONLY**. E1 remains a
+falsifiable on-policy mechanism diagnostic rather than a dependency on Original
+internals. The current S128 comparison is descriptive development evidence;
+paper-level performance claims require the sealed held-out and multi-seed work
+above.

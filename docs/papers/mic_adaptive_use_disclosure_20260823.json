@@ -1,0 +1,25 @@
+{
+  "schema": "memagent.mic.adaptive-use-disclosure.v1",
+  "classification": "ADAPTIVE_DEVELOPMENT_BENCHMARK",
+  "s128_rows_exposed": 128,
+  "facts": [
+    "Fixed-S128 aggregate metrics were inspected for MIC anchors T5, T10, T15, T20, and T25.",
+    "The certified Original fixed-S128 five-anchor curve was inspected for comparison.",
+    "Evaluation infrastructure was repaired after observing entry failures, although no MIC retraining followed the revealed task metrics in the recorded run.",
+    "Regardless of whether a particular repair changed scientific hyperparameters, this exposure disqualifies S128 as a blind final test for subsequent claims."
+  ],
+  "allowed_claim": "paired descriptive development-benchmark evidence for the frozen single-seed run",
+  "forbidden_claims": [
+    "blind held-out final test",
+    "unbiased final benchmark estimate",
+    "converged or sufficiently trained performance",
+    "population-level superiority or failure"
+  ],
+  "next_test": {
+    "status": "REQUIRED",
+    "design": "Before revealing any new outputs, an independent operator must freeze a content-hash-deduplicated set disjoint from actor training, critic fitting, S128, and all selection examples. Commit the manifest SHA first; evaluate only the already-frozen T25 checkpoint once. Use no per-anchor reveal or tuning.",
+    "recommended_primary_size": 512,
+    "recommended_source": "previously untouched HotpotQA development remainder or an independently sourced held-out split",
+    "external_validity": "Separately freeze MuSiQue and 2WikiMultiHopQA adapters and manifests before any model output is viewed."
+  }
+}
