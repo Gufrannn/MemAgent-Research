@@ -200,16 +200,24 @@ class OrchestrationTests(unittest.TestCase):
         forged=self.root/"forged-overlap.json"
         dump(forged,{"status":"PASS","decision":"PRD_DATA_OVERLAP_PASS","evidence":{"git_commit":self.commit}})
         self.assertNoGo(lambda: gate.verify_data_overlap(forged,self.commit), "invalid PRD_DATA_OVERLAP_PASS")
+        declared={"train_pool_and_s128_content":0,"train_pool_and_s128_root":0,
+                  "critic_fit_and_s128":0,"selection_and_s128":128}
+        actual=dict(declared); actual["train_pool_and_s128_content"]=1
+        self.assertNoGo(lambda: gate.require_recomputed_overlap(declared,actual), "independent P0 recomputation")
 
     def test_missing_or_duplicate_root_identity_is_rejected(self):
         with self.assertRaises(ValueError): overlap.root_id({"extra_info":{}})
         with self.assertRaises(ValueError): overlap.root_id({"extra_info":{"index":"7"}})
+        with self.assertRaises(ValueError): overlap.validated_root_ids([
+            {"extra_info":{"index":7}},{"extra_info":{"index":7}}])
 
     def test_training_entry_rechecks_bound_data_hashes(self):
         entry=(REPO/"scripts/h20/run_qwen25_7b_prd_memrl.sh").read_text()
         self.assertIn('sources=run["data_overlap"]["sources"]',entry)
         self.assertIn('hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]',entry)
         self.assertIn('TRAIN=/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet',entry)
+        self.assertIn('hashlib.sha256(p0_path.read_bytes()).hexdigest()==run["p0_sha256"]',entry)
+        self.assertIn('p0["evidence"]["data_overlap"]==run["data_overlap"]',entry)
 
 
 if __name__ == "__main__": unittest.main()

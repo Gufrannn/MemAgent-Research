@@ -131,7 +131,14 @@ def verify_pass(path: Path, decision: str, commit: str) -> None:
         raise SystemExit(f"PRD_NO_GO invalid {decision} certificate")
 
 
+def require_recomputed_overlap(declared: dict, recomputed: dict) -> None:
+    if declared != recomputed:
+        raise SystemExit("PRD_NO_GO overlap certificate disagrees with independent P0 recomputation")
+
+
 def verify_data_overlap(path: Path, commit: str) -> dict:
+    from tools.h20.audit_prd_data_overlap import compute_intersections
+    from tools.h20.preflight_qwen25_7b_stable_i4x2 import _load_parquet_rows
     payload = json.loads(path.read_text())
     evidence, sources = payload.get("evidence", {}), payload.get("sources", {})
     train, fixed = sources.get("train", {}), sources.get("fixed_s128_validation", {})
@@ -158,6 +165,9 @@ def verify_data_overlap(path: Path, commit: str) -> dict:
                                 (expected_stable, fixed.get("resolved_sha256"))):
         if not candidate.is_file() or candidate.is_symlink() or sha256(candidate) != recorded:
             raise SystemExit(f"PRD_NO_GO data identity drift after overlap audit: {candidate}")
+    stable_payload = json.loads(expected_stable.read_text())
+    recomputed = compute_intersections(_load_parquet_rows(expected_train), stable_payload["identity_payload"]["rows"])
+    require_recomputed_overlap(intersections, recomputed)
     return payload
 
 

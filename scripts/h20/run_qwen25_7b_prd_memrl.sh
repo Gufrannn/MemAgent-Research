@@ -125,7 +125,7 @@ case "$ACTION" in
     [[ $ACTION == recover-from-t5 ]] && stage=continue
     "$PRD_PYTHON" - "$PRD_RUN_ROOT/resolved_run.json" "$PRD_RUN_ROOT/frontier/$cid/launch_${stage}.json" "$RUN_ID" "$EXPECTED_COMMIT" "$GPU_PAIR" "$CAPACITY_NATS" "$PRD_PRIOR_MODEL" "$PRD_BASE_MODEL" <<'PY'
 import hashlib,json,pathlib,sys
-run=json.load(open(sys.argv[1])); launch=json.load(open(sys.argv[2]))
+run_path=pathlib.Path(sys.argv[1]); run=json.load(open(run_path)); launch=json.load(open(sys.argv[2]))
 assert run["run_id"]==sys.argv[3] and run["git_commit"]==sys.argv[4]
 assert run["gpu_pair"]==sys.argv[5] and launch["gpu_pair"]==sys.argv[5]
 assert float(launch["capacity_nats"])==float(sys.argv[6])
@@ -138,6 +138,13 @@ for root,model in ((prior,frozen),(base,run["base_model"])):
   p=root/item["path"]; assert p.is_file() and not p.is_symlink() and p.stat().st_size==item["size"]
   assert hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]
 assert launch["data_overlap"]==run["data_overlap"]
+p0_path=pathlib.Path(run["p0_path"]); assert p0_path.is_file() and not p0_path.is_symlink()
+assert hashlib.sha256(p0_path.read_bytes()).hexdigest()==run["p0_sha256"]
+p0=json.loads(p0_path.read_text()); assert p0["status"]=="PASS" and p0["decision"]=="PRD_P0_PASS"
+assert p0["evidence"]["data_overlap"]==run["data_overlap"]
+overlap_cert=pathlib.Path(run["data_overlap"]["certificate_path"])
+assert overlap_cert.is_file() and not overlap_cert.is_symlink()
+assert hashlib.sha256(overlap_cert.read_bytes()).hexdigest()==run["data_overlap"]["certificate_sha256"]
 sources=run["data_overlap"]["sources"]
 for item in (sources["train"],sources["fixed_s128_validation"]):
  p=pathlib.Path(item["path"]); assert p.is_file() and not p.is_symlink()
