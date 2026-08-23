@@ -9,6 +9,7 @@ readonly ACTION=${1:-}
 readonly E0_CERT=$PRD_CERT_ROOT/e0.json
 readonly E1_CERT=$PRD_CERT_ROOT/e1.json
 readonly PAPER_CERT=$PRD_CERT_ROOT/paper_review.json
+readonly DATA_OVERLAP_CERT=$PRD_CERT_ROOT/data_overlap.json
 readonly P0_CERT=$PRD_CERT_ROOT/p0.json
 
 case "$ACTION" in
@@ -21,6 +22,13 @@ case "$ACTION" in
     [[ ! -e $E1_CERT ]] || prd_die 'E1 certificate already exists; use a new RUN_ID'
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" e1 --rows "$E1_ROWS" --output "$E1_CERT"
     ;;
+  data-overlap)
+    [[ ${TRAIN_PARQUET:-} == /data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet ]] || prd_die 'canonical TRAIN_PARQUET required'
+    [[ ${VALIDATION_PARQUET:-} == /data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet ]] || prd_die 'canonical VALIDATION_PARQUET required'
+    [[ ! -e $DATA_OVERLAP_CERT ]] || prd_die 'data overlap certificate already exists; use a new RUN_ID'
+    "$PRD_PYTHON" "$PRD_REPO/tools/h20/audit_prd_data_overlap.py" --train "$TRAIN_PARQUET" --validation "$VALIDATION_PARQUET" \
+      --stable-resolved /data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json --output "$DATA_OVERLAP_CERT"
+    ;;
   preflight)
     [[ ${PRD_PRIOR_MODEL:-} == /* ]] || prd_die 'PRD_PRIOR_MODEL must be explicit for P0'
     [[ ${PRD_BASE_MODEL:-} == /data/cw/memagent_work/models/Qwen2.5-7B-Instruct ]] || prd_die 'PRD_BASE_MODEL must be the canonical 7B path'
@@ -28,7 +36,7 @@ case "$ACTION" in
     [[ ! -e $P0_CERT ]] || prd_die 'P0 certificate already exists; use a new RUN_ID'
     "$PRD_PYTHON" "$PRD_REPO/tools/h20/prd_memrl_gate.py" preflight \
       --expected-commit "$EXPECTED_COMMIT" --gpu-pair "$GPU_PAIR" --e0 "$E0_CERT" \
-      --paper-review "$PAPER_CERT" --prior-model "$PRD_PRIOR_MODEL" --base-model "$PRD_BASE_MODEL" \
+      --paper-review "$PAPER_CERT" --data-overlap "$DATA_OVERLAP_CERT" --prior-model "$PRD_PRIOR_MODEL" --base-model "$PRD_BASE_MODEL" \
       --original-training-resolved "$ORIGINAL_TRAINING_RESOLVED" --output "$P0_CERT"
     ;;
   bind)
@@ -146,5 +154,5 @@ PY
       PRD_PRIOR_MODEL="$PRD_PRIOR_MODEL" \
       bash "$PRD_REPO/experiments/7b_gate_a/run_gate_a.sh"
     ;;
-  *) prd_die 'unknown action (expected e0/e1/preflight/bind/prepare-run/prepare-continuation/produce-s128/evaluate/final-audit/train-t25/recover-from-t5)' ;;
+  *) prd_die 'unknown action (expected e0/e1/data-overlap/preflight/bind/prepare-run/prepare-continuation/produce-s128/evaluate/final-audit/train-t25/recover-from-t5)' ;;
 esac

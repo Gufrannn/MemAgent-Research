@@ -53,6 +53,20 @@
     "original_step3_warm_start_forbidden": true,
     "anchors": [5, 10, 15, 20, 25]
   },
+  "budget_interpretation": {
+    "status": "EARLY_BUDGET_PILOT_NOT_CONVERGENCE",
+    "global_updates_per_capacity": 25,
+    "prompt_groups_per_update": 4,
+    "rollouts_per_group": 2,
+    "total_prompt_groups": 100,
+    "total_trajectories": 200,
+    "ppo_epochs": 1,
+    "actor_optimizer_updates": 25,
+    "critic_fit_updates": 0,
+    "prior_optimizer_updates": 25,
+    "dual_updates": 25,
+    "writer_turns_and_tokens": "PENDING_H20_EXECUTION_LEDGER"
+  },
   "method_whitelist": [
     "actor_rollout_ref.actor.prd_memrl",
     "prd_prior",

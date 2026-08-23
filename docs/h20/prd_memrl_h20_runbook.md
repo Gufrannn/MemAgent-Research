@@ -53,6 +53,7 @@ else
 fi
 
 scripts/h20/run_qwen25_7b_prd_memrl.sh e0
+scripts/h20/run_qwen25_7b_prd_memrl.sh data-overlap
 $PRD_PYTHON tools/h20/issue_prd_paper_review.py --expected-commit "$EXPECTED_COMMIT" \
   --output "$WORK_ROOT/logs/prd_memrl/$RUN_ID/certificates/paper_review.json"
 scripts/h20/run_qwen25_7b_prd_memrl.sh preflight

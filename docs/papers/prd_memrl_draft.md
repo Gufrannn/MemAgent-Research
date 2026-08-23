@@ -45,6 +45,10 @@ to update 25 on one fixed S128 evaluation, but does not identify an information
 bottleneck. We will report whether conditional rate is a distinct failure axis,
 whether a non-degenerate rate–return frontier exists, and where compression
 causes irreversible forgetting.
+Because this S128 curve and related canaries were inspected during program
+development, S128 is a development benchmark rather than a blind final test.
+The frozen 25-update horizon is an early-budget pilot, not sufficient training,
+a convergence study, or a basis for declaring the method generally effective.
 
 ## 1. Introduction
 
@@ -118,9 +122,9 @@ the instrumented run, but it gates every information-rate mechanism claim.
 If E0 passes, fresh Qwen2.5-7B training starts from the same base as the
 certified Original at update 1. Data order, effective batch, rollout count,
 reward, tokenizer, evaluator, update budget, and GPU count remain identical.
-The first comparison is Method-T5 against certified Original-T5; continuation
-to later anchors requires mechanism health, capacity attainability, and no more
-than two token-F1 points of degradation. Because Original rate is unavailable,
+Training runs continuously to T25; T5 performs only finite-loss/gradient,
+checkpoint, ledger, and weight-sync health checks. Fixed-S128 performance for
+all five anchors is opened only after T25. Because Original rate is unavailable,
 no equal-rate comparison to Original is claimed. Performance compares every
 capacity to Original at identical task budget. Rate comparisons are internal to
 fresh instrumented Method and ablation runs at matched token/rollout compute.
@@ -330,11 +334,9 @@ Capacities are frozen before Method training, with at least three distinct
 ascending values spanning a preregistered engineering range. Every capacity is an independent experiment, manifest, ledger,
 checkpoint namespace, and commit if algorithmically changed.
 
-**Table 4: T5 health and frontier.** Capacity, realized rate (nats/trajectory),
-writer tokens, dual mean/range, constraint error, prior NLL, entropy, collapse
-rate, normalized EM, token-F1, format validity. Compare every point to certified
-Original-T5. Continue only if the constraint is reachable, the frontier is
-non-degenerate, and at least one matched point is within 2pp F1.
+**Table 4: T5 training health.** Finite losses and gradients, realized rate,
+dual value, prior NLL, checkpoint inventory, ledger, and weight-sync receipt.
+No S128 performance is opened and healthy runs continue immediately to T25.
 
 **Table 5: T5/10/15/20/25 rate–return curves.** All capacity points at every
 anchor; hypervolume and monotonicity reported with uncertainty. No “best point”
@@ -352,15 +354,17 @@ length. Include counterfactual deletion and irrelevant-evidence injection.
 **Table 8: External validity.** Minimal query-blind LongMemEval subset or an
 equivalent frozen variable-tracking stream. The memory writer cannot see the
 terminal query during ingestion. Report frontier shift, not only accuracy.
+The paper-level final test must be a separately manifested, previously untouched
+HotpotQA partition or external benchmark frozen before predictions are opened;
+S128 cannot serve as that blind test.
 
 ### Failure criteria and boundaries
 
 - `NO-GO_E1_CLAIM`: rate is a deterministic ordering of length, legal prior has
   no coding gain, or taint/inventory evidence is incomplete. Training artifacts
   remain reportable, but no conditional-rate mechanism claim survives.
-- `NO-GO_T5`: after at most one preregistered prior-capacity or dual-timescale
-  correction, frontier collapses, all points violate capacity, or all legal
-  matched points lose more than 2pp token-F1.
+- `NO-GO_T5`: non-finite loss/gradient, zero gradient, incomplete checkpoint or
+  ledger, or actor/prior/vLLM synchronization failure. It is not a performance gate.
 - Main T25 performance success: a preregistered capacity improves F1 over
   Original by at least 2pp at the same task/update budget. This alone is not a
   conditional-rate result.

@@ -144,7 +144,7 @@ def command_preflight(args: argparse.Namespace) -> int:
     pair = args.gpu_pair.split(",")
     if len(pair) != 2 or any(not item.isdigit() for item in pair) or len(set(pair)) != 2 or list(map(int, pair)) != sorted(map(int, pair)):
         failures.append("GPU pair must be two distinct canonical ascending indices")
-    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO")):
+    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO"), (Path(args.data_overlap), "PRD_DATA_OVERLAP_PASS")):
         if not path.is_file():
             failures.append(f"missing {decision}")
         else:
@@ -188,7 +188,7 @@ def main() -> int:
     e0 = sub.add_parser("e0"); e0.add_argument("--output", required=True); e0.set_defaults(func=command_e0)
     e1 = sub.add_parser("e1"); e1.add_argument("--rows", required=True); e1.add_argument("--output", required=True); e1.set_defaults(func=command_e1)
     p0 = sub.add_parser("preflight")
-    for name in ("expected_commit", "gpu_pair", "e0", "paper_review", "prior_model", "base_model", "original_training_resolved", "output"):
+    for name in ("expected_commit", "gpu_pair", "e0", "paper_review", "data_overlap", "prior_model", "base_model", "original_training_resolved", "output"):
         p0.add_argument("--" + name.replace("_", "-"), required=True)
     p0.set_defaults(func=command_preflight)
     return args.func(args) if (args := parser.parse_args()) else 1
