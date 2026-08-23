@@ -15,8 +15,11 @@
     "allowed_differences": ["writer_surrogate", "prefix_constraint", "transactional_controller", "actual_loss_ledger", "experiment_identity", "output_paths"]
   },
   "training": {"seed": 2026, "trajectory_seed_mode": "independent", "train_batch_size": 4,
-    "rollout_n": 2, "ppo_mini_batch_size": 4, "target_steps": [5,10,15,20,25],
+    "rollout_n": 2, "ppo_mini_batch_size": 4, "ppo_epochs": 1,
+    "critic_optimizer_updates": 0, "auxiliary_fit_updates": 0,
+    "target_steps": [5,10,15,20,25],
     "chunk_size": 5000, "max_chunks": 8, "max_prompt_length": 8192,
+    "runtime_effective_prompt_filter_length": 40000,
     "max_response_length": 1024, "learning_rate": 0.000001, "kl_loss_coefficient": 0.001},
   "model": {"id": "Qwen/Qwen2.5-7B-Instruct", "revision": "a09a35458c702b33eeacc393d103063234e8bc28"},
   "data": {"train_sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",

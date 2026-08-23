@@ -11,6 +11,22 @@ T5/10/15/20/25 were respectively +0.04796, +0.00585, -0.00343, -0.05119, and
 -0.05063.  These observations motivate the controller revision but do not
 identify a causal mechanism or establish that backtracking works.
 
+This is confirmed adaptive benchmark use: all 128 S128 rows were evaluated at
+five anchors and the observed curve informed the controller-form pivot. S128 is
+therefore a development benchmark for hard-rollback and TF-RWWPO, not a blind
+held-out final test. Threshold-selection provenance remains pending documentary
+evidence. A future confirmatory result requires a separately preregistered
+content/root-disjoint set that is never consulted for method, capacity,
+threshold, early-stopping, or checkpoint decisions.
+
+The frozen T25 program is an early-budget pilot: 25 global optimizer proposals,
+100 prompt groups, at most 200 sampled trajectories, one PPO epoch and one
+global optimizer minibatch per step, one seed, zero critic updates, and zero
+auxiliary-model fit updates. Writer turns/tokens and nonzero committed updates
+are runtime quantities and must be read from the rank-complete actual-loss and
+rollout-seed ledgers. No T25 outcome can establish sufficient training or
+convergence without a preregistered training-length and multi-seed study.
+
 ## Reframed claim
 
 Let `Z_1:t` be the writer path and `S_t = F_t(Z_1:t)` the materialized memory

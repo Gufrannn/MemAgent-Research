@@ -2,11 +2,13 @@
 
 ## Scientific state
 
-`PAPER-FRAMING GO / PENDING_BASELINE_BUNDLE_MATERIALIZATION`. Original
-actual-loss is an optional, separately authorized diagnostic and is not a Method
-training gate. The main experiment uses the existing read-only Original curve,
-starts Method once from the same fresh base, trains continuously through T25,
-and saves T5/T10/T15/T20/T25.
+This hard-rollback runbook is superseded and retained only for diagnostic
+provenance. Its completed T5--T25 run is formally NO-GO; do not use this file to
+launch a new paper-result run. T25 was a single-seed early-budget pilot, not
+sufficient training or convergence. Its five S128 anchors were inspected and
+used to motivate the TF-RWWPO controller pivot, so S128 is a development
+benchmark rather than a blind final test. Original actual-loss remains an
+optional diagnostic and is not a Method training gate.
 
 ## Required checkout and immutable bindings
 
@@ -121,7 +123,7 @@ checkpoint, and weight-sync assertions are the cheap T5 health gate. Unless a
 numeric or contract failure aborts the process, training continues without an
 S128 pause to T25 and retains all five anchors.
 
-The concrete fixed-S128 entry and read-only metric audit are:
+The concrete fixed-S128 development entry and read-only metric audit were:
 
 ```bash
 export RWWPO_EVAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json
@@ -159,10 +161,11 @@ RWWPO_PHASE=continue RWWPO_RESUME_STEP=20 RWWPO_TARGET_STEP=25 \
 ```
 
 After every anchor, run `audit_rwwpo_run.py` with the corresponding target,
-then the frozen S128 evaluator. The final comparison joins stable IDs across all
+then the frozen S128 evaluator. The development comparison joins stable IDs across all
 five Method anchors and their imported Original counterparts. Required headline
-gates are T25 token-F1 `+0.02`, five-anchor mean `+0.01`, and no anchor below
-Original by more than `0.02`.
+screening gates were T25 token-F1 `+0.02`, five-anchor mean `+0.01`, and no
+anchor below Original by more than `0.02`; they were not confirmatory or
+convergence gates.
 
 ## Recovery and variants
 
@@ -179,7 +182,7 @@ two-H20 configuration, reserve several hours for the continuous T25 training,
 then additional time for five fixed-S128 evaluations. These are planning
 estimates, not claims of a local H20 run.
 
-## Final five-anchor audit
+## Development five-anchor audit
 
 ```bash
 "$RWWPO_WORK_ROOT/.venv/bin/python" tools/h20/audit_rwwpo_five_anchor.py \

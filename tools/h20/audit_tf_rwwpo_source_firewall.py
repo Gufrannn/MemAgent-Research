@@ -22,6 +22,17 @@ def main():
     if method["q_min"]!=0.5: violations.append("q_min drift")
     if method["alpha_grid"]!=[1.0,0.5,0.25,0.125,0.0625,0.03125]: violations.append("alpha grid drift")
     if manifest["training"]["target_steps"]!=[5,10,15,20,25]: violations.append("anchor drift")
+    if manifest["training"].get("ppo_epochs")!=1: violations.append("PPO epoch drift")
+    if manifest["training"].get("critic_optimizer_updates")!=0: violations.append("critic update drift")
+    if manifest["training"].get("auxiliary_fit_updates")!=0: violations.append("auxiliary update drift")
+    if manifest["training"].get("runtime_effective_prompt_filter_length")!=40000:
+        violations.append("effective prompt-filter drift")
+    launcher=(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh").read_text(encoding="utf-8")
+    gate=(ROOT/"experiments/7b_gate_a/run_gate_a.sh").read_text(encoding="utf-8")
+    if "PPO_EPOCHS=1" not in launcher or '"actor_rollout_ref.actor.ppo_epochs=$PPO_EPOCHS"' not in gate:
+        violations.append("PPO epochs are not explicitly frozen")
+    if "reward_model.enable=False" not in gate:
+        violations.append("reward model fit is not explicitly disabled")
     trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text(encoding="utf-8")
     try:
         example_hash=trainer.split(

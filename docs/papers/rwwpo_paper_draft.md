@@ -6,6 +6,9 @@
 > certified Original curve.  These observations do not establish causality.
 > The active algorithm proposal is the transactional feasible-step controller
 > specified in `tf_rwwpo_revision_20260822.md`; no TF-RWWPO result exists yet.
+> Because those five S128 anchor results were inspected before the controller
+> revision, S128 is now a development benchmark for this method family, not a
+> blind final test.
 
 **Scientific status (2026-08-22): PAPER-FRAMING GO; empirical claims remain conditional on Method evidence.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
@@ -21,7 +24,7 @@ recurrent-prefix phenomenon beyond single-response and token diagnostics.
 
 **Prefix-Divergence Trust Regions for State-Writing Policies**
 
-## Abstract (203 words; no unobserved result is asserted)
+## Abstract (no unobserved result is asserted)
 
 Language-memory agents repeatedly generate free-form text that is materialized
 as the state observed at the next turn. Standard PPO-style training nevertheless
@@ -40,10 +43,12 @@ merely proportional—to Original PPO; only higher-order update geometry changes
 RWWPO pairs this surrogate with per-turn prefix ESS, an absolute prefix-log-ratio
 cap, and chi-square certificates
 computed from the actual loss tensors. The empirical claim is deliberately
-conditional. We train once from the same fresh Qwen2.5-7B base through T25,
-retain five checkpoints, and use the Method's actual-loss ledger to test whether
+conditional. We run an early-budget, single-seed pilot from the same fresh
+Qwen2.5-7B base for at most 25 global optimizer proposals (100 prompt groups and
+200 sampled trajectories), retain five checkpoints, and use the Method's actual-loss ledger to test whether
 prefix behavior adds information beyond token KL, clipping, and length. After
-training, all five checkpoints are evaluated under one frozen protocol and
+this pilot, all five checkpoints are evaluated on the already-adaptive S128
+development protocol and
 compared with the certified read-only Original curve and matched granularity
 ablations. A missing mechanism signal or negative training result is a
 falsification outcome rather than hidden tuning.
@@ -115,7 +120,7 @@ prefix collapse; whether collapse is explained only by length; and whether a
 constraint leaves nonzero update aperture rather than freezing the writer.
 
 The current evidence does not answer those questions. The accepted Original
-run establishes a corrected fresh-base T0-to-T25 curve on a fixed S128 evaluation
+run establishes a corrected fresh-base T0-to-T25 curve on a fixed S128 development
 set, and existing Capture32 evidence concerns a different same-candidate
 mechanism. Neither contains actual-loss current log-probabilities across PPO
 epochs. We therefore do not claim that RWWPO improves performance, or even that
@@ -126,10 +131,13 @@ Method's own append-only on-policy actual-loss ledger. An independently
 authorized Original collection-only run may be reported as a finite diagnostic,
 but never as the certified Original baseline.
 
-The empirical study starts Method from the same fresh Qwen2.5-7B base used by
+The empirical screening study starts Method from the same fresh Qwen2.5-7B base used by
 Original, enables RWWPO at update 1, and holds data order, rollout seeds,
 reward, tokenizer, effective batch, trajectory budget, and evaluation protocol
-fixed. We compare five anchors (T5/10/15/20/25), test joint-only and matched
+fixed. T25 is an early-budget anchor, not evidence of sufficient training or
+convergence: the frozen run has one seed, 25 global proposals, one PPO epoch
+and one global optimizer minibatch per step, with no learned critic or auxiliary
+model. We compare five development anchors (T5/10/15/20/25), test joint-only and matched
 trust-region alternatives, and evaluate a small RULER Variable Tracking suite as
 an external state-transition stress test. A T5 degradation larger than two F1
 points, a permanently saturated constraint, or a writer with zero update
@@ -225,16 +233,19 @@ or MERGE into a broader structure-aware policy-optimization study.
 | E0 table | Original, RWWPO, RWWPO-off | loss, gradient max error, cosine, mask closure, finite difference | exact first order and off equivalence |
 | Method mechanism table | turns 1..T; length bins | ESS, chi-square, token KL, clipfrac, joint aperture | phenomenon exists beyond length/local diagnostics |
 | Method predictive table | held-out update groups | collapse prediction / partial R² | prefix statistic adds information |
-| Main curve | Original, RWWPO | S128 EM/F1/format at T0/5/10/15/20/25 | same-budget performance |
+| Development curve | Original, RWWPO | adaptive S128 EM/F1/format at T0/5/10/15/20/25 | early-budget descriptive performance |
 | Mechanism curve | methods × anchors | ESS quantiles, saturation, writer grad, aperture | method active, not frozen |
 | Matched baselines | Original, GSPO-style, GSsPO/per-write, joint-only, token-KL matched | T5/T25 and mechanism | isolate recurrent prefix constraint |
 | Ablations | end-prefix-only, all-token-prefix, answer-only sham, fixed penalty, controller | same metrics | component attribution |
 | External validity | Original/RWWPO on frozen RULER Variable Tracking | accuracy by horizon/rewrite count | state-transition relevance |
 
-All performance aggregates are recomputed from prediction rows of the certified
+All development-performance aggregates are recomputed from prediction rows of the certified
 read-only baseline bundle after per-file SHA verification. Dense reward is never
-reported as performance. Formal confirmation beyond screening requires at least
-three fresh seeds and an untouched confirmation run under separate authorization.
+reported as performance. S128 has already informed the hard-rollback-to-
+backtracking pivot, so it is not an untouched final test. Formal confirmation
+beyond screening requires at least three fresh seeds and a separately
+preregistered, content-disjoint confirmation set that is accessed only after
+code, thresholds, and checkpoint-selection rules are frozen.
 
 ### Preregistered gates
 
@@ -248,8 +259,9 @@ three fresh seeds and an untouched confirmation run under separate authorization
   ESS >= 0.5 and the frozen cap; behavior-point identity, rank agreement,
   rollback digests, checkpoint inventory, append-only ledger anchors, and
   weight sync all close. No S128 performance is consulted at this gate.
-- **T25 success:** T25 F1 +0.02 and five-anchor mean +0.01, with no anchor worse
-  than Original by more than 0.02.
+- **T25 development-screen success:** T25 S128 F1 +0.02 and five-anchor S128
+  mean +0.01, with no anchor worse than Original by more than 0.02. Passing this
+  screen is neither convergence evidence nor a confirmatory paper result.
 - **Immediate NO-GO:** Method prefix diagnostics add no signal beyond local
   diagnostics; method is stable only at effectively zero writer step; missing
   tensors are presented as evidence; or a numeric/contract failure occurs.

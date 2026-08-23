@@ -4,6 +4,12 @@ This runbook is not a claim that TF-RWWPO works.  Substitute only the exact
 reviewed release SHA after PAPER GO, RELEASE GO, and a clean pushed branch.
 Never reuse a run ID or output root.  Never kill another GPU process.
 
+T25 is an early-budget pilot, not a convergence target: the frozen static
+budget is 25 global proposals, 100 prompt groups, at most 200 trajectories, one
+PPO epoch and one global optimizer minibatch per step. Fixed S128 has already
+been inspected and used in the controller pivot; it is a development benchmark,
+not a blind final test.
+
 ## Identity and evidence
 
 ```bash
@@ -76,6 +82,26 @@ export BASELINE_SHA="$(sha256sum "$BASELINE_BUNDLE" | awk '{print $1}')"
 
 ## GPU preflight and one continuous fresh run
 
+Before using GPUs, materialize the content-hash overlap certificate. The first
+invocation omits runtime-ledger arguments and therefore leaves writer-turn/token
+counts pending while still deciding direct actor/S128 overlap:
+
+```bash
+"$RWWPO_PYTHON" tools/h20/audit_tf_rwwpo_budget_leakage.py \
+  --manifest "$RWWPO_MANIFEST" \
+  --train "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet" \
+  --tokenizer-root "$RWWPO_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
+  --s128-data "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --s128-resolved "$RWWPO_WORK_ROOT/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json" \
+  --s128-resolved-sha256 6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411 \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --output "$RWWPO_CERT_ROOT/budget_leakage_pretrain.json"
+```
+
+Any nonzero content/root intersection is NO-GO. Dataset-local integer IDs do
+not decide leakage. The certificate records both the manifest's 8192 prompt
+value and `MemoryDataset`'s effective pre-filter mutation to 40000.
+
 ```bash
 nvidia-smi -i "$GPU_PAIR" --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory --format=csv,noheader
 python3 tools/h20/audit_tf_rwwpo_source_firewall.py
@@ -108,7 +134,7 @@ ledger, locks, checkpoint, and tombstone.  After processes exit, locks release,
 and both GPUs are empty, fix only on a new reviewed commit and use a new semantic
 run ID from fresh P0.  An unmatched transaction intent makes audit fail closed.
 
-## Post-training audit and evaluation
+## Post-training audit and development evaluation
 
 After T25, run `audit_rwwpo_actual_loss.py`, then materialize and independently
 reproduce the health receipt for every saved anchor:
@@ -129,6 +155,19 @@ for STEP in 5 10 15 20 25; do
   cmp "$RWWPO_CERT_ROOT/t${STEP}_health.json" \
       "$RWWPO_CERT_ROOT/readonly_reaudit/t${STEP}_health.json"
 done
+
+"$RWWPO_PYTHON" tools/h20/audit_tf_rwwpo_budget_leakage.py \
+  --manifest "$RWWPO_MANIFEST" \
+  --train "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet" \
+  --tokenizer-root "$RWWPO_WORK_ROOT/models/Qwen2.5-7B-Instruct" \
+  --s128-data "$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_dev.parquet" \
+  --s128-resolved "$RWWPO_WORK_ROOT/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json" \
+  --s128-resolved-sha256 6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411 \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --actual-ledger-dir "$RWWPO_LEDGER_DIR" \
+  --rollout-seed-audit "$RWWPO_OUTPUT/rollout_seed_audit.jsonl" \
+  --execution-ledger "$RWWPO_EXECUTION_LEDGER" \
+  --output "$RWWPO_CERT_ROOT/budget_leakage_final.json"
 ```
 
 Then perform a second read-only re-audit. Only after both pass, evaluate the saved
@@ -136,9 +175,11 @@ T5/10/15/20/25 checkpoints using the same fixed-S128 manifest and strict-vLLM
 launcher, import the certified Original five-anchor bundle read-only, and run
 the per-anchor plus five-anchor auditors.  Performance rows remain separate
 from the mechanism ledger.  B and C require different run IDs, manifests,
-output roots, and release commits.
+output roots, and release commits. These five-anchor results are adaptive
+development evidence only; the existing success thresholds are screening gates,
+not a confirmatory test or convergence certificate.
 
-The complete formal five-anchor evaluation chain is:
+The complete five-anchor S128 development-evaluation chain is:
 
 ```bash
 export RWWPO_EVAL_RESOLVED_MANIFEST=/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json

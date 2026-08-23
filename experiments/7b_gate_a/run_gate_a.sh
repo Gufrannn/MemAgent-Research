@@ -15,6 +15,7 @@ RUN_SEED=${RUN_SEED:-2026}
 TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-2}
 ROLLOUT_N=${ROLLOUT_N:-2}
 PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-2}
+PPO_EPOCHS=${PPO_EPOCHS:-1}
 N_GPUS=${N_GPUS:-2}
 FSDP_SIZE=${FSDP_SIZE:-$N_GPUS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.55}
@@ -53,8 +54,8 @@ case "$PHASE" in
   *) echo "PHASE must be fresh or resume" >&2; exit 46 ;;
 esac
 
-[[ $TOTAL_STEPS =~ ^[0-9]+$ && $RESUME_SOURCE_STEP =~ ^[0-9]+$ && $SAVE_FREQ =~ ^-?[0-9]+$ && $MAX_ACTOR_CKPT_TO_KEEP =~ ^[0-9]+$ ]] || {
-  echo "Step/checkpoint controls must be integers: TOTAL_STEPS=$TOTAL_STEPS RESUME_SOURCE_STEP=$RESUME_SOURCE_STEP SAVE_FREQ=$SAVE_FREQ MAX_ACTOR_CKPT_TO_KEEP=$MAX_ACTOR_CKPT_TO_KEEP" >&2
+[[ $TOTAL_STEPS =~ ^[0-9]+$ && $RESUME_SOURCE_STEP =~ ^[0-9]+$ && $SAVE_FREQ =~ ^-?[0-9]+$ && $MAX_ACTOR_CKPT_TO_KEEP =~ ^[0-9]+$ && $PPO_EPOCHS =~ ^[0-9]+$ ]] || {
+  echo "Step/checkpoint controls must be integers: TOTAL_STEPS=$TOTAL_STEPS RESUME_SOURCE_STEP=$RESUME_SOURCE_STEP SAVE_FREQ=$SAVE_FREQ MAX_ACTOR_CKPT_TO_KEEP=$MAX_ACTOR_CKPT_TO_KEEP PPO_EPOCHS=$PPO_EPOCHS" >&2
   exit 53
 }
 [[ $TOTAL_STEPS -gt 0 && $SAVE_FREQ -ne 0 && $MAX_ACTOR_CKPT_TO_KEEP -gt 0 ]] || {
@@ -82,8 +83,8 @@ IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
 
 GLOBAL_ROLLOUT_BATCH_SIZE=$((TRAIN_BATCH_SIZE * ROLLOUT_N))
 GLOBAL_ROLLOUT_MINI_BATCH_SIZE=$((PPO_MINI_BATCH_SIZE * ROLLOUT_N))
-[[ $TRAIN_BATCH_SIZE -gt 0 && $ROLLOUT_N -gt 0 && $PPO_MINI_BATCH_SIZE -gt 0 ]] || {
-  echo "[GATE_A_BATCH_DIAG] batch sizes must be positive: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE" >&2
+[[ $TRAIN_BATCH_SIZE -gt 0 && $ROLLOUT_N -gt 0 && $PPO_MINI_BATCH_SIZE -gt 0 && $PPO_EPOCHS -eq 1 ]] || {
+  echo "[GATE_A_BATCH_DIAG] batch sizes must be positive and PPO_EPOCHS must equal 1: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE ROLLOUT_N=$ROLLOUT_N PPO_MINI_BATCH_SIZE=$PPO_MINI_BATCH_SIZE PPO_EPOCHS=$PPO_EPOCHS" >&2
   exit 50
 }
 [[ $((TRAIN_BATCH_SIZE % PPO_MINI_BATCH_SIZE)) -eq 0 ]] || {
@@ -125,6 +126,7 @@ TRAINER_OVERRIDES=(
   data.max_prompt_length=8192
   data.max_response_length=1024
   "reward_model.reward_manager=$REWARD_MANAGER"
+  reward_model.enable=False
   "custom_reward_function.path=$CODE/recurrent/research/hotpotqa_dense_reward.py"
   custom_reward_function.name=compute_score
   +custom_reward_function.reward_kwargs.f1_weight=0.95
@@ -133,6 +135,7 @@ TRAINER_OVERRIDES=(
   actor_rollout_ref.actor.optim.lr=1e-6
   actor_rollout_ref.model.use_remove_padding=True
   "actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE"
+  "actor_rollout_ref.actor.ppo_epochs=$PPO_EPOCHS"
   actor_rollout_ref.actor.use_dynamic_bsz=True
   actor_rollout_ref.actor.ppo_max_token_len_per_gpu=16384
   actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768

@@ -179,6 +179,18 @@ def test_tf_manifest_freezes_grid_constraint_and_t25_chain():
     assert row["method"]["q_min"]==0.5
     assert row["method"]["alpha_grid"]==[1.0,.5,.25,.125,.0625,.03125]
     assert row["training"]["target_steps"]==[5,10,15,20,25]
+    assert row["training"]["ppo_epochs"]==1
+    assert row["training"]["critic_optimizer_updates"]==0
+    assert row["training"]["auxiliary_fit_updates"]==0
+    assert row["training"]["runtime_effective_prompt_filter_length"]==40000
+    launcher=(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh").read_text()
+    gate=(ROOT/"experiments/7b_gate_a/run_gate_a.sh").read_text()
+    assert "PPO_EPOCHS=1" in launcher
+    assert '"actor_rollout_ref.actor.ppo_epochs=$PPO_EPOCHS"' in gate
+    assert "reward_model.enable=False" in gate
+    budget_audit=(ROOT/"tools/h20/audit_tf_rwwpo_budget_leakage.py").read_text()
+    assert 'parser.add_argument("--execution-ledger")' in budget_audit
+    assert "execution ledger chain/commit mismatch" in budget_audit
 
 def test_transactional_scheduler_is_not_advanced_by_worker():
     actor=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
