@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MULTIPLIER = 16.0
+GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
 FLOORS = {
     "tau_theta": 1e-12,
     "tau_logprob": 1e-6,
@@ -60,6 +61,8 @@ def main() -> None:
             or row.get("git_commit") != head or int(row.get("world_size", 0)) != 2:
         raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:receipt")
     if float(row.get("threshold_multiplier", -1)) != MULTIPLIER \
+            or int(row.get("gradient_sketch_chunk_elements", -1)) != \
+                GRADIENT_SKETCH_CHUNK_ELEMENTS \
             or row.get("threshold_floors") != FLOORS:
         raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:threshold rule")
     observed = row.get("observed", {})
@@ -126,6 +129,7 @@ def main() -> None:
         "git_commit": head, "oracle_root": str(root),
         "oracle_report_file_sha256": args.oracle_report_sha256,
         "oracle_report_sha256": declared, "thresholds": expected_thresholds,
+        "gradient_sketch_chunk_elements": GRADIENT_SKETCH_CHUNK_ELEMENTS,
         "gpu_pair": gpu_pair, "gpu_binding": binding,
         "rank_state_inventory": state_inventory,
     }

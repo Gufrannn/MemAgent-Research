@@ -147,9 +147,14 @@ def main():
         encoding="utf-8")
     for token in ("ROOT = Path(__file__).resolve().parents[2]",
                   "sys.path.insert(0, str(ROOT))",
-                  "from verl.trainer.ppo.core_algos import"):
+                  "from verl.trainer.ppo.core_algos import",
+                  "GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608",
+                  "local_gradient_sketch_sufficient_statistics",
+                  "for chunk_start in range(0,flattened.numel(),chunk_elements)"):
         if token not in numeric_oracle:
             violations.append("numeric oracle direct entry:"+token)
+    if "parameter.grad.detach().double().flatten()" in numeric_oracle:
+        violations.append("numeric oracle full-shard FP64 materialization")
     if all(token in numeric_oracle for token in (
             "sys.path.insert(0, str(ROOT))",
             "from verl.trainer.ppo.core_algos import")) \

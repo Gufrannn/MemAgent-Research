@@ -7,6 +7,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+import torch
 
 from tools.h20.audit_rwwpo2_r50_program import wilson_interval
 from tools.h20.audit_rwwpo2_attempt import execution_prefix_through_round
@@ -207,6 +208,7 @@ def test_completed_attempt_prefix_keeps_same_round_anchor_then_stops_at_future(t
 def test_numeric_oracle_calibrates_the_registered_projection_statistic():
     producer = (ROOT / "tools/h20/calibrate_rwwpo2_numeric_oracle.py").read_text()
     auditor = (ROOT / "tools/h20/audit_rwwpo2_numeric_oracle.py").read_text()
+    resolver = (ROOT / "tools/h20/materialize_rwwpo2_resolved_contract.py").read_text()
     assert "ROOT = Path(__file__).resolve().parents[2]" in producer
     assert "sys.path.insert(0, str(ROOT))" in producer
     assert producer.index("sys.path.insert(0, str(ROOT))") < producer.index(
@@ -221,6 +223,33 @@ def test_numeric_oracle_calibrates_the_registered_projection_statistic():
         assert token in producer and token in auditor
     assert "gradient_sketch_relative_l2" not in producer
     assert "threshold_multiplier" in producer and "threshold reconstruction" in auditor
+    assert "GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608" in producer
+    assert "parameter.grad.detach().double().flatten()" not in producer
+    assert all("gradient_sketch_chunk_elements" in source
+               for source in (producer,auditor,resolver))
+
+
+def test_chunked_gradient_sketch_matches_registered_full_vector_projection():
+    from tools.h20.calibrate_rwwpo2_numeric_oracle import (
+        local_gradient_sketch_sufficient_statistics,
+    )
+    parameters=[]
+    for shape,offset in (((3,5),-0.7),((2,4),0.3)):
+        parameter=torch.nn.Parameter(torch.zeros(shape,dtype=torch.float32))
+        parameter.grad=torch.arange(parameter.numel(),dtype=torch.float32).reshape(
+            shape).div_(7).add_(offset)
+        parameters.append(parameter)
+    actual=local_gradient_sketch_sufficient_statistics(
+        parameters,chunk_elements=3)
+    expected=torch.zeros(4,dtype=torch.float64)
+    for parameter_index,parameter in enumerate(parameters):
+        gradient=parameter.grad.detach().double().flatten()
+        coordinate=torch.arange(gradient.numel(),dtype=torch.int64)
+        alternating=((coordinate+parameter_index)&1).double().mul_(2).sub_(1)
+        saw=(((coordinate+17*parameter_index)%257).double()-128.)/128.
+        expected[0]+=gradient.square().sum(); expected[1]+=gradient.sum()
+        expected[2]+=(gradient*alternating).sum(); expected[3]+=(gradient*saw).sum()
+    torch.testing.assert_close(actual,expected,rtol=1e-14,atol=1e-14)
 
 
 def test_numeric_oracle_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path):

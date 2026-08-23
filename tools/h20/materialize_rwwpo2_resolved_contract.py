@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_BRANCH = "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"
 NUMERIC_FIELDS = ("tau_theta", "tau_logprob", "tau_gradient", "tau_coefficient")
+GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
 
 
 def sha256_file(path: Path) -> str:
@@ -46,6 +47,8 @@ def verified_oracle_audit(path: Path, *, commit: str, oracle: dict) -> dict:
             or row.get("decision") != "RWWPO2_NUMERIC_ORACLE_AUDIT_PASS" \
             or row.get("git_commit") != commit \
             or row.get("oracle_report_sha256") != oracle["report_sha256"] \
+            or int(row.get("gradient_sketch_chunk_elements", -1)) != \
+                int(oracle.get("gradient_sketch_chunk_elements", -2)) \
             or row.get("thresholds") != oracle.get("thresholds"):
         raise ValueError("numeric oracle audit is not authentic for this commit")
     return {**row, "report_sha256": declared}
@@ -108,6 +111,9 @@ def main() -> None:
     thresholds = oracle.get("thresholds")
     if set(thresholds or {}) != set(NUMERIC_FIELDS):
         raise SystemExit("RWWPO2_RESOLVE_NO_GO:threshold fields")
+    if int(oracle.get("gradient_sketch_chunk_elements", -1)) != \
+            GRADIENT_SKETCH_CHUNK_ELEMENTS:
+        raise SystemExit("RWWPO2_RESOLVE_NO_GO:gradient sketch chunk contract")
     if any(not math.isfinite(float(thresholds[name])) or float(thresholds[name]) <= 0
            for name in NUMERIC_FIELDS):
         raise SystemExit("RWWPO2_RESOLVE_NO_GO:threshold values")
@@ -131,6 +137,7 @@ def main() -> None:
         "numeric_oracle_audit_path": str(oracle_audit_path),
         "numeric_oracle_audit_file_sha256": args.numeric_oracle_audit_sha256,
         "numeric_oracle_audit_report_sha256": oracle_audit["report_sha256"],
+        "gradient_sketch_chunk_elements": GRADIENT_SKETCH_CHUNK_ELEMENTS,
         "numeric_thresholds": {name: float(thresholds[name]) for name in NUMERIC_FIELDS},
         "behavior_coefficient_tolerance": float(thresholds["tau_coefficient"]),
         "behavior_gradient_tolerance": float(thresholds["tau_gradient"]),

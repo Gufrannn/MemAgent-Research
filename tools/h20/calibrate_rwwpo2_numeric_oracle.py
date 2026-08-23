@@ -31,6 +31,7 @@ from verl.trainer.ppo.core_algos import (
 MULTIPLIER=16.0
 FLOORS={"tau_theta":1e-12,"tau_logprob":1e-6,"tau_gradient":1e-8,
         "tau_coefficient":1e-10}
+GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608
 
 
 def global_max(value,device):
@@ -39,16 +40,40 @@ def global_max(value,device):
     return float(tensor.item())
 
 
+def local_gradient_sketch_sufficient_statistics(
+        parameters, *, chunk_elements=GRADIENT_SKETCH_CHUNK_ELEMENTS):
+    """Compute the registered projection without full-shard FP64 temporaries."""
+    chunk_elements=int(chunk_elements)
+    if chunk_elements < 1:
+        raise ValueError("gradient sketch chunk must be positive")
+    values=None
+    for parameter_index,parameter in enumerate(parameters):
+        if parameter.grad is None:
+            continue
+        flattened=parameter.grad.detach().flatten()
+        if values is None:
+            values=torch.zeros(4,dtype=torch.float64,device=flattened.device)
+        for chunk_start in range(0,flattened.numel(),chunk_elements):
+            chunk_stop=min(flattened.numel(),chunk_start+chunk_elements)
+            gradient=flattened[chunk_start:chunk_stop].to(dtype=torch.float64)
+            coordinate=torch.arange(
+                chunk_start,chunk_stop,device=gradient.device,dtype=torch.int64)
+            alternating=torch.bitwise_and(
+                coordinate+parameter_index,1).to(dtype=torch.float64).mul_(2).sub_(1)
+            coordinate.add_(17*parameter_index).remainder_(257)
+            saw=coordinate.to(dtype=torch.float64).sub_(128.).div_(128.)
+            values[0].add_(torch.dot(gradient,gradient))
+            values[1].add_(gradient.sum())
+            values[2].add_(torch.dot(gradient,alternating))
+            values[3].add_(torch.dot(gradient,saw))
+            del gradient,coordinate,alternating,saw
+    if values is None:
+        raise RuntimeError("RWWPO2_NUMERIC_ORACLE_MISSING_GRADIENT")
+    return values
+
+
 def gradient_sketch(model):
-    values=torch.zeros(4,dtype=torch.float64,device=torch.cuda.current_device())
-    for parameter_index,parameter in enumerate(model.parameters()):
-        if parameter.grad is None: continue
-        gradient=parameter.grad.detach().double().flatten()
-        coordinate=torch.arange(gradient.numel(),device=gradient.device,dtype=torch.int64)
-        alternating=((coordinate+parameter_index)&1).double().mul_(2).sub_(1)
-        saw=(((coordinate+17*parameter_index)%257).double()-128.)/128.
-        values[0]+=gradient.square().sum(); values[1]+=gradient.sum()
-        values[2]+=(gradient*alternating).sum(); values[3]+=(gradient*saw).sum()
+    values=local_gradient_sketch_sufficient_statistics(model.parameters())
     dist.all_reduce(values,op=dist.ReduceOp.SUM)
     values[0]=values[0].sqrt()
     return values
@@ -241,6 +266,7 @@ def main():
                     (Path(args.model)/"config.json").read_bytes()).hexdigest(),
                 "gpu_pair":[int(value) for value in gpu_pair.split(",")],
                 "gpu_binding":gpu_binding,
+                "gradient_sketch_chunk_elements":GRADIENT_SKETCH_CHUNK_ELEMENTS,
                 "threshold_multiplier":MULTIPLIER,"threshold_floors":FLOORS,
                 "observed":observed,"thresholds":thresholds,"rank_state_evidence":gathered}
         raw=json.dumps(report,sort_keys=True,separators=(",",":"),allow_nan=False)
