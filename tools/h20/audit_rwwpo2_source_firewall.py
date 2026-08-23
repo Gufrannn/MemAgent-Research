@@ -150,11 +150,16 @@ def main():
                   "from verl.trainer.ppo.core_algos import",
                   "GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608",
                   "local_gradient_sketch_sufficient_statistics",
+                  "raw_gradient.is_contiguous()",
+                  "flattened=raw_gradient.view(-1)",
+                  "RWWPO2_NUMERIC_ORACLE_NONCONTIGUOUS_GRADIENT_NO_GO",
                   "for chunk_start in range(0,flattened.numel(),chunk_elements)"):
         if token not in numeric_oracle:
             violations.append("numeric oracle direct entry:"+token)
-    if "parameter.grad.detach().double().flatten()" in numeric_oracle:
-        violations.append("numeric oracle full-shard FP64 materialization")
+    for token in ("parameter.grad.detach().double().flatten()",
+                  "parameter.grad.detach().flatten()"):
+        if token in numeric_oracle:
+            violations.append("numeric oracle full-shard materialization:"+token)
     if all(token in numeric_oracle for token in (
             "sys.path.insert(0, str(ROOT))",
             "from verl.trainer.ppo.core_algos import")) \

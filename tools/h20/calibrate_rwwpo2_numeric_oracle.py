@@ -50,7 +50,14 @@ def local_gradient_sketch_sufficient_statistics(
     for parameter_index,parameter in enumerate(parameters):
         if parameter.grad is None:
             continue
-        flattened=parameter.grad.detach().flatten()
+        raw_gradient=parameter.grad.detach()
+        if not raw_gradient.is_contiguous():
+            raise RuntimeError(
+                "RWWPO2_NUMERIC_ORACLE_NONCONTIGUOUS_GRADIENT_NO_GO")
+        # view(-1) is guaranteed to be zero-copy after the explicit
+        # contiguity gate; flatten()/reshape() could silently allocate a full
+        # FSDP shard before the bounded chunk loop.
+        flattened=raw_gradient.view(-1)
         if values is None:
             values=torch.zeros(4,dtype=torch.float64,device=flattened.device)
         for chunk_start in range(0,flattened.numel(),chunk_elements):

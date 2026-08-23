@@ -252,6 +252,18 @@ def test_chunked_gradient_sketch_matches_registered_full_vector_projection():
     torch.testing.assert_close(actual,expected,rtol=1e-14,atol=1e-14)
 
 
+def test_chunked_gradient_sketch_rejects_noncontiguous_full_shard_copy():
+    from tools.h20.calibrate_rwwpo2_numeric_oracle import (
+        local_gradient_sketch_sufficient_statistics,
+    )
+    parameter=torch.nn.Parameter(torch.zeros((3,4),dtype=torch.float32))
+    parameter.grad=torch.arange(12,dtype=torch.float32).reshape(4,3).t()
+    assert not parameter.grad.is_contiguous()
+    with pytest.raises(RuntimeError,match="NONCONTIGUOUS_GRADIENT_NO_GO"):
+        local_gradient_sketch_sufficient_statistics(
+            [parameter],chunk_elements=3)
+
+
 def test_numeric_oracle_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path):
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
