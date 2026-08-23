@@ -104,13 +104,15 @@ def main():
         encoding="utf-8")
     actual_auditor=(ROOT/"tools/h20/audit_rwwpo_actual_loss.py").read_text(
         encoding="utf-8")
-    for token in ("ref_log_prob", "actual_loss_contract"):
+    for token in ("ref_log_prob",):
         if token not in ledger_source:
             violations.append("actual-loss tensor ledger:"+token)
-    for token in ("independently_recompute_actual_loss", "shared_kl_loss",
-                  "active_logprob_gradient_l2"):
+    for token in ("independently_recompute_actual_loss", "actual_loss_contract",
+                  "shared_kl_loss", "active_logprob_gradient_l2"):
         if token not in actual_auditor:
             violations.append("actual-loss independent audit:"+token)
+    if '"actual_loss_contract"' not in actor_source:
+        violations.append("actual-loss producer:actual_loss_contract")
     transaction_source=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text(
         encoding="utf-8")
     seed_signature=transaction_source.split("def logical_transaction_seed",1)
