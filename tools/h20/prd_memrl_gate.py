@@ -131,6 +131,36 @@ def verify_pass(path: Path, decision: str, commit: str) -> None:
         raise SystemExit(f"PRD_NO_GO invalid {decision} certificate")
 
 
+def verify_data_overlap(path: Path, commit: str) -> dict:
+    payload = json.loads(path.read_text())
+    evidence, sources = payload.get("evidence", {}), payload.get("sources", {})
+    train, fixed = sources.get("train", {}), sources.get("fixed_s128_validation", {})
+    producer, intersections = payload.get("producer", {}), payload.get("intersections", {})
+    expected_train = Path("/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet")
+    expected_val = Path("/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet")
+    expected_stable = Path("/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json")
+    expected_producer = (ROOT / "tools/h20/audit_prd_data_overlap.py").resolve()
+    checks = (
+        payload.get("status") == "PASS", payload.get("decision") == "PRD_DATA_OVERLAP_PASS",
+        evidence.get("git_commit") == commit, payload.get("failures") == [],
+        train.get("path") == str(expected_train), fixed.get("path") == str(expected_val),
+        fixed.get("resolved") == str(expected_stable),
+        fixed.get("sha256") == "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6",
+        fixed.get("resolved_sha256") == "6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411",
+        fixed.get("rows") == 128, isinstance(train.get("rows"), int) and train.get("rows", 0) > 128,
+        intersections == {"train_pool_and_s128_content": 0, "train_pool_and_s128_root": 0,
+                            "critic_fit_and_s128": 0, "selection_and_s128": 128},
+        producer.get("path") == str(expected_producer), producer.get("sha256") == sha256(expected_producer),
+    )
+    if not all(checks):
+        raise SystemExit("PRD_NO_GO invalid PRD_DATA_OVERLAP_PASS certificate")
+    for candidate, recorded in ((expected_train, train.get("sha256")), (expected_val, fixed.get("sha256")),
+                                (expected_stable, fixed.get("resolved_sha256"))):
+        if not candidate.is_file() or candidate.is_symlink() or sha256(candidate) != recorded:
+            raise SystemExit(f"PRD_NO_GO data identity drift after overlap audit: {candidate}")
+    return payload
+
+
 def command_preflight(args: argparse.Namespace) -> int:
     failures = []
     commit = git("rev-parse", "HEAD")
@@ -144,7 +174,7 @@ def command_preflight(args: argparse.Namespace) -> int:
     pair = args.gpu_pair.split(",")
     if len(pair) != 2 or any(not item.isdigit() for item in pair) or len(set(pair)) != 2 or list(map(int, pair)) != sorted(map(int, pair)):
         failures.append("GPU pair must be two distinct canonical ascending indices")
-    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO"), (Path(args.data_overlap), "PRD_DATA_OVERLAP_PASS")):
+    for path, decision in ((Path(args.e0), "PRD_E0_PASS"), (Path(args.paper_review), "PRD_PAPER_REVIEW_GO")):
         if not path.is_file():
             failures.append(f"missing {decision}")
         else:
@@ -152,6 +182,11 @@ def command_preflight(args: argparse.Namespace) -> int:
                 verify_pass(path, decision, commit)
             except SystemExit as exc:
                 failures.append(str(exc))
+    overlap = None
+    try:
+        overlap = verify_data_overlap(Path(args.data_overlap), commit)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, SystemExit) as exc:
+        failures.append(str(exc))
     manifest = ROOT / "manifests/h20/qwen25_7b_prd_memrl_seed2026.json"
     capacities = json.loads(manifest.read_text())["method"]["capacity_points_nats"]
     if len(set(capacities)) < 3 or capacities != sorted(capacities):
@@ -177,7 +212,8 @@ def command_preflight(args: argparse.Namespace) -> int:
         resolved_text=training_resolved.read_text()
         if str(base_root) not in resolved_text: failures.append("Original training resolved does not bind the base path")
     except Exception as exc: failures.append(f"invalid base/original resolved binding: {exc}")
-    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest), "prior_model":{"id":"Qwen/Qwen2.5-0.5B-Instruct","revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8","path":str(prior_root),"files":prior_files},"base_model":{"id":"Qwen/Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28","path":str(base_root),"files":base_files},"original_training_resolved":{"path":str(training_resolved),"sha256":sha256(training_resolved)}})
+    overlap_binding = None if overlap is None else {"certificate_path": str(Path(args.data_overlap).resolve()), "certificate_sha256": sha256(Path(args.data_overlap)), "sources": overlap["sources"], "intersections": overlap["intersections"], "producer": overlap["producer"]}
+    result = certificate("PRD_P0_PASS" if not failures else "PRD_P0_NO_GO", "PASS" if not failures else "FAIL", {"failures": failures, "git_commit": commit, "gpu_pair": args.gpu_pair, "manifest_sha256": sha256(manifest), "data_overlap": overlap_binding, "prior_model":{"id":"Qwen/Qwen2.5-0.5B-Instruct","revision":"c89bee90d9f811437d9735454613c35b4a3c4dc8","path":str(prior_root),"files":prior_files},"base_model":{"id":"Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28","path":str(base_root),"files":base_files},"original_training_resolved":{"path":str(training_resolved),"sha256":sha256(training_resolved)}})
     write_json_exclusive(Path(args.output), result)
     return 0 if not failures else 4
 

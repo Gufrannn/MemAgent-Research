@@ -86,6 +86,7 @@ def command_bind(args: argparse.Namespace) -> None:
         "p0_path": str(Path(args.p0).resolve()), "p0_sha256": digest(Path(args.p0).resolve()),
         "prior_model": p0["evidence"]["prior_model"],
         "base_model": p0["evidence"]["base_model"],
+        "data_overlap": p0["evidence"]["data_overlap"],
     }
     exclusive(root / "resolved_run.json", payload)
     for cap in CAPACITIES:
@@ -172,6 +173,7 @@ def command_stage(args: argparse.Namespace) -> None:
         "output_root": str(output.resolve()), "gpu_pair": run["gpu_pair"],
         "prior_model": run["prior_model"],
         "base_model": run["base_model"],
+        "data_overlap": run["data_overlap"],
         "fresh_base": args.stage == "full", "update1_enabled": True})
     print(launch)
 

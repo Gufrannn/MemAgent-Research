@@ -356,7 +356,9 @@ equivalent frozen variable-tracking stream. The memory writer cannot see the
 terminal query during ingestion. Report frontier shift, not only accuracy.
 The paper-level final test must be a separately manifested, previously untouched
 HotpotQA partition or external benchmark frozen before predictions are opened;
-S128 cannot serve as that blind test.
+it must be disjoint from actor/prior training and receive no capacity,
+hyperparameter, stopping, or checkpoint selection. S128 cannot serve as that
+blind test.
 
 ### Failure criteria and boundaries
 
@@ -365,13 +367,18 @@ S128 cannot serve as that blind test.
   remain reportable, but no conditional-rate mechanism claim survives.
 - `NO-GO_T5`: non-finite loss/gradient, zero gradient, incomplete checkpoint or
   ledger, or actor/prior/vLLM synchronization failure. It is not a performance gate.
-- Main T25 performance success: a preregistered capacity improves F1 over
-  Original by at least 2pp at the same task/update budget. This alone is not a
-  conditional-rate result.
-- Main mechanism success: relative to a fresh instrumented unconstrained or
+- Development-pilot T25 criterion: a preregistered capacity improves fixed-S128
+  F1 over Original by at least 2pp at the same task/update budget. Because S128
+  is adaptive development data and T25 is an early budget, this is only a signal
+  to carry the frozen method to the untouched confirmatory test—not paper-level
+  superiority, convergence, or general effectiveness.
+- Development mechanism criterion: relative to a fresh instrumented unconstrained or
   fixed-penalty Method control, F1 remains within 1pp while conditional rate
   falls at least 20%, with at least three frozen capacities and stable
   five-anchor behavior. Unaudited Original is never the rate comparator.
+- Paper-level performance success requires the same frozen method/capacity and
+  preregistered effect criterion on the untouched final test; no retuning or
+  checkpoint selection may follow inspection of final-test predictions.
 - Scope boundary: a gain explainable by shorter strings alone supports a length
   regularization paper, not this paper. A gain from intrinsic CMI reward supports
   merger with CMI-style memory valuation, not PRD. A frontier visible only when

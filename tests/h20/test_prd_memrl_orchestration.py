@@ -11,6 +11,10 @@ import sys
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("orch", REPO / "tools/h20/prd_memrl_orchestrator.py")
 orch = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(orch)
+GATE_SPEC = importlib.util.spec_from_file_location("prd_gate", REPO / "tools/h20/prd_memrl_gate.py")
+gate = importlib.util.module_from_spec(GATE_SPEC); GATE_SPEC.loader.exec_module(gate)
+OVERLAP_SPEC = importlib.util.spec_from_file_location("overlap", REPO / "tools/h20/audit_prd_data_overlap.py")
+overlap = importlib.util.module_from_spec(OVERLAP_SPEC); OVERLAP_SPEC.loader.exec_module(overlap)
 
 
 def dump(path: Path, payload: dict) -> None:
@@ -48,6 +52,11 @@ class OrchestrationTests(unittest.TestCase):
                 "base_model":{"id":"Qwen/Qwen2.5-7B-Instruct","revision":"a09a35458c702b33eeacc393d103063234e8bc28",
                     "path":"/data/cw/memagent_work/models/Qwen2.5-7B-Instruct","files":[]},
                 "original_training_resolved":{"path":"/data/cw/original/resolved.json","sha256":"b"*64},
+                "data_overlap":{"certificate_path":"/data/cw/overlap.json","certificate_sha256":"d"*64,
+                    "sources":{"train":{"path":"/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet","sha256":"e"*64,"rows":32000},
+                    "fixed_s128_validation":{"path":"/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet","sha256":"54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6","resolved":"/data/cw/memagent_work/logs/stable_i4x2_frozen_20260821r2/certificates/p0_resolved_manifest.json","resolved_sha256":"6c17c818fb372cf3c024504b3fa70576a6a3792203f69bf6aaf3690fdffb3411","rows":128}},
+                    "intersections":{"train_pool_and_s128_content":0,"train_pool_and_s128_root":0,"critic_fit_and_s128":0,"selection_and_s128":128},
+                    "producer":{"path":str((REPO/"tools/h20/audit_prd_data_overlap.py").resolve()),"sha256":"f"*64}},
             },
         })
         args = type("A", (), dict(run_root=str(self.root/"run"), run_id=self.run_id,
@@ -186,6 +195,21 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn('os.environ.get("GATE_A_WEIGHT_DIGEST_SAMPLES") != "256"',trainer)
         self.assertIn("GATE_A_WEIGHT_DIGEST_PARAMETERS=model.embed_tokens.weight",entry)
         self.assertIn("GATE_A_WEIGHT_DIGEST_SAMPLES=256",entry)
+
+    def test_forged_overlap_certificate_is_rejected(self):
+        forged=self.root/"forged-overlap.json"
+        dump(forged,{"status":"PASS","decision":"PRD_DATA_OVERLAP_PASS","evidence":{"git_commit":self.commit}})
+        self.assertNoGo(lambda: gate.verify_data_overlap(forged,self.commit), "invalid PRD_DATA_OVERLAP_PASS")
+
+    def test_missing_or_duplicate_root_identity_is_rejected(self):
+        with self.assertRaises(ValueError): overlap.root_id({"extra_info":{}})
+        with self.assertRaises(ValueError): overlap.root_id({"extra_info":{"index":"7"}})
+
+    def test_training_entry_rechecks_bound_data_hashes(self):
+        entry=(REPO/"scripts/h20/run_qwen25_7b_prd_memrl.sh").read_text()
+        self.assertIn('sources=run["data_overlap"]["sources"]',entry)
+        self.assertIn('hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]',entry)
+        self.assertIn('TRAIN=/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet',entry)
 
 
 if __name__ == "__main__": unittest.main()

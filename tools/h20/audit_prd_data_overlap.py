@@ -12,6 +12,10 @@ def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
 def identity(row:dict)->tuple[str,str,str]:
     reward=_mapping(row.get("reward_model"),"reward_model")
     return sha256_text(_question_text(row.get("prompt"))),sha256_text(str(row.get("context"))),canonical_sha256(reward.get("ground_truth"))
+def root_id(row:dict)->str:
+    value=_mapping(row.get("extra_info"),"extra_info").get("index")
+    if isinstance(value,bool) or not isinstance(value,int): raise ValueError(f"extra_info.index must be an integer, got {value!r}")
+    return str(value)
 def main()->int:
     p=argparse.ArgumentParser(); p.add_argument("--train",type=Path,required=True); p.add_argument("--validation",type=Path,required=True)
     p.add_argument("--stable-resolved",type=Path,required=True); p.add_argument("--output",type=Path,required=True); a=p.parse_args(); failures=[]
@@ -21,7 +25,9 @@ def main()->int:
     train_rows=_load_parquet_rows(a.train); stable=json.loads(a.stable_resolved.read_text()); frozen=stable["identity_payload"]["rows"]
     train_ids={identity(dict(row)) for row in train_rows}
     s128_ids={(row["source_question_hash"],row["source_context_hash"],row["ground_truth_hash"]) for row in frozen}
-    root_ids={str(_mapping(row.get("extra_info"),"extra_info").get("index")) for row in train_rows}
+    train_root_list=[root_id(dict(row)) for row in train_rows]
+    if len(set(train_root_list))!=len(train_root_list): failures.append("training root IDs are not unique")
+    root_ids=set(train_root_list)
     s128_roots={str(row["example_id"]) for row in frozen}
     content_overlap=train_ids&s128_ids; root_overlap=root_ids&s128_roots
     if content_overlap or root_overlap: failures.append("training pool intersects fixed S128")
@@ -35,6 +41,7 @@ def main()->int:
         "prior":"same actor training trajectories; no S128 unless train overlap fails","critic":"none (GRPO, grpo_use_adv=False)",
         "selection":"all 128 fixed rows have already been used for certified Original curve and route development; conservatively counted as adaptive"},
         "adaptive_status":"FIXED_S128_IS_DEVELOPMENT_BENCHMARK_NOT_BLIND_FINAL_TEST",
+        "producer":{"path":str(Path(__file__).resolve()),"sha256":sha(Path(__file__).resolve())},
         "evidence":{"git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()},"failures":failures}
     a.output.parent.mkdir(parents=True,exist_ok=True)
     with a.output.open("x") as stream: json.dump(report,stream,indent=2,sort_keys=True); stream.write("\n")

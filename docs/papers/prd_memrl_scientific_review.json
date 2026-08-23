@@ -3,14 +3,17 @@
     "E0 must pass before GPU execution",
     "authenticated on-policy Method E1 must pass before any conditional-rate or information-bottleneck claim",
     "Original has no rate ledger and may only be used as a performance comparator",
-    "rate reduction must be compared with fresh instrumented Method controls, never unaudited Original"
+    "rate reduction must be compared with fresh instrumented Method controls, never unaudited Original",
+    "H20 content/root audit must certify zero train-pool overlap with S128",
+    "T25 fixed-S128 is an early-budget adaptive development pilot, not convergence or paper-level superiority",
+    "paper-level performance requires a separately frozen untouched final test with no post-inspection retuning"
   ],
   "decision": "REFRAME_GO_E0_METHOD",
   "mechanism_claim_pending_e1": true,
-  "paper_sha256": "9bcfc7753e7dfc66f072e1d5159dc2d25179f9f78ce53105cb4f7fac8ed84532",
-  "rationale": "The evidence-timing reframe is honest and preserves a potentially publishable contribution only if posthoc Method E1 distinguishes conditional rate from length and fixed-reference KL and the preregistered capacity frontier is non-degenerate. Task performance alone cannot establish the mechanism.",
+  "paper_sha256": "ec930f6f188f602ac6606656d3b710693a15f00c91d33857c414b9a4a323888a",
+  "rationale": "The evidence-level wording is honest after relabeling fixed-S128 T25 as a descriptive early-budget development pilot. Selection intersects all 128 S128 examples, so neither the Original comparison nor a local frontier is a blind final test. The route remains potentially publishable only if posthoc Method E1 distinguishes conditional rate from length and fixed-reference KL, the capacity frontier is non-degenerate, train/S128 overlap is zero, and the frozen method confirms on a separately manifested untouched final test.",
   "review_scope": "Independent scientific framing review; not code correctness, E0, E1, T5, or release certification.",
-  "reviewed_source_commit": "be4d01bcc6a3671f0eac05f349df58d26233a0c7",
+  "reviewed_source_commit": "5ecdbc14b6bcc466f686a6085cb3e8ae014d31b0",
   "schema_version": 1,
   "source_audit_sha256": "ed13e2217b66efcb6ee5055abd987f297cad20d2bbb5a1aba80e233d8d5dc96a"
 }

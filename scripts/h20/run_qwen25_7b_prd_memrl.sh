@@ -137,6 +137,14 @@ for root,model in ((prior,frozen),(base,run["base_model"])):
  for item in model["files"]:
   p=root/item["path"]; assert p.is_file() and not p.is_symlink() and p.stat().st_size==item["size"]
   assert hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]
+assert launch["data_overlap"]==run["data_overlap"]
+sources=run["data_overlap"]["sources"]
+for item in (sources["train"],sources["fixed_s128_validation"]):
+ p=pathlib.Path(item["path"]); assert p.is_file() and not p.is_symlink()
+ assert hashlib.sha256(p.read_bytes()).hexdigest()==item["sha256"]
+stable=pathlib.Path(sources["fixed_s128_validation"]["resolved"])
+assert stable.is_file() and not stable.is_symlink()
+assert hashlib.sha256(stable.read_bytes()).hexdigest()==sources["fixed_s128_validation"]["resolved_sha256"]
 PY
     phase=fresh
     [[ $ACTION == recover-from-t5 ]] && phase=resume
@@ -148,6 +156,8 @@ PY
       RESUME_FROM="${RESUME_CHECKPOINT:-}" SAVE_FREQ=5 MAX_ACTOR_CKPT_TO_KEEP=5 \
       OUTPUT_ROOT="$PRD_RUN_ROOT/frontier/$cid/checkpoints" \
       MODEL_PATH="$PRD_BASE_MODEL" \
+      TRAIN=/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet \
+      VAL=/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet \
       PRD_MEMRL_ENABLE=1 PRD_MEMRL_CAPACITY="$CAPACITY_NATS" \
       PRD_RUN_ID="$RUN_ID" PRD_FRONTIER_ID="$cid" PRD_GIT_COMMIT="$EXPECTED_COMMIT" \
       PRD_EXECUTION_LEDGER="$PRD_LEDGER" \
