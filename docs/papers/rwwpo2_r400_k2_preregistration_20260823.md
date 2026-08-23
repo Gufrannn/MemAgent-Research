@@ -16,10 +16,10 @@ point, and whether cumulative writer-prefix feasibility controls that movement.
 The central claim is conditional:
 
 > Recurrent whole-path objectives differ from tokenwise objectives only after
-> optimization leaves the behavior policy. In recurrent state writing, this
-> off-behavior regime must be controlled by prefix-distribution feasibility, and
-> the value of cross-turn geometry must be separated from per-write geometry and
-> from the controller itself.
+> optimization leaves the behavior policy. We test whether, in recurrent state
+> writing, prefix-distribution feasibility can control this off-behavior regime
+> and whether cross-turn geometry adds value beyond per-write geometry and the
+> controller itself.
 
 R400 is a preregistered medium-budget study, not a convergence claim. R50 is a
 mechanism gate that never reads S128 or any confirmatory performance set.
@@ -114,9 +114,14 @@ base_lr = 1e-6, warmup_proposals = 2, 1 <= p <= 800.
 
 Therefore p=1 uses `5e-7` and p>=2 uses `1e-6`. Before every proposal the runtime
 writes `S(p)` directly to every optimizer param group. The stateful framework
-scheduler is not advanced and is not part of a reject transaction. A reject
-restores model parameters, Adam moments, and transaction RNG but does not change
-the logical `p`. The accepted optimizer clock `u` increments only after a
+scheduler is not advanced and is not part of a reject transaction. Immediately
+before the logical reseed, the runtime freezes Python, NumPy, Torch CPU, and all
+CUDA RNG states. A reject restores that complete transaction-entry snapshot,
+along with model parameters and Adam moments, but does not change the logical
+`p`. The ledger separately binds entry, post-reseed, post-gradient/pre-trial, and
+terminal RNG digests. An accepted transaction commits its deterministic
+post-trial RNG state; the next transaction is independently reset by its logical
+seed. The accepted optimizer clock `u` increments only after a
 nonzero commit and is diagnostic, never an input to `S`.
 
 For a feasible partial step `0 < alpha < 1`, model parameters commit the

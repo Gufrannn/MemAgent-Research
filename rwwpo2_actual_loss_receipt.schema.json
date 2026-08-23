@@ -58,7 +58,7 @@
     },
     "mechanism_diagnostics": {
       "type": "object",
-      "required": ["policy_loss", "surrogate_loss", "shared_kl_loss", "actual_loss_contract", "active_logprob_gradient_l2", "optimizer_step_calls", "shadow_coefficients", "inner1_exposure", "proposal_lr"],
+      "required": ["policy_loss", "surrogate_loss", "shared_kl_loss", "actual_loss_contract", "active_logprob_gradient_l2", "optimizer_step_calls", "shadow_coefficients", "inner1_exposure", "proposal_lr", "transaction_entry_rng_digest", "logical_seeded_rng_digest", "proposal_gradient_rng_digest", "terminal_rng_digest"],
       "properties": {
         "policy_loss": {"type": "number"},
         "surrogate_loss": {"type": "number"},
@@ -80,6 +80,10 @@
         "active_logprob_gradient_l2": {"type": "number", "minimum": 0},
         "optimizer_step_calls": {"const": 1},
         "proposal_lr": {"type": "number", "exclusiveMinimum": 0},
+        "transaction_entry_rng_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "logical_seeded_rng_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "proposal_gradient_rng_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "terminal_rng_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "shadow_coefficients": {"type": "object"},
         "inner1_exposure": {"type": ["object", "null"]}
       }

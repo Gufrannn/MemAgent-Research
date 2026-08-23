@@ -13,6 +13,7 @@ import math
 import random
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 
@@ -125,11 +126,12 @@ def logical_transaction_seed(*, experiment_seed: int, round_id: int,
 
 
 def seed_transaction_rng(seed: int):
-    """Set all actor-side RNGs from an already derived logical seed."""
+    """Set Python, NumPy, Torch CPU, and every CUDA RNG from a logical seed."""
     seed = int(seed)
     if not 0 <= seed < (1 << 63):
         raise ValueError("logical transaction seed is outside torch range")
     random.seed(seed)
+    np.random.seed(seed % (1 << 32))
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -302,6 +304,7 @@ def rng_snapshot():
     state = {
         "torch_cpu": torch.get_rng_state().cpu(),
         "python": random.getstate(),
+        "numpy": np.random.get_state(),
     }
     if torch.cuda.is_available():
         state["torch_cuda"] = [item.cpu() for item in torch.cuda.get_rng_state_all()]
@@ -311,6 +314,7 @@ def rng_snapshot():
 def restore_rng(state):
     torch.set_rng_state(state["torch_cpu"])
     random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
     if "torch_cuda" in state:
         torch.cuda.set_rng_state_all(state["torch_cuda"])
 

@@ -97,6 +97,9 @@ def main():
         '"shared_kl_loss": float(shared_additive_loss.detach().item())',
         'ref_log_prob=(joined("ref_log_prob") if rwwpo2_enabled else None)',
         '"ref_log_prob": joined("ref_log_prob")',
+        "transaction_entry_rng = rng_snapshot()",
+        "restore_rng(transaction_entry_rng)",
+        '"transaction_entry_rng_digest": pre_digests["rng"]',
     ):
         if token not in actor_source:
             violations.append("missing executable K2 mapping:"+token)
@@ -108,13 +111,18 @@ def main():
         if token not in ledger_source:
             violations.append("actual-loss tensor ledger:"+token)
     for token in ("independently_recompute_actual_loss", "actual_loss_contract",
-                  "shared_kl_loss", "active_logprob_gradient_l2"):
+                  "shared_kl_loss", "active_logprob_gradient_l2",
+                  "RWWPO-2 RNG phase digest closure"):
         if token not in actual_auditor:
             violations.append("actual-loss independent audit:"+token)
     if '"actual_loss_contract"' not in actor_source:
         violations.append("actual-loss producer:actual_loss_contract")
     transaction_source=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text(
         encoding="utf-8")
+    for token in ("np.random.seed", "np.random.get_state", "np.random.set_state",
+                  '"torch_cuda"'):
+        if token not in transaction_source:
+            violations.append("complete transaction RNG:"+token)
     seed_signature=transaction_source.split("def logical_transaction_seed",1)
     if len(seed_signature)!=2 or "attempt" in seed_signature[1].split(")",1)[0]:
         violations.append("attempt in logical seed signature")

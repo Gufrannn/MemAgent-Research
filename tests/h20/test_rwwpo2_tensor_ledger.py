@@ -92,6 +92,10 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None):
                                "active_logprob_gradient_l2":active_gradient_l2,
                                "optimizer_step_calls":1,
                                "proposal_lr":1e-6,
+                               "transaction_entry_rng_digest":pre_digests["rng"],
+                               "logical_seeded_rng_digest":"c"*64,
+                               "proposal_gradient_rng_digest":"d"*64,
+                               "terminal_rng_digest":commit_digests["rng"],
                                "shadow_coefficients":{},
                                "inner1_exposure":{
                                    "relative_parameter_displacement":.1,

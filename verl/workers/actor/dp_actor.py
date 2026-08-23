@@ -457,6 +457,12 @@ class DataParallelPPOActor(BasePPOActor):
                     logical_seed = None
                     scheduler_evidence = None
                     accepted_optimizer_clock_before = None
+                    # A reject is a true transaction rollback.  Freeze the
+                    # complete process RNG state before even the logical reseed;
+                    # the reseed and all materialization/shadow/trial draws are
+                    # effects of this transaction and must disappear on alpha=0.
+                    transaction_entry_rng = rng_snapshot()
+                    logical_seeded_rng = transaction_entry_rng
                     if rwwpo2_enabled:
                         logical_proposal_id = proposal_clock(round_id, inner_id)
                         schedule = dict(rwwpo_config["proposal_schedule"])
@@ -479,6 +485,7 @@ class DataParallelPPOActor(BasePPOActor):
                             stream="actor_transaction",
                         )
                         seed_transaction_rng(logical_seed)
+                        logical_seeded_rng = rng_snapshot()
                         scheduler_evidence = {
                             "kind": "stateless_proposal_clock_v1",
                             "proposal_clock": logical_proposal_id,
@@ -655,6 +662,7 @@ class DataParallelPPOActor(BasePPOActor):
                     if (rwwpo_enabled and rwwpo_controller != "none"
                             and not constraint_pass):
                         self.actor_optimizer.zero_grad()
+                        restore_rng(transaction_entry_rng)
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
                     def stream_parameter_gradient(coefficient):
                         gradient_cursor = 0
@@ -732,9 +740,10 @@ class DataParallelPPOActor(BasePPOActor):
                     stream_parameter_gradient(logprob_gradient)
                     snapshot = (self._snapshot_local_optimizer_step(include_scheduler=not rwwpo2_enabled)
                                 if rwwpo_capture else None)
-                    pre_rng = rng_snapshot() if rwwpo_capture else None
+                    proposal_gradient_rng = rng_snapshot() if rwwpo_capture else None
                     pre_digests = (self._transaction_digests(
-                        snapshot, pre_rng, scheduler_evidence=scheduler_evidence)
+                        snapshot, transaction_entry_rng,
+                        scheduler_evidence=scheduler_evidence)
                         if rwwpo_capture else {})
                     if rwwpo_enabled:
                         from recurrent.research.rwwpo_ledger import append_transaction_marker
@@ -774,7 +783,7 @@ class DataParallelPPOActor(BasePPOActor):
                         trial_started = time.perf_counter()
                         for alpha in candidates:
                             set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha)
-                            restore_rng(pre_rng)
+                            restore_rng(proposal_gradient_rng)
                             with torch.no_grad():
                                 trial_log_prob = torch.cat([
                                     self._forward_micro_batch(item[0], temperature=temperature,
@@ -808,7 +817,7 @@ class DataParallelPPOActor(BasePPOActor):
                         max_trial_seconds = float(rwwpo_config.get("max_trial_forward_wall_seconds", 600.0))
                         if trial_forward_wall_seconds > max_trial_seconds:
                             self._restore_local_optimizer_step(snapshot)
-                            restore_rng(pre_rng)
+                            restore_rng(transaction_entry_rng)
                             raise RuntimeError("RWWPO_TRIAL_FORWARD_BUDGET_EXCEEDED")
                         if rwwpo_controller == "feasible_backtracking":
                             # Complete the declared evidence grid after an early choice is unnecessary;
@@ -827,7 +836,7 @@ class DataParallelPPOActor(BasePPOActor):
                             post_log_prob, post_prefix_rows, post_prefix_stats = chosen_payload
                         else:
                             self._restore_local_optimizer_step(snapshot)
-                            restore_rng(pre_rng)
+                            restore_rng(transaction_entry_rng)
                             post_log_prob = current_log_prob.detach()
                             post_prefix_rows = local_prefix_rows
                             post_prefix_stats = global_prefix_stats
@@ -837,7 +846,7 @@ class DataParallelPPOActor(BasePPOActor):
                             torch.distributed.all_gather_object(decisions, alpha_committed)
                             if len(set(decisions)) != 1:
                                 self._restore_local_optimizer_step(snapshot)
-                                restore_rng(pre_rng)
+                                restore_rng(transaction_entry_rng)
                                 raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
                         commit_params = parameter_snapshot(self.actor_module)
                         if accepted and rwwpo2_enabled:
@@ -996,6 +1005,11 @@ class DataParallelPPOActor(BasePPOActor):
                             "accepted_optimizer_clock_after": (
                                 accepted_optimizer_clock_before + int(bool(accepted))
                                 if accepted_optimizer_clock_before is not None else None),
+                            "transaction_entry_rng_digest": pre_digests["rng"],
+                            "logical_seeded_rng_digest": digest(logical_seeded_rng),
+                            "proposal_gradient_rng_digest": digest(
+                                proposal_gradient_rng),
+                            "terminal_rng_digest": commit_digests["rng"],
                             "inner1_exposure": rwwpo2_inner1_exposure,
                         }, gradient_norm=float(grad_norm.detach().item()),
                         program_version=("rwwpo2-k2" if rwwpo2_enabled else "legacy"),

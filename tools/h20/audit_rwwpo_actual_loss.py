@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 import torch
@@ -324,6 +325,20 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                                                      "active_logprob_gradient_l2")) \
                                 or float(diagnostics.get("active_logprob_gradient_l2", -1)) < 0:
                             raise ValueError("RWWPO-2 loss/optimizer-step evidence")
+                        rng_fields = (
+                            "transaction_entry_rng_digest",
+                            "logical_seeded_rng_digest",
+                            "proposal_gradient_rng_digest",
+                            "terminal_rng_digest",
+                        )
+                        if any(not isinstance(diagnostics.get(field), str)
+                               or re.fullmatch(r"[0-9a-f]{64}", diagnostics[field]) is None
+                               for field in rng_fields) \
+                                or diagnostics["transaction_entry_rng_digest"] != \
+                                    row["pre_digests"]["rng"] \
+                                or diagnostics["terminal_rng_digest"] != \
+                                    row["commit_digests"]["rng"]:
+                            raise ValueError("RWWPO-2 RNG phase digest closure")
                         recomputed_loss = independently_recompute_actual_loss(row)
                         for field, actual_value in recomputed_loss.items():
                             if not math.isclose(

@@ -1,5 +1,7 @@
 import copy
+import random
 
+import numpy as np
 import pytest
 import torch
 
@@ -7,7 +9,8 @@ from recurrent.research.rwwpo_transaction import (
     ALPHA_GRID, digest, displacement_norm, largest_tested_feasible,
     logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, set_interpolated_parameters,
-    stateless_proposal_lr, writer_logprob_rms,
+    restore_rng, rng_snapshot, seed_transaction_rng, stateless_proposal_lr,
+    writer_logprob_rms,
 )
 
 
@@ -78,6 +81,34 @@ def test_logical_seed_has_no_attempt_coordinate():
     kwargs=dict(experiment_seed=2026,round_id=27,inner_id=2,rank=1,stream="actor")
     assert logical_transaction_seed(**kwargs) == logical_transaction_seed(**kwargs)
     assert logical_transaction_seed(**kwargs) != logical_transaction_seed(**{**kwargs,"round_id":28})
+
+
+def test_reject_restores_complete_pre_reseed_transaction_rng_state():
+    random.seed(17)
+    np.random.seed(19)
+    torch.manual_seed(23)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(29)
+    entry = rng_snapshot()
+
+    def draw_all():
+        values = [random.random(), float(np.random.random()), float(torch.rand(()))]
+        if torch.cuda.is_available():
+            values.extend(float(torch.rand((), device=index).cpu())
+                          for index in range(torch.cuda.device_count()))
+        return values
+
+    restore_rng(entry)
+    expected = draw_all()
+    restore_rng(entry)
+    seed_transaction_rng(logical_transaction_seed(
+        experiment_seed=2026, round_id=27, inner_id=2, rank=0,
+        stream="actor_transaction"))
+    for _ in range(7):
+        draw_all()
+    restore_rng(entry)
+    assert draw_all() == expected
+    assert "numpy" in entry and "torch_cpu" in entry and "python" in entry
 
 
 def test_exposure_requires_parameter_and_writer_movement():
