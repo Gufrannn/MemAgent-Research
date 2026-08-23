@@ -9,6 +9,7 @@ from recurrent.research.coral_evidence import (
     validate_original_training_authority,
     validate_stable_s128_authority,
 )
+from recurrent.research.coral_scope_audit import validate_scope_report
 
 BRANCH="h20/qwen25-7b-cosi-t25-frozen-20260822"
 EXPECTED_TRAINING = {
@@ -222,6 +223,13 @@ def validate_original_protocol(manifest, original):
     original_data = original.get("data", {})
     original_backend = original.get("backend", {})
     original_weight_sync = original.get("weight_sync", {})
+    sampled_parameters = original_weight_sync.get("parameter_names")
+    if not isinstance(sampled_parameters, list) or len(sampled_parameters) != 8 \
+            or any(not isinstance(value, str) or not value for value in sampled_parameters) \
+            or len(set(sampled_parameters)) != len(sampled_parameters) \
+            or original_weight_sync.get("transfer_format") != "dtensor" \
+            or original_weight_sync.get("expected_loaded_parameter_count") != 199:
+        raise ValueError("COSI_NO_GO: Original full weight-sync contract")
     comparisons = {
         "model.id": (manifest["model"]["id"], original_model.get("id")),
         "model.revision": (manifest["model"]["revision"], original_model.get("revision")),
@@ -303,6 +311,13 @@ def validate_original_protocol(manifest, original):
     return {
         "compared_leaves": comparisons,
         "original_model_file_inventory": file_map,
+        "original_weight_sync_contract": {
+            "parameter_names": list(sampled_parameters),
+            "transfer_format": original_weight_sync["transfer_format"],
+            "expected_loaded_parameter_count": original_weight_sync[
+                "expected_loaded_parameter_count"
+            ],
+        },
     }
 
 
@@ -412,6 +427,7 @@ def main():
         original_authority["p0"], method_overrides,
     )
     resolved_config_comparison_sha = canonical_sha256(resolved_config_evidence)
+    manifest_sha = sha256_file(manifest_path)
     cert=work/"logs"/"cosi_preflight"/"certificates"; gates={}
     if a.stage in ("t5","continue"):
         # The repository never self-authorizes.  T5 becomes runnable only
@@ -425,6 +441,7 @@ def main():
             "e0":"MEMAGENT_COSI_E0_REPORT_SHA256",
             "e1":"MEMAGENT_COSI_E1_REPORT_SHA256",
             "baseline":"MEMAGENT_COSI_BASELINE_REPORT_SHA256",
+            "scope":"MEMAGENT_COSI_SCOPE_REPORT_SHA256",
         }
         for gate,variable in expected_gate_hashes.items():
             value=env.get(variable,"")
@@ -434,16 +451,30 @@ def main():
         gates["e0"]=authenticated(cert/"coral_e0.json","CORAL_E0_PASS")
         gates["e1"]=authenticated(cert/"coral_e1_final_report.json","CORAL_E1_PASS")
         gates["baseline"]=authenticated(cert/"baseline_import.json","COSI_BASELINE_IMPORT_PASS")
+        scope_path = cert / f"coral_scope_data_{expected}.json"
+        gates["scope"] = validate_scope_report(
+            json.loads(scope_path.read_text(encoding="utf-8")),
+            expected_commit=expected,
+            expected_manifest_path=str(manifest_path),
+            expected_manifest_sha256=manifest_sha,
+            expected_repo=str(repo),
+            expected_work_root=str(work),
+            expected_train_sha256=manifest["data"]["train_sha256"],
+            expected_s128_parquet_sha256=manifest["data"]["validation_sha256"],
+            expected_s128_resolved_path=str(s128_resolved_path),
+            expected_s128_resolved_sha256=sha256_file(s128_resolved_path),
+            expected_eval_manifest_hash=manifest["evaluation"]["eval_manifest_hash"],
+        )
         gate_paths={
             "paper":cert/"paper_framing_review.json",
             "e0":cert/"coral_e0.json",
             "e1":cert/"coral_e1_final_report.json",
             "baseline":cert/"baseline_import.json",
+            "scope":scope_path,
         }
         for gate,path in gate_paths.items():
             if sha256_file(path)!=env[expected_gate_hashes[gate]]:
                 raise ValueError(f"COSI_NO_GO: external expected hash mismatch for {gate}")
-    manifest_sha = sha256_file(manifest_path)
     original_manifest_sha = sha256_file(original_path)
     s128_resolved_manifest_sha = sha256_file(s128_resolved_path)
     if a.stage=="continue":

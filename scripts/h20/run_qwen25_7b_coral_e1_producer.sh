@@ -3,14 +3,19 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/cosi_common.sh"
 cosi_checkout_guard
-cosi_acquire_gpu_locks
+echo CORAL_E1_NO_GO:post_v11_storage_capacity_and_replacement_review_pending >&2
+exit 81
+
+# Unreachable retained implementation.  A later independently reviewed source
+# tip must remove the lock and freeze one exact replacement run identity only
+# after an H20 capacity receipt proves the complete evidence run fits.
 readonly PYTHON=$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python
-readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-coral_e1_seed2026_v11}
+readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-}
 [[ $RUN_ID =~ ^[a-z0-9][a-z0-9_-]{7,79}$ ]] || {
-  echo CORAL_E1_NO_GO:run_id >&2; exit 78;
+  echo CORAL_E1_NO_GO:explicit_independently_reviewed_fresh_run_id_required >&2; exit 78;
 }
 case "$RUN_ID" in
-  coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10)
+  coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10|coral_e1_seed2026_v11)
     echo CORAL_E1_NO_GO:retired_evidence_run_id >&2; exit 78 ;;
 esac
 readonly EXP=qwen25_7b_coral_e1_actual_loss_${RUN_ID}
@@ -24,6 +29,7 @@ readonly CERT=$MEMAGENT_COSI_WORK_ROOT/logs/cosi_preflight/certificates
 [[ ! -e $CERT/coral_e1_evidence.json && ! -e $CERT/coral_e1_final_report.json ]] || {
   echo CORAL_E1_NO_GO:certificate_exists >&2; exit 80;
 }
+cosi_acquire_gpu_locks
 "$PYTHON" "$MEMAGENT_COSI_REPO_DIR/tools/h20/preflight_qwen25_7b_cosi.py" \
   --manifest "$MEMAGENT_COSI_REPO_DIR/manifests/h20/qwen25_7b_cosi_seed2026.json" \
   --stage research

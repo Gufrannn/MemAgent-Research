@@ -183,9 +183,18 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("ordinal_calibration_max_abs_error",sketch_oracle)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
+        self.assertIn("explicit_independently_reviewed_fresh_run_id_required",entry)
         self.assertIn("coral_e1_seed2026_v11",entry)
         self.assertIn(
-            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10",
+            "CORAL_E1_NO_GO:post_v11_storage_capacity_and_replacement_review_pending",
+            entry,
+        )
+        self.assertLess(
+            entry.index("post_v11_storage_capacity_and_replacement_review_pending"),
+            entry.index("cosi_acquire_gpu_locks"),
+        )
+        self.assertIn(
+            "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10|coral_e1_seed2026_v11",
             entry,
         )
         self.assertIn("_coral_e1_resample_terminal",trainer)
@@ -198,9 +207,9 @@ class CoralFrozenContractTests(unittest.TestCase):
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
         release_status=(ROOT/"docs/h20/COSI_RELEASE_STATUS.md").read_text()
-        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v11",runbook)
-        self.assertIn("v9 operator-interrupted partial-step run",runbook)
-        self.assertIn("v10 pre-scientific operational abort",runbook)
+        self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=<INDEPENDENTLY_REVIEWED_FRESH_POST_V11_RUN_ID>",runbook)
+        self.assertIn("Versions v3--v11 are retired",runbook)
+        self.assertIn("100% capacity",runbook)
         self.assertIn("18a39b1f727013734b7b92718f3f694072f1f299",release_status)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
         clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
@@ -247,6 +256,7 @@ class CoralFrozenContractTests(unittest.TestCase):
             "MEMAGENT_COSI_E0_REPORT_SHA256",
             "MEMAGENT_COSI_E1_REPORT_SHA256",
             "MEMAGENT_COSI_BASELINE_REPORT_SHA256",
+            "MEMAGENT_COSI_SCOPE_REPORT_SHA256",
         ):
             self.assertIn(variable, preflight)
             self.assertIn(f"export {variable}=<EXTERNALLY_ISSUED_", runbook)
@@ -369,10 +379,16 @@ class CoralFrozenContractTests(unittest.TestCase):
         base["MEMAGENT_COSI_EXPECTED_COMMIT"]=subprocess.check_output(
             ["git","-C",str(ROOT),"rev-parse","HEAD"],text=True
         ).strip()
-        dirty=subprocess.run(
-            ["bash","-c",f'source "{common}"; cosi_checkout_guard'],
-            env=base,text=True,capture_output=True,
-        )
+        marker=ROOT/".cosi_dirty_guard_test.tmp"
+        self.assertFalse(marker.exists())
+        marker.write_text("test-owned dirty marker\n")
+        try:
+            dirty=subprocess.run(
+                ["bash","-c",f'source "{common}"; cosi_checkout_guard'],
+                env=base,text=True,capture_output=True,
+            )
+        finally:
+            marker.unlink()
         self.assertNotEqual(dirty.returncode,0)
         self.assertIn("dirty_tree",dirty.stderr)
 

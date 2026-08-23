@@ -15,6 +15,18 @@ sys.path.insert(0, str(ROOT))
 from recurrent.research.coral import phase_for_step
 from recurrent.research.cosi import canonical_sha256, checkpoint_sha256, sha256_file, validate_ledger
 from recurrent.research.gate_a_execution import validate_jsonl_chain
+from recurrent.research.coral_scope_audit import actual_budget, validate_scope_report
+from recurrent.research.coral_evidence import (
+    validate_original_training_authority,
+    validate_stable_s128_authority,
+)
+from tools.h20.preflight_qwen25_7b_cosi import (
+    emit_method_overrides,
+    validate_continuation_binding,
+    validate_local_artifacts,
+    validate_original_protocol,
+    validate_resolved_original_copy,
+)
 
 ANCHOR_METRICS = ("normalized_exact_match", "token_f1", "format_success")
 
@@ -128,6 +140,116 @@ def validate_resume_record(record, expected_source):
             raise ValueError("CORAL_AUDIT_NO_GO: optimizer/scheduler resume state")
 
 
+def trusted_actual_budget_inputs(
+    *, work, repo, manifest, manifest_path, stable_path, expected_commit,
+    gate_reports, gate_root,
+):
+    """Recompute every semantic input used to promote a completed T25 budget."""
+    authority = manifest.get("evidence_authority")
+    if not isinstance(authority, dict):
+        raise ValueError("CORAL_AUDIT_NO_GO: evidence authority missing")
+    original_path = Path(
+        os.environ["MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST"]
+    ).resolve()
+    original_expected_sha = os.environ.get(
+        "MEMAGENT_COSI_ORIGINAL_RESOLVED_MANIFEST_SHA256", ""
+    )
+    stable_expected_sha = os.environ.get(
+        "MEMAGENT_COSI_S128_RESOLVED_MANIFEST_SHA256", ""
+    )
+    if re.fullmatch(r"[0-9a-f]{64}", original_expected_sha) is None \
+            or re.fullmatch(r"[0-9a-f]{64}", stable_expected_sha) is None:
+        raise ValueError("CORAL_AUDIT_NO_GO: external authority SHA syntax")
+    original_authority = validate_original_training_authority(
+        authority.get("original_training", {}), resolved_path=original_path,
+        expected_resolved_sha256=original_expected_sha,
+    )
+    stable_authority = validate_stable_s128_authority(
+        authority.get("stable_s128", {}), resolved_path=stable_path,
+        expected_resolved_sha256=stable_expected_sha,
+    )
+    original = json.loads(original_path.read_text(encoding="utf-8"))
+    protocol_evidence = validate_original_protocol(manifest, original)
+    model_inventory_sha = validate_local_artifacts(
+        work, manifest, protocol_evidence,
+    )
+    pair_text = os.environ.get("MEMAGENT_COSI_GPU_PAIR", "")
+    if re.fullmatch(r"[0-9]+,[0-9]+", pair_text) is None:
+        raise ValueError("CORAL_AUDIT_NO_GO: canonical GPU pair required")
+    gpu_pair = [int(value) for value in pair_text.split(",")]
+    if gpu_pair != sorted(set(gpu_pair)) or len(gpu_pair) != 2:
+        raise ValueError("CORAL_AUDIT_NO_GO: canonical GPU pair required")
+    method_overrides = emit_method_overrides(work, gpu_pair, "t5")
+    resolved_evidence = validate_resolved_original_copy(
+        original_authority["p0"], method_overrides,
+    )
+    comparison_receipt = {
+        key: {"method": left, "original": right}
+        for key, (left, right) in sorted(protocol_evidence["compared_leaves"].items())
+    }
+    p0_path = gate_root / "p0_t5.json"
+    p0_file_expected = os.environ.get("MEMAGENT_COSI_T5_P0_SHA256", "")
+    if re.fullmatch(r"[0-9a-f]{64}", p0_file_expected) is None \
+            or sha256_file(p0_path) != p0_file_expected:
+        raise ValueError("CORAL_AUDIT_NO_GO: externally frozen T5 P0 file SHA")
+    p0 = json.loads(p0_path.read_text(encoding="utf-8"))
+    validate_continuation_binding(
+        p0, expected_commit=expected_commit,
+        manifest_sha256=sha256_file(manifest_path),
+        original_manifest_sha256=original_authority["resolved_sha256"],
+        original_p0_certificate_sha256=original_authority["p0_sha256"],
+        s128_manifest_sha256=stable_authority["resolved_sha256"],
+        model_inventory_sha256=model_inventory_sha,
+        protocol_comparison_sha256=canonical_sha256(comparison_receipt),
+        method_nonwhitelist_config_sha256=(
+            resolved_evidence["method_nonwhitelist_config_sha256"]
+        ),
+        evidence_authority_sha256=canonical_sha256(authority),
+        gpu_pair=gpu_pair,
+    )
+    exact_projection = {
+        "original_training_final_sha256": original_authority["final_sha256"],
+        "original_training_ledger_sha256": original_authority["ledger_sha256"],
+        "s128_final_sha256": stable_authority["final_sha256"],
+        "s128_ledger_sha256": stable_authority["ledger_sha256"],
+        "original_protocol_compared_leaves": sorted(comparison_receipt),
+        "resolved_config_comparison": resolved_evidence,
+        "resolved_config_comparison_sha256": canonical_sha256(resolved_evidence),
+    }
+    if any(p0.get(field) != value for field, value in exact_projection.items()):
+        raise ValueError("CORAL_AUDIT_NO_GO: T5 P0 trusted semantic projection drift")
+    expected_gate_hashes = {
+        "paper": gate_reports["paper_framing_review"]["report_sha256"],
+        "e0": gate_reports["coral_e0"]["report_sha256"],
+        "e1": gate_reports["coral_e1_final_report"]["report_sha256"],
+        "baseline": gate_reports["baseline_import"]["report_sha256"],
+        "scope": gate_reports["scope"]["report_sha256"],
+    }
+    if p0.get("gate_hashes") != expected_gate_hashes:
+        raise ValueError("CORAL_AUDIT_NO_GO: T5 P0 current gate projection drift")
+    cursor = original_authority["p0"].get("evidence", {}).get(
+        "train_cursor_semantic_indices_0_to_99"
+    )
+    if not isinstance(cursor, list) or len(cursor) != 100 \
+            or any(type(value) is not int for value in cursor):
+        raise ValueError("CORAL_AUDIT_NO_GO: authenticated Original cursor missing")
+    sync_contract = protocol_evidence["original_weight_sync_contract"]
+    return {
+        "p0_t5_path": p0_path,
+        "expected_p0_t5_file_sha256": p0_file_expected,
+        "expected_dataset_cursor": cursor,
+        "expected_gpu_pair": gpu_pair,
+        "expected_gate_hashes": expected_gate_hashes,
+        "expected_original_resolved_sha256": original_authority["resolved_sha256"],
+        "expected_s128_resolved_sha256": stable_authority["resolved_sha256"],
+        "expected_weight_sync_parameters": sync_contract["parameter_names"],
+        "expected_weight_transfer_format": sync_contract["transfer_format"],
+        "expected_loaded_parameter_count": sync_contract[
+            "expected_loaded_parameter_count"
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", required=True)
@@ -137,9 +259,14 @@ def main():
     args = parser.parse_args()
     root = Path(args.run_root).resolve()
     work = Path(os.environ["MEMAGENT_COSI_WORK_ROOT"]).resolve()
+    repo = Path(os.environ["MEMAGENT_COSI_REPO_DIR"]).resolve()
+    manifest_path = repo / "manifests/h20/qwen25_7b_cosi_seed2026.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stable_path = Path(os.environ["MEMAGENT_COSI_S128_RESOLVED_MANIFEST"]).resolve()
     gate_root = work / "logs/cosi_preflight/certificates"
     gates = {}
     gate_reports = {}
+    expected_commit = os.environ.get("MEMAGENT_COSI_EXPECTED_COMMIT", "")
     for name, decision, expected_variable in (
         ("paper_framing_review", "CORAL_PAPER_FRAMING_GO", "MEMAGENT_COSI_PAPER_REVIEW_SHA256"),
         ("coral_e0", "CORAL_E0_PASS", "MEMAGENT_COSI_E0_REPORT_SHA256"),
@@ -153,11 +280,33 @@ def main():
             raise ValueError(f"CORAL_AUDIT_NO_GO: external gate binding {name}")
         gate_reports[name] = auth(gate_path, decision)
         gates[name] = gate_reports[name]["report_sha256"]
+    scope_path = gate_root / f"coral_scope_data_{expected_commit}.json"
+    scope_expected = os.environ.get("MEMAGENT_COSI_SCOPE_REPORT_SHA256", "")
+    if re.fullmatch(r"[0-9a-f]{64}", scope_expected) is None \
+            or sha256_file(scope_path) != scope_expected:
+        raise ValueError("CORAL_AUDIT_NO_GO: external gate binding scope")
+    gate_reports["scope"] = validate_scope_report(
+        json.loads(scope_path.read_text(encoding="utf-8")),
+        expected_commit=expected_commit,
+        expected_manifest_path=str(manifest_path),
+        expected_manifest_sha256=sha256_file(manifest_path),
+        expected_repo=str(repo),
+        expected_work_root=str(work),
+        expected_train_sha256=manifest["data"]["train_sha256"],
+        expected_s128_parquet_sha256=manifest["data"]["validation_sha256"],
+        expected_s128_resolved_path=str(stable_path),
+        expected_s128_resolved_sha256=sha256_file(stable_path),
+        expected_eval_manifest_hash=manifest["evaluation"]["eval_manifest_hash"],
+    )
+    gates["scope"] = gate_reports["scope"]["report_sha256"]
     if args.stage == "research":
         updates = []
         gate_tail = None
         anchor_comparisons = []
         anchor_curve = None
+        actual_training_budget = actual_budget(
+            None, None, expected_commit=expected_commit
+        )
     else:
         training_root = Path(args.training_root).resolve()
         ledger = validate_ledger(root / "coral_execution_ledger.jsonl")
@@ -195,18 +344,35 @@ def main():
             gates[f"s128_t{step}"] = evaluation["report_sha256"]
         anchor_curve = summarize_anchor_curve(anchor_comparisons) if anchor_comparisons else None
         if args.stage == "final":
+            budget_inputs = trusted_actual_budget_inputs(
+                work=work, repo=repo, manifest=manifest,
+                manifest_path=manifest_path, stable_path=stable_path,
+                expected_commit=expected_commit, gate_reports=gate_reports,
+                gate_root=gate_root,
+            )
+            actual_training_budget = actual_budget(
+                root, training_root, expected_commit=expected_commit,
+                expected_manifest_sha256=sha256_file(manifest_path),
+                **budget_inputs,
+            )
+        else:
+            actual_training_budget = {
+                "status": "PENDING_UNTIL_COMPLETE_T25_FINAL_AUDIT"
+            }
+        if args.stage == "final":
             resume = [row for row in gate_rows if row.get("record_type") == "resume_load"]
             if len(resume) > 1:
                 raise ValueError("CORAL_AUDIT_NO_GO: ambiguous resume closure")
             if resume:
                 validate_resume_record(resume[0], training_root / "global_step_5")
     report = {
-        "schema": "memagent.coral.audit.v3", "status": "PASS",
+        "schema": "memagent.coral.audit.v4", "status": "PASS",
         "decision": f"CORAL_{args.stage.upper()}_AUDIT_PASS", "stage": args.stage,
         "gate_hashes": gates, "update_records": len(updates),
         "gate_a_ledger_tail_sha256": gate_tail,
         "anchor_comparisons": anchor_comparisons,
         "anchor_curve_summary": anchor_curve,
+        "actual_training_budget": actual_training_budget,
         "comparison_estimand": (
             "descriptive Method-minus-authenticated-Original fixed-S128 aggregates; "
             "no population inference"
