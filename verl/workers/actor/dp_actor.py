@@ -41,9 +41,10 @@ from recurrent.research.rwwpo_transaction import (
     ALPHA_GRID, RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS, digest,
     displacement_norm, largest_tested_feasible,
     local_gradient_sketch_sufficient_statistics,
-    logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
+    logical_transaction_seed, module_state_digest, named_buffer_snapshot,
+    off_behavior_exposed, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, relative_displacement_norm, restore_rng, rng_snapshot,
-    seed_transaction_rng, set_interpolated_parameters,
+    restore_named_buffers, seed_transaction_rng, set_interpolated_parameters,
     set_stateless_proposal_lr, writer_logprob_rms_sufficient_statistics,
 )
 
@@ -71,8 +72,9 @@ class DataParallelPPOActor(BasePPOActor):
             else verl_F.entropy_from_logits
         )
 
-    def _snapshot_local_optimizer_step(self, *, include_scheduler=True):
-        """CPU snapshot of local FSDP shards and optimizer for reject/rollback."""
+    def _snapshot_local_optimizer_step(self, *, include_scheduler=True,
+                                       entry_buffers=None):
+        """CPU snapshot; RWWPO-2 supplies buffers for complete rollback."""
         def cpu_clone(value):
             if torch.is_tensor(value):
                 return value.detach().cpu().clone()
@@ -86,11 +88,12 @@ class DataParallelPPOActor(BasePPOActor):
         params = [param.detach().cpu().clone() for param in self.actor_module.parameters()]
         scheduler = (cpu_clone(self.actor_lr_scheduler.state_dict())
                      if include_scheduler and self.actor_lr_scheduler is not None else None)
-        return params, cpu_clone(self.actor_optimizer.state_dict()), scheduler
+        return params, cpu_clone(self.actor_optimizer.state_dict()), scheduler, entry_buffers
 
     def _transaction_digests(self, snapshot, rng_state, scheduler_evidence=None):
         return {
-            "model": digest(snapshot[0]),
+            "model": (module_state_digest(snapshot[0], snapshot[3])
+                      if snapshot[3] is not None else digest(snapshot[0])),
             "optimizer": digest(snapshot[1]),
             "scheduler": digest(snapshot[2] if scheduler_evidence is None else scheduler_evidence),
             "scaler": "not_applicable_bfloat16",
@@ -98,10 +101,12 @@ class DataParallelPPOActor(BasePPOActor):
         }
 
     def _restore_local_optimizer_step(self, snapshot):
-        params, optimizer, scheduler = snapshot
+        params, optimizer, scheduler, buffers = snapshot
         with torch.no_grad():
             for target, source in zip(self.actor_module.parameters(), params):
                 target.copy_(source.to(device=target.device, dtype=target.dtype))
+        if buffers is not None:
+            restore_named_buffers(self.actor_module, buffers)
         self.actor_optimizer.load_state_dict(optimizer)
         if scheduler is not None:
             self.actor_lr_scheduler.load_state_dict(scheduler)
@@ -465,6 +470,14 @@ class DataParallelPPOActor(BasePPOActor):
                     # the reseed and all materialization/shadow/trial draws are
                     # effects of this transaction and must disappear on alpha=0.
                     transaction_entry_rng = rng_snapshot()
+                    # RWWPO-2 treats non-parameter model buffers as frozen
+                    # transaction cache state. Legacy RWWPO retains its released
+                    # parameter/optimizer-only transition and digest semantics.
+                    transaction_entry_buffers = (
+                        named_buffer_snapshot(self.actor_module)
+                        if rwwpo2_enabled else None)
+                    transaction_entry_buffer_digest = digest(
+                        transaction_entry_buffers)
                     logical_seeded_rng = transaction_entry_rng
                     if rwwpo2_enabled:
                         logical_proposal_id = proposal_clock(round_id, inner_id)
@@ -664,10 +677,50 @@ class DataParallelPPOActor(BasePPOActor):
                         for row in global_prefix_stats)
                     if (rwwpo_enabled and rwwpo_controller != "none"
                             and not constraint_pass):
+                        current_reference_max_abs = float((
+                            current_log_prob - old_log_prob
+                        )[response_mask].detach().abs().max().item())
+                        if torch.distributed.is_initialized():
+                            failure_delta = torch.tensor(
+                                current_reference_max_abs,
+                                dtype=torch.float64,
+                                device=torch.cuda.current_device())
+                            torch.distributed.all_reduce(
+                                failure_delta,
+                                op=torch.distributed.ReduceOp.MAX)
+                            current_reference_max_abs = float(
+                                failure_delta.item())
+                        if rwwpo2_enabled:
+                            from recurrent.research.rwwpo_ledger import (
+                                append_transaction_failure_record,
+                            )
+                            append_transaction_failure_record(
+                                ledger_dir=rwwpo_config.get("ledger_dir"),
+                                attempt_id=rwwpo_config.get("attempt_id"),
+                                rank=rank, global_step=round_id,
+                                inner_id=inner_id,
+                                proposal_clock=logical_proposal_id,
+                                reason="RWWPO_PREFIX_TRUST_REGION_VIOLATION",
+                                phase="precondition",
+                                prefix_rows=local_prefix_rows,
+                                prefix_stats=global_prefix_stats,
+                                current_reference_max_abs=
+                                    current_reference_max_abs,
+                                behavior_batch_digest=frozen_digest,
+                                transaction_entry_buffer_digest=
+                                    transaction_entry_buffer_digest,
+                                diagnostics={
+                                    "q_min": q_min,
+                                    "root_q_min": root_q_min,
+                                    "writer_log_ratio_cap": ratio_cap,
+                                })
                         self.actor_optimizer.zero_grad()
                         restore_rng(transaction_entry_rng)
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
                     def stream_parameter_gradient(coefficient):
+                        if rwwpo2_enabled:
+                            restore_named_buffers(
+                                self.actor_module, transaction_entry_buffers)
                         gradient_cursor = 0
                         for micro_data, _, forward_rng in forwarded:
                             restore_rng(forward_rng)
@@ -759,7 +812,9 @@ class DataParallelPPOActor(BasePPOActor):
                     if not torch.isfinite(logprob_gradient[response_mask]).all():
                         raise RuntimeError("RWWPO_NUMERIC_HEALTH_FAILURE: non-finite logprob gradient")
                     stream_parameter_gradient(logprob_gradient)
-                    snapshot = (self._snapshot_local_optimizer_step(include_scheduler=not rwwpo2_enabled)
+                    snapshot = (self._snapshot_local_optimizer_step(
+                                include_scheduler=not rwwpo2_enabled,
+                                entry_buffers=transaction_entry_buffers)
                                 if rwwpo_capture else None)
                     proposal_gradient_rng = rng_snapshot() if rwwpo_capture else None
                     pre_digests = (self._transaction_digests(
@@ -784,6 +839,8 @@ class DataParallelPPOActor(BasePPOActor):
                     post_prefix_rows = local_prefix_rows
                     accepted = True
                     alpha_committed = 1.0
+                    post_verification_max_abs = 0.0
+                    post_commit_forward_verified = False
                     trial_rows = []
                     full_params = parameter_snapshot(self.actor_module) if rwwpo_capture else None
                     full_displacement = displacement_norm(snapshot[0], full_params) if rwwpo_capture else 0.0
@@ -804,6 +861,9 @@ class DataParallelPPOActor(BasePPOActor):
                         trial_started = time.perf_counter()
                         for alpha in candidates:
                             set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha)
+                            if rwwpo2_enabled:
+                                restore_named_buffers(
+                                    self.actor_module, transaction_entry_buffers)
                             restore_rng(proposal_gradient_rng)
                             with torch.no_grad():
                                 trial_log_prob = torch.cat([
@@ -854,13 +914,9 @@ class DataParallelPPOActor(BasePPOActor):
                             alpha_committed = 1.0 if accepted else 0.0
                         if accepted:
                             set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha_committed)
-                            post_log_prob, post_prefix_rows, post_prefix_stats = chosen_payload
                         else:
                             self._restore_local_optimizer_step(snapshot)
                             restore_rng(transaction_entry_rng)
-                            post_log_prob = current_log_prob.detach()
-                            post_prefix_rows = local_prefix_rows
-                            post_prefix_stats = global_prefix_stats
                         # All ranks must make the same transactional decision.
                         if torch.distributed.is_initialized():
                             decisions = [None] * torch.distributed.get_world_size()
@@ -869,6 +925,120 @@ class DataParallelPPOActor(BasePPOActor):
                                 self._restore_local_optimizer_step(snapshot)
                                 restore_rng(transaction_entry_rng)
                                 raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
+                        if rwwpo2_enabled:
+                            # A trial tensor is not a commit certificate. Re-run
+                            # the exact committed state from the transaction-entry
+                            # buffers, preserve the algorithmic terminal RNG, and
+                            # independently rebuild the post-prefix certificate.
+                            # This is especially important for alpha=0: a stale
+                            # cached behavior tensor can otherwise conceal
+                            # forward-mutated state until the next inner update.
+                            restore_named_buffers(
+                                self.actor_module, transaction_entry_buffers)
+                            post_verification_terminal_rng = rng_snapshot()
+                            restore_rng(proposal_gradient_rng)
+                            with torch.no_grad():
+                                verified_post_log_prob = torch.cat([
+                                    self._forward_micro_batch(
+                                        item[0], temperature=temperature,
+                                        calculate_entropy=False)[1]
+                                    for item in forwarded
+                                ], dim=0)
+                                _, verified_post_metrics = compute_rwwpo_policy_loss(
+                                    old_log_prob, verified_post_log_prob,
+                                    joined("advantages"), response_mask,
+                                    writer_mask, final_mask,
+                                    joined("sample_index"),
+                                    joined("trajectory_turn"),
+                                    self.config.clip_ratio,
+                                    self.config.clip_ratio_low,
+                                    self.config.clip_ratio_high,
+                                    self.config.get("clip_ratio_c", 3.0),
+                                    writer_log_ratio_cap=ratio_cap,
+                                    writer_objective=(
+                                        rwwpo_objective
+                                        if rwwpo_objective != "original_tokenwise"
+                                        else "whole_prefix"),
+                                )
+                            restore_rng(post_verification_terminal_rng)
+                            restore_named_buffers(
+                                self.actor_module, transaction_entry_buffers)
+                            post_prefix_rows = with_root_identities(
+                                verified_post_metrics["prefix_log_ratios"])
+                            post_prefix_stats = build_global_stats(post_prefix_rows)
+                            reference_post_log_prob = (
+                                chosen_payload[0] if accepted
+                                else current_log_prob.detach())
+                            post_verification_max_abs = float((
+                                verified_post_log_prob - reference_post_log_prob
+                            )[response_mask].detach().abs().max().item())
+                            if torch.distributed.is_initialized():
+                                post_delta = torch.tensor(
+                                    post_verification_max_abs,
+                                    dtype=torch.float64,
+                                    device=torch.cuda.current_device())
+                                torch.distributed.all_reduce(
+                                    post_delta, op=torch.distributed.ReduceOp.MAX)
+                                post_verification_max_abs = float(post_delta.item())
+                            post_constraint_valid = (
+                                rwwpo_controller == "none"
+                                or all(row["feasible"]
+                                       for row in post_prefix_stats))
+                            post_verification_pass = (
+                                post_constraint_valid
+                                and post_verification_max_abs <= float(
+                                    rwwpo_config["tau_logprob"]))
+                            if not post_verification_pass:
+                                diagnostic = {
+                                    "rank": rank, "round_id": round_id,
+                                    "inner_id": inner_id,
+                                    "accepted_nonzero": bool(accepted),
+                                    "alpha_committed": float(alpha_committed),
+                                    "proposal_zero": bool(proposal_zero),
+                                    "post_verification_max_abs":
+                                        post_verification_max_abs,
+                                    "tau_logprob": float(
+                                        rwwpo_config["tau_logprob"]),
+                                    "verified_post_prefix_stats":
+                                        post_prefix_stats,
+                                }
+                                print(
+                                    "[RWWPO2_POST_COMMIT_FORWARD_DIAG] "
+                                    + json.dumps(diagnostic, sort_keys=True),
+                                    flush=True)
+                                from recurrent.research.rwwpo_ledger import (
+                                    append_transaction_failure_record,
+                                )
+                                append_transaction_failure_record(
+                                    ledger_dir=rwwpo_config.get("ledger_dir"),
+                                    attempt_id=rwwpo_config.get("attempt_id"),
+                                    rank=rank, global_step=round_id,
+                                    inner_id=inner_id,
+                                    proposal_clock=logical_proposal_id,
+                                    reason=(
+                                        "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE"),
+                                    phase="post_commit_verify",
+                                    prefix_rows=post_prefix_rows,
+                                    prefix_stats=post_prefix_stats,
+                                    current_reference_max_abs=
+                                        post_verification_max_abs,
+                                    behavior_batch_digest=frozen_digest,
+                                    transaction_entry_buffer_digest=
+                                        transaction_entry_buffer_digest,
+                                    diagnostics=diagnostic)
+                                self._restore_local_optimizer_step(snapshot)
+                                restore_rng(transaction_entry_rng)
+                                raise RuntimeError(
+                                    "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE")
+                            post_log_prob = verified_post_log_prob.detach()
+                            post_commit_forward_verified = True
+                        elif accepted:
+                            post_log_prob, post_prefix_rows, post_prefix_stats = \
+                                chosen_payload
+                        else:
+                            post_log_prob = current_log_prob.detach()
+                            post_prefix_rows = local_prefix_rows
+                            post_prefix_stats = global_prefix_stats
                         commit_params = parameter_snapshot(self.actor_module)
                         if accepted and rwwpo2_enabled:
                             for group in self.actor_optimizer.param_groups:
@@ -877,7 +1047,13 @@ class DataParallelPPOActor(BasePPOActor):
                         if accepted and self.actor_lr_scheduler is not None and not rwwpo2_enabled:
                             self.actor_lr_scheduler.step()
                         commit_scheduler_evidence = scheduler_evidence
-                        commit_digests = {"model": digest(commit_params),
+                        commit_buffers = (named_buffer_snapshot(self.actor_module)
+                                          if rwwpo2_enabled else None)
+                        terminal_buffer_digest = digest(commit_buffers)
+                        commit_digests = {"model": (module_state_digest(
+                                              commit_params, commit_buffers)
+                                              if rwwpo2_enabled else
+                                              digest(commit_params)),
                                           "optimizer": digest(self.actor_optimizer.state_dict()),
                                           "scheduler": digest(commit_scheduler_evidence)
                                           if rwwpo2_enabled else (
@@ -911,6 +1087,8 @@ class DataParallelPPOActor(BasePPOActor):
                         accepted = not proposal_zero
                         alpha_committed = 1.0 if accepted else 0.0
                         commit_params = parameter_snapshot(self.actor_module)
+                        commit_buffers = None
+                        terminal_buffer_digest = digest(commit_buffers)
                         commit_digests = {"model": digest(commit_params),
                                           "optimizer": digest(self.actor_optimizer.state_dict()),
                                           "scheduler": digest(self.actor_lr_scheduler.state_dict())
@@ -1006,6 +1184,15 @@ class DataParallelPPOActor(BasePPOActor):
                             },
                             "active_logprob_gradient_l2": float(
                                 logprob_gradient[response_mask].detach().double().norm().item()),
+                            "post_commit_forward_verified": bool(
+                                post_commit_forward_verified),
+                            "post_commit_forward_verification_max_abs": float(
+                                post_verification_max_abs),
+                            "post_commit_forward_verification_tolerance": float(
+                                rwwpo_config.get("tau_logprob", 0.0)),
+                            "transaction_entry_buffer_digest":
+                                transaction_entry_buffer_digest,
+                            "terminal_buffer_digest": terminal_buffer_digest,
                             "optimizer_step_calls": transaction_optimizer_step_calls,
                             "token_approx_kl": rwwpo_metrics["token_approx_kl"],
                             "token_clipfrac": rwwpo_metrics["token_clipfrac"],

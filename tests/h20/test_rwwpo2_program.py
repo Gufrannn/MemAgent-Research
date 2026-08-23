@@ -10,7 +10,10 @@ import pytest
 import torch
 
 from tools.h20.audit_rwwpo2_r50_program import wilson_interval
-from tools.h20.audit_rwwpo2_attempt import execution_prefix_through_round
+from tools.h20.audit_rwwpo2_attempt import (
+    execution_prefix_through_round, validate_transaction_failure_boundary,
+    validate_post_commit_forward_binding,
+)
 from tools.h20.audit_rwwpo2_lineage_parent import execution_prefix_to_checkpoint
 from tools.h20.preflight_rwwpo2 import receipt
 from tools.h20.verify_rwwpo2_release_tests import (
@@ -111,6 +114,19 @@ def test_actor_source_has_one_counted_step_per_inner_and_frozen_batch():
     assert 'ref_log_prob=(joined("ref_log_prob") if rwwpo2_enabled else None)' in source
     assert '"ref_log_prob": joined("ref_log_prob")' in source
     assert "RWWPO2_BEHAVIOR_BATCH_MUTATED_BETWEEN_INNER_UPDATES" in source
+    assert "named_buffer_snapshot(self.actor_module)" in source
+    assert "if rwwpo2_enabled else None" in source
+    assert "restore_named_buffers(" in source
+    assert "post_commit_forward_verified = True" in source
+    assert 'rwwpo_controller == "none"' in source
+    assert "post_constraint_valid" in source
+    assert '"transaction_entry_buffer_digest"' in source
+    assert '"terminal_buffer_digest"' in source
+    assert "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE" in source
+    assert "append_transaction_failure_record(" in source
+    legacy_branch = source.split("elif accepted:", 1)[1].split(
+        "commit_params = parameter_snapshot", 1)[0]
+    assert "restore_named_buffers" not in legacy_branch
     # R50 must include both behavior and off-behavior same-host shadows every round.
     assert "r50_host_shadow = round_id <=" in source
     assert "inner_id == 2 and round_id <=" not in source
@@ -166,8 +182,52 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     assert "R400 preflight gate binding" in attempt
     assert "preflight lineage start" in attempt
     assert "validate_rwwpo2_rng_phase_digests(row)" in attempt
+    assert "validate_transaction_failure_boundary(" in attempt
+    assert "validate_post_commit_forward_binding(" in attempt
     gate = (ROOT / "tools/h20/audit_rwwpo2_r50_program.py").read_text()
     assert "segment contract binding" in gate
+
+
+def test_attempt_failure_evidence_is_prefix_aware_and_fail_closed(tmp_path):
+    assert validate_transaction_failure_boundary(
+        tmp_path, through_round=10) == []
+    failure = tmp_path / "failure_rank0.jsonl"
+    failure.write_text("")
+    with pytest.raises(ValueError, match="empty transaction failure"):
+        validate_transaction_failure_boundary(tmp_path, through_round=10)
+    failure.unlink()
+    failure.mkdir()
+    with pytest.raises(ValueError, match="malformed transaction failure"):
+        validate_transaction_failure_boundary(tmp_path, through_round=10)
+    failure.rmdir()
+    from recurrent.research.rwwpo_ledger import append_transaction_failure_record
+    append_transaction_failure_record(
+        ledger_dir=tmp_path,attempt_id="failed",rank=0,global_step=12,
+        inner_id=1,proposal_clock=23,
+        reason="RWWPO_PREFIX_TRUST_REGION_VIOLATION",phase="precondition",
+        prefix_rows=[{"turn":0,"sample_index":0,
+                      "root_identity_hash":"root","log_ratio":4.1}],
+        prefix_stats=[{"turn":0,"feasible":False}],
+        current_reference_max_abs=.1,
+        behavior_batch_digest="a"*64,
+        transaction_entry_buffer_digest="b"*64)
+    assert len(validate_transaction_failure_boundary(
+        tmp_path, through_round=10)) == 1
+    with pytest.raises(ValueError, match="inside audited prefix"):
+        validate_transaction_failure_boundary(tmp_path, through_round=12)
+
+
+def test_attempt_binds_post_commit_verification_to_numeric_oracle():
+    row = {"mechanism_diagnostics": {
+        "post_commit_forward_verified": True,
+        "post_commit_forward_verification_tolerance": 1e-6,
+    }}
+    validate_post_commit_forward_binding([row], tau_logprob=1e-6)
+    drifted = copy.deepcopy(row)
+    drifted["mechanism_diagnostics"][
+        "post_commit_forward_verification_tolerance"] = 2e-6
+    with pytest.raises(ValueError, match="post-commit forward binding"):
+        validate_post_commit_forward_binding([drifted], tau_logprob=1e-6)
 
 
 def test_execution_checkpoint_prefix_ignores_malformed_failed_suffix(tmp_path):

@@ -90,6 +90,39 @@ def parameter_snapshot(module):
     return [parameter.detach().cpu().clone() for parameter in module.parameters()]
 
 
+def named_buffer_snapshot(module):
+    """Snapshot every persistent and non-persistent named model buffer.
+
+    Transaction rollback must cover forward-mutated state as well as trainable
+    parameters.  ``named_buffers`` includes non-persistent buffers such as
+    rotary/cache state that are absent from a normal ``state_dict``.
+    """
+    return [
+        (name, buffer.detach().cpu().clone())
+        for name, buffer in module.named_buffers()
+    ]
+
+
+def restore_named_buffers(module, snapshot):
+    """Restore an exact named-buffer snapshot, rejecting inventory drift."""
+    current = list(module.named_buffers())
+    expected_names = [name for name, _ in snapshot]
+    current_names = [name for name, _ in current]
+    if current_names != expected_names:
+        raise RuntimeError("RWWPO2_MODEL_BUFFER_INVENTORY_DRIFT")
+    with torch.no_grad():
+        for (name, target), (_, source) in zip(current, snapshot):
+            if target.shape != source.shape or target.dtype != source.dtype:
+                raise RuntimeError(
+                    f"RWWPO2_MODEL_BUFFER_METADATA_DRIFT:{name}")
+            target.copy_(source.to(device=target.device, dtype=target.dtype))
+
+
+def module_state_digest(parameters, buffers):
+    """Bind parameter shards and all named buffers into one model digest."""
+    return digest({"parameters": parameters, "named_buffers": buffers})
+
+
 def set_interpolated_parameters(module, old, full, alpha: float):
     if not 0.0 <= alpha <= 1.0:
         raise ValueError("trial alpha is outside [0,1]")

@@ -102,6 +102,16 @@ def main():
         'ref_log_prob=(joined("ref_log_prob") if rwwpo2_enabled else None)',
         '"ref_log_prob": joined("ref_log_prob")',
         "transaction_entry_rng = rng_snapshot()",
+        "named_buffer_snapshot(self.actor_module)",
+        "if rwwpo2_enabled else None",
+        "restore_named_buffers(",
+        "post_commit_forward_verified = True",
+        'rwwpo_controller == "none"',
+        "post_constraint_valid",
+        '"transaction_entry_buffer_digest"',
+        '"terminal_buffer_digest"',
+        "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE",
+        "append_transaction_failure_record(",
         "restore_rng(transaction_entry_rng)",
         '"transaction_entry_rng_digest": pre_digests["rng"]',
     ):
@@ -121,11 +131,16 @@ def main():
             and actual_auditor.index("sys.path.insert(0, str(ROOT))") > \
                 actual_auditor.index("from recurrent.research.rwwpo_transaction"):
         violations.append("actual-loss repo bootstrap order")
-    for token in ("ref_log_prob",):
+    for token in ("ref_log_prob", "append_transaction_failure_record",
+                  "rwwpo2-transaction-failure-v1"):
         if token not in ledger_source:
             violations.append("actual-loss tensor ledger:"+token)
     for token in ("independently_recompute_actual_loss", "actual_loss_contract",
                   "shared_kl_loss", "active_logprob_gradient_l2",
+                  "post_commit_forward_verified",
+                  "post_commit_forward_verification_max_abs",
+                  "transaction_entry_buffer_digest",
+                  "terminal_buffer_digest",
                   "invalid canonical backtracking evidence",
                   "validate_rwwpo2_rng_phase_digests",
                   "RWWPO-2 RNG phase digest closure",
@@ -137,7 +152,8 @@ def main():
     transaction_source=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text(
         encoding="utf-8")
     for token in ("np.random.seed", "np.random.get_state", "np.random.set_state",
-                  '"torch_cuda"'):
+                  '"torch_cuda"', "def named_buffer_snapshot(",
+                  "def restore_named_buffers(", "def module_state_digest("):
         if token not in transaction_source:
             violations.append("complete transaction RNG:"+token)
     seed_signature=transaction_source.split("def logical_transaction_seed",1)
@@ -245,6 +261,10 @@ def main():
         'parser.add_argument("--preflight", required=True)',
         '"preflight_report_sha256"', "R400 preflight gate binding",
         "preflight lineage start", "validate_rwwpo2_rng_phase_digests(row)",
+        "validate_transaction_failure_boundary(",
+        "transaction failure inside audited prefix",
+        "validate_post_commit_forward_binding(",
+        "post-commit forward binding",
     ):
         if token not in attempt:
             violations.append("attempt/preflight binding:"+token)

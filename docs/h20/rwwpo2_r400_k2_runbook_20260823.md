@@ -244,9 +244,13 @@ screen -L \
 screen -ls
 ```
 
-The healthy endpoint contains 100 rank-paired transaction receipts, full
+The healthy endpoint contains 100 rank-paired transaction receipts, no
+`failure_rank*.jsonl` artifact of any kind, full
 recovery checkpoints at 10/20/30/40/50 with only 40 and 50 retained, and
 immutable actor anchors at 5/10/15/20/25/50. Training never invokes validation.
+Every transaction receipt must bind a fresh post-commit/post-rollback forward
+certificate to the resolved `tau_logprob`; cached trial or pre-update tensors
+are not admissible post-state evidence.
 
 ## 6. Attempt audit and failure recovery
 
@@ -268,8 +272,15 @@ export RWWPO_ATTEMPT_AUDIT="$RWWPO_CERT_ROOT/attempt_audit_r50.json"
   --output "$RWWPO_ATTEMPT_AUDIT"
 ```
 
-If a run fails after a fully audited round-10 multiple, preserve the failed
-root. Create a signed parent receipt from the last usable recovery checkpoint:
+Any transaction failure file makes the **full attempted endpoint** NO_GO.
+Preserve the complete failed root; do not delete the failure receipt or append a
+repaired suffix. A checkpoint-bounded earlier prefix remains eligible as a
+lineage parent only when the formal audit authenticates its checkpoint ledger
+anchors and every chained failure receipt is strictly later than that prefix's
+target round. A malformed/empty failure artifact or a failure at or before the
+requested prefix is fail-closed. If a run fails after a fully audited round-10
+multiple, create a signed parent receipt from the last usable recovery
+checkpoint:
 
 ```bash
 export RWWPO_RESUME_ROUND=20

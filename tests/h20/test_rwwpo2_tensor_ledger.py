@@ -6,7 +6,8 @@ import jsonschema
 from pathlib import Path
 
 from recurrent.research.rwwpo_ledger import (
-    append_actual_loss_record, tensor_shard_inventory,
+    append_actual_loss_record, append_transaction_failure_record,
+    tensor_shard_inventory,
 )
 from recurrent.research.rwwpo_transaction import (
     logical_transaction_seed, prefix_distribution_stats, proposal_clock,
@@ -23,26 +24,29 @@ def _digest_state(prefix):
             "rng":prefix+"3"*63}
 
 
-def _append_round(root, rank, inner, *, active=True, policy_loss=None):
+def _append_round(root, rank, inner, *, active=True, policy_loss=None,
+                  verified_delta=0.0):
     old=torch.zeros((1,2),dtype=torch.float64)
     ref=torch.full((1,2),-0.2,dtype=torch.float64)
     current=torch.full((1,2),0.1*(inner-1) if active else 0.,dtype=torch.float64)
     proposed=torch.full((1,2),0.1*inner if active else 0.,dtype=torch.float64)
+    committed=proposed+float(verified_delta)
     mask=torch.tensor([[True,True]])
     sample=torch.tensor([rank])
     root_name=str(100+rank)
     pre_local=[{"turn":0,"sample_index":rank,"root_identity_hash":root_name,
                 "log_ratio":0.2*(inner-1) if active else 0.,"prefix_token_count":2}]
+    post_ratio=(0.2*inner if active else 0.)+2.0*float(verified_delta)
     post_local=[{"turn":0,"sample_index":rank,"root_identity_hash":root_name,
-                 "log_ratio":0.2*inner if active else 0.,"prefix_token_count":2}]
+                 "log_ratio":post_ratio,"prefix_token_count":2}]
     pre_global=prefix_distribution_stats([
         {"turn":0,"sample_index":0,"root_identity_hash":"100",
          "log_ratio":0.2*(inner-1) if active else 0.},
         {"turn":0,"sample_index":1,"root_identity_hash":"101",
          "log_ratio":0.2*(inner-1) if active else 0.}],q_min=.5,root_q_min=.5,log_ratio_cap=4.)
     post_global=prefix_distribution_stats([
-        {"turn":0,"sample_index":0,"root_identity_hash":"100","log_ratio":0.2*inner if active else 0.},
-        {"turn":0,"sample_index":1,"root_identity_hash":"101","log_ratio":0.2*inner if active else 0.}],
+        {"turn":0,"sample_index":0,"root_identity_hash":"100","log_ratio":post_ratio},
+        {"turn":0,"sample_index":1,"root_identity_hash":"101","log_ratio":post_ratio}],
         q_min=.5,root_q_min=.5,log_ratio_cap=4.)
     before=inner-1 if active else 0
     current_value=float(current[0,0].item())
@@ -63,7 +67,7 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None):
         global_step=1,epoch=inner-1,minibatch=0,old_log_prob=old,
         ref_log_prob=ref,
         current_log_prob=current,proposed_post_log_prob=proposed,
-        committed_log_prob=proposed,response_mask=mask,writer_mask=mask,
+        committed_log_prob=committed,response_mask=mask,writer_mask=mask,
         answer_mask=torch.zeros_like(mask),trajectory_turn=torch.tensor([0]),
         sample_index=sample,example_identity_hash=torch.tensor([100+rank]),
         trajectory_identity_hash=torch.tensor([200+rank]),
@@ -90,6 +94,12 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None):
                                    "use_kl_loss":True,"kl_loss_type":"low_var_kl",
                                    "kl_loss_coefficient":.001,"entropy_coefficient":0.0},
                                "active_logprob_gradient_l2":active_gradient_l2,
+                               "post_commit_forward_verified":True,
+                               "post_commit_forward_verification_max_abs":abs(
+                                   float(verified_delta)),
+                               "post_commit_forward_verification_tolerance":1e-6,
+                               "transaction_entry_buffer_digest":"7"*64,
+                               "terminal_buffer_digest":"7"*64,
                                "optimizer_step_calls":1,
                                "proposal_lr":1e-6,
                                "gradient_sketch_chunk_elements":8388608,
@@ -133,6 +143,16 @@ def test_v3_tensor_shards_roundtrip_and_jsonl_stays_small(tmp_path):
             jsonschema.Draft202012Validator(schema).validate(receipt)
             assert "old_log_prob" not in receipt
         assert path.stat().st_size < 100_000
+
+
+def test_v3_fresh_post_forward_may_differ_from_trial_within_frozen_tolerance(
+        tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner,verified_delta=5e-7)
+    result=audit([tmp_path/"actual_loss_rank0.jsonl",
+                  tmp_path/"actual_loss_rank1.jsonl"],require_method=True)
+    assert result["status"]=="PASS"
 
 
 def test_v3_tensor_shard_byte_tamper_is_rejected(tmp_path):
@@ -202,6 +222,107 @@ def test_v3_self_reported_extra_optimizer_step_is_rejected(tmp_path):
     with pytest.raises(ValueError,match=(
             "receipt schema failure|loss/optimizer-step evidence")):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_missing_post_commit_forward_verification_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        post_commit_forward_verified=False))
+    with pytest.raises(ValueError,match=(
+            "receipt schema failure|loss/optimizer-step evidence")):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_post_commit_forward_delta_above_tolerance_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        post_commit_forward_verification_max_abs=2e-6))
+    with pytest.raises(ValueError,match="loss/optimizer-step evidence"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_post_commit_buffer_digest_drift_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        terminal_buffer_digest="8"*64))
+    with pytest.raises(ValueError,match="loss/optimizer-step evidence"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_transaction_failure_diagnostic_is_append_only_and_chained(tmp_path):
+    kwargs=dict(
+        ledger_dir=tmp_path,attempt_id="failed_attempt",rank=0,
+        global_step=2,inner_id=2,proposal_clock=4,
+        reason="RWWPO_PREFIX_TRUST_REGION_VIOLATION",
+        phase="precondition",
+        prefix_rows=[{"turn":0,"sample_index":0,
+                      "root_identity_hash":"root","log_ratio":4.1}],
+        prefix_stats=[{"turn":0,"feasible":False}],
+        current_reference_max_abs=.01,
+        behavior_batch_digest="a"*64,
+        transaction_entry_buffer_digest="b"*64,
+        diagnostics={"q_min":.5})
+    append_transaction_failure_record(**kwargs)
+    append_transaction_failure_record(**kwargs)
+    path=tmp_path/"failure_rank0.jsonl"
+    rows=[json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows)==2
+    assert rows[0]["status"]=="NO_GO"
+    assert rows[0]["previous_record_sha256"]=="0"*64
+    assert rows[1]["previous_record_sha256"]==rows[0]["record_sha256"]
+
+
+@pytest.mark.parametrize("field,value,error", [
+    ("proposal_clock", 3, "coordinate"),
+    ("current_reference_max_abs", float("inf"), "magnitude"),
+    ("behavior_batch_digest", "not-a-sha", "digest"),
+    ("prefix_rows", [], "prefix evidence"),
+])
+def test_transaction_failure_diagnostic_rejects_malformed_evidence(
+        tmp_path, field, value, error):
+    kwargs=dict(
+        ledger_dir=tmp_path,attempt_id="failed_attempt",rank=0,
+        global_step=2,inner_id=2,proposal_clock=4,
+        reason="RWWPO_PREFIX_TRUST_REGION_VIOLATION",
+        phase="precondition",
+        prefix_rows=[{"turn":0,"sample_index":0,
+                      "root_identity_hash":"root","log_ratio":4.1}],
+        prefix_stats=[{"turn":0,"feasible":False}],
+        current_reference_max_abs=.01,
+        behavior_batch_digest="a"*64,
+        transaction_entry_buffer_digest="b"*64,
+        diagnostics={"q_min":.5})
+    kwargs[field] = value
+    with pytest.raises(ValueError, match=error):
+        append_transaction_failure_record(**kwargs)
+
+
+def test_transaction_failure_diagnostic_rejects_symlink_root(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="cannot be a symlink"):
+        append_transaction_failure_record(
+            ledger_dir=linked,attempt_id="failed_attempt",rank=0,
+            global_step=2,inner_id=2,proposal_clock=4,
+            reason="RWWPO_PREFIX_TRUST_REGION_VIOLATION",
+            phase="precondition",
+            prefix_rows=[{"turn":0,"sample_index":0,
+                          "root_identity_hash":"root","log_ratio":4.1}],
+            prefix_stats=[{"turn":0,"feasible":False}],
+            current_reference_max_abs=.01,
+            behavior_batch_digest="a"*64,
+            transaction_entry_buffer_digest="b"*64)
 
 
 def test_v3_self_reported_actual_loss_is_independently_recomputed(tmp_path):

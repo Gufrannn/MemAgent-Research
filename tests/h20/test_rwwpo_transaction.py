@@ -7,9 +7,11 @@ import torch
 
 from recurrent.research.rwwpo_transaction import (
     ALPHA_GRID, digest, displacement_norm, largest_tested_feasible,
-    logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
+    logical_transaction_seed, module_state_digest, named_buffer_snapshot,
+    off_behavior_exposed, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, set_interpolated_parameters,
-    restore_rng, rng_snapshot, seed_transaction_rng, stateless_proposal_lr,
+    restore_named_buffers, restore_rng, rng_snapshot, seed_transaction_rng,
+    stateless_proposal_lr,
     writer_logprob_rms,
 )
 
@@ -81,6 +83,35 @@ def test_optimizer_rollback_digest_detects_tamper():
     before = copy.deepcopy(optimizer.state_dict())
     optimizer.param_groups[0]["lr"] = 7e-3
     assert digest(before) != digest(optimizer.state_dict())
+
+
+def test_transaction_buffer_snapshot_restores_persistent_and_nonpersistent_state():
+    module = torch.nn.Linear(2, 2, bias=False).double()
+    module.register_buffer("persistent_counter", torch.tensor([3.0]))
+    module.register_buffer(
+        "nonpersistent_cache", torch.tensor([5.0]), persistent=False)
+    params = parameter_snapshot(module)
+    buffers = named_buffer_snapshot(module)
+    before = module_state_digest(params, buffers)
+    module.persistent_counter.add_(7.0)
+    module.nonpersistent_cache.mul_(11.0)
+    assert module_state_digest(
+        parameter_snapshot(module), named_buffer_snapshot(module)) != before
+    restore_named_buffers(module, buffers)
+    assert module.persistent_counter.item() == 3.0
+    assert module.nonpersistent_cache.item() == 5.0
+    assert module_state_digest(
+        parameter_snapshot(module), named_buffer_snapshot(module)) == before
+
+
+def test_transaction_buffer_restore_rejects_inventory_drift():
+    source = torch.nn.Linear(2, 2, bias=False)
+    source.register_buffer("cache", torch.tensor([1.0]), persistent=False)
+    snapshot = named_buffer_snapshot(source)
+    target = torch.nn.Linear(2, 2, bias=False)
+    target.register_buffer("different_cache", torch.tensor([1.0]), persistent=False)
+    with pytest.raises(RuntimeError, match="MODEL_BUFFER_INVENTORY_DRIFT"):
+        restore_named_buffers(target, snapshot)
 
 
 def test_proposal_clock_and_stateless_warmup_are_logical_not_attempt_based():

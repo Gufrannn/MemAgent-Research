@@ -6,9 +6,23 @@ the first B/seed-2026 R50 attempt that failed before any optimizer commit, and
 the later `5e9e60d...` release-test attempt that failed before GPU work because
 two subprocess tests selected a non-project Python without Torch, and the
 `d69a238...` rerun that passed 126/126 tests and CPU evidence but OOMed in the
-pre-R50 numeric oracle before producing a PASS receipt. All consumed failed
-roots are `NO_GO` and cannot be reused. No valid R50 mechanism result and no
-R400 performance result currently exist.
+pre-R50 numeric oracle before producing a PASS receipt. Commit `a512741...`
+subsequently passed 126/126 tests, CPU evidence, and the numeric oracle, but its
+first B/seed-2026 R50 attempt failed during round-2 inner-2 after an alpha-zero
+round-2 inner-1 transaction exposed incomplete rollback evidence. All consumed
+failed roots are `NO_GO` and cannot be reused. There is one completed round in
+that failed attempt, but no valid R50 mechanism endpoint and no R400 performance
+result currently exist.
+
+The latest failed attempt is preserved at
+`/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_a512741_r1`;
+its operator log is
+`/data/cw/memagent_work/logs/rwwpo2_B_2026_a512741.screen.log`. The read-only
+ledger reconstruction found exactly three actual-loss receipts and six
+intent/complete markers per rank: round-1 inner-1 committed alpha 1, round-1
+inner-2 committed alpha 0.25, and round-2 inner-1 committed alpha 0 before
+round-2 inner-2 failed its behavior precondition. These counts diagnose the
+implementation failure; they are not a completed R50 result.
 
 ## 1. Training-budget interpretation
 
@@ -60,7 +74,7 @@ by the frozen S128 resolved manifest. It emits counts and hashes only—never ra
 questions, contexts, or outcomes.
 
 The most recent authenticated H20 data-boundary report is
-`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_d69a238_r1/data_boundary.json`.
+`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_a512741_r1/data_boundary.json`.
 It reports the same frozen intersection counts below, but remains historical
 commit-bound evidence and must be regenerated after any source commit:
 
@@ -95,7 +109,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP, but the first R50 attempt is implementation-failure evidence only and contains zero valid commits. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence, or blind-test claim; R400 is a medium-budget conditional test. | Release tests, boundary, base protocol and old numeric oracle passed at `2d036904...`; live/oracle gradient-sketch implementation drift caused first-update NO_GO. Release and rerun the shared registered projection plus long-context streaming oracle under a new commit/root, then restart B/seed2026 from fresh base. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Two later R50 attempts are implementation-failure evidence only: the first stopped before any commit; the `a512741...` attempt completed round 1 but has no valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The latest failure localized a complete-state defect: alpha-zero restored parameter/optimizer/RNG state but did not bind all model buffers, and its post certificate reused a cached tensor. The correction must pass new exact-commit tests, numeric oracle and independent review before a fresh-base B/seed2026 R50 restart. |
 
 ## 5. Reproducible read-only H20 entry
 
@@ -125,6 +139,6 @@ mkdir "$RWWPO2_AUDIT_ROOT"
 Required report location is the absolute path printed by the command. Its
 `git_commit`, file SHA, signed `report_sha256`, intersection counts, and PASS or
 NO-GO decision must be copied into the run's P0. The command is retained as a
-reproducibility entry. The `2d036904...` report is historical authenticated
+reproducibility entry. The `a512741...` report is historical authenticated
 pre-R50 evidence only; a source change requires a new commit-bound report and
 may not inherit its PASS.

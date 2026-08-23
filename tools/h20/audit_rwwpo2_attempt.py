@@ -74,6 +74,80 @@ def verified_report(path: Path, *, decision: str, commit: str) -> dict:
     return {**row, "report_sha256": declared}
 
 
+def validate_transaction_failure_boundary(
+        ledger_dir: Path, *, through_round: int) -> list[dict]:
+    """Reject malformed failures and any failure inside an audited prefix.
+
+    A later failed suffix does not invalidate a checkpoint-authenticated earlier
+    prefix.  It remains append-only evidence in the failed attempt root and is
+    excluded from the resumed canonical lineage.
+    """
+    failure_ledgers = sorted(ledger_dir.glob("failure_rank*.jsonl"))
+    evidence = []
+    for path in failure_ledgers:
+        match = re.fullmatch(r"failure_rank([01])\.jsonl", path.name)
+        if match is None or path.is_symlink() or not path.is_file():
+            raise ValueError("malformed transaction failure artifact")
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines()
+                 if line.strip()]
+        if not lines:
+            raise ValueError("empty transaction failure artifact")
+        previous = "0" * 64
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError) as error:
+                raise ValueError("malformed transaction failure JSON") from error
+            if row.get("schema_version") != "rwwpo2-transaction-failure-v1" \
+                    or row.get("status") != "NO_GO" \
+                    or row.get("decision") != \
+                    "RWWPO2_TRANSACTION_FAILURE_PRESERVED" \
+                    or int(row.get("rank", -1)) != int(match.group(1)) \
+                    or row.get("previous_record_sha256") != previous \
+                    or row.get("record_sha256") != canonical_sha(row):
+                raise ValueError("transaction failure chain/identity")
+            global_step = int(row.get("global_step", -1))
+            inner_id = int(row.get("inner_id", -1))
+            if global_step < 1 or inner_id not in (1, 2) \
+                    or int(row.get("proposal_clock", -1)) != \
+                    2 * (global_step - 1) + inner_id:
+                raise ValueError("transaction failure coordinate")
+            allowed_identity = {
+                ("RWWPO_PREFIX_TRUST_REGION_VIOLATION", "precondition"),
+                ("RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE",
+                 "post_commit_verify"),
+            }
+            failure_magnitude = float(row.get(
+                "current_reference_max_abs", float("nan")))
+            if (row.get("reason"), row.get("phase")) not in allowed_identity \
+                    or not math.isfinite(failure_magnitude) \
+                    or failure_magnitude < 0 \
+                    or not row.get("prefix_rows") \
+                    or not row.get("prefix_stats") \
+                    or not all(isinstance(value, str) and re.fullmatch(
+                        r"[0-9a-f]{64}", value) for value in (
+                            row.get("behavior_batch_digest"),
+                            row.get("transaction_entry_buffer_digest"))):
+                raise ValueError("transaction failure semantic evidence")
+            if global_step <= int(through_round):
+                raise ValueError("transaction failure inside audited prefix")
+            previous = row["record_sha256"]
+            evidence.append(row)
+    return evidence
+
+
+def validate_post_commit_forward_binding(rows, *, tau_logprob: float) -> None:
+    """Bind every committed-state certificate to the frozen numeric oracle."""
+    tau_logprob = float(tau_logprob)
+    for row in rows:
+        diagnostics = row.get("mechanism_diagnostics", {})
+        if diagnostics.get("post_commit_forward_verified") is not True \
+                or not math.isclose(float(diagnostics.get(
+                    "post_commit_forward_verification_tolerance", -1.0)),
+                    tau_logprob, rel_tol=0, abs_tol=0):
+            raise ValueError("post-commit forward binding")
+
+
 def execution_prefix_through_round(path: Path, *, target_round: int,
                                    expected_commit: str):
     """Authenticate only the completed execution prefix for `target_round`.
@@ -292,6 +366,11 @@ def main() -> None:
         f"{kind}_rank{rank}.jsonl" for kind in ("actual_loss", "transaction")
         for rank in (0, 1)
     }
+    try:
+        validate_transaction_failure_boundary(
+            ledger_dir, through_round=args.target_round)
+    except ValueError as error:
+        raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)) from error
     if set(ledger_anchors) != expected_ledger_names:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:checkpoint ledger anchors")
     record_limits = {
@@ -367,6 +446,11 @@ def main() -> None:
         resolved["gradient_sketch_chunk_elements"])
     behavior_tolerance = float(resolved["behavior_coefficient_tolerance"])
     maximum_loo = float(resolved["maximum_root_loo_feasibility_flip_fraction"])
+    try:
+        validate_post_commit_forward_binding(
+            rows, tau_logprob=float(thresholds["tau_logprob"]))
+    except ValueError as error:
+        raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)) from error
     round_groups = {}
     for row in rows:
         round_groups.setdefault(int(row["global_step"]), []).append(row)

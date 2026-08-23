@@ -2,7 +2,9 @@
 import hashlib
 import io
 import json
+import math
 import os
+import re
 from pathlib import Path
 
 import torch
@@ -160,6 +162,65 @@ def append_transaction_marker(*, ledger_dir, attempt_id, rank, global_step, epoc
         "model_digest": str(model_digest),
         "inner_id": None if inner_id is None else int(inner_id),
         "proposal_clock": None if proposal_clock is None else int(proposal_clock),
+        "previous_record_sha256": _previous_tail(path),
+    }
+    _append_jsonl(path, record)
+    return str(path)
+
+
+def append_transaction_failure_record(
+        *, ledger_dir, attempt_id, rank, global_step, inner_id,
+        proposal_clock, reason, phase, prefix_rows, prefix_stats,
+        current_reference_max_abs, behavior_batch_digest,
+        transaction_entry_buffer_digest, diagnostics=None):
+    """Append an authenticated diagnostic for a transaction that cannot commit.
+
+    Failure receipts are never accepted as training evidence.  They preserve the
+    actual prefix certificate that caused a fail-closed exit, including failures
+    before the normal intent marker/tensor receipt can be written.
+    """
+    allowed = {
+        "RWWPO_PREFIX_TRUST_REGION_VIOLATION",
+        "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE",
+    }
+    global_step = int(global_step)
+    inner_id = int(inner_id)
+    proposal_clock = int(proposal_clock)
+    current_reference_max_abs = float(current_reference_max_abs)
+    if reason not in allowed or phase not in ("precondition", "post_commit_verify"):
+        raise ValueError("invalid RWWPO-2 transaction failure identity")
+    if global_step < 1 or inner_id not in (1, 2) \
+            or proposal_clock != 2 * (global_step - 1) + inner_id:
+        raise ValueError("invalid RWWPO-2 transaction failure coordinate")
+    if not math.isfinite(current_reference_max_abs) \
+            or current_reference_max_abs < 0:
+        raise ValueError("invalid RWWPO-2 transaction failure magnitude")
+    if not prefix_rows or not prefix_stats:
+        raise ValueError("RWWPO-2 transaction failure requires prefix evidence")
+    if not all(re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in (
+            behavior_batch_digest, transaction_entry_buffer_digest)):
+        raise ValueError("invalid RWWPO-2 transaction failure digest")
+    lexical_root = Path(ledger_dir)
+    if lexical_root.is_symlink():
+        raise ValueError("RWWPO failure ledger root cannot be a symlink")
+    lexical_root.mkdir(parents=True, exist_ok=True)
+    root = lexical_root.resolve()
+    path = root / f"failure_rank{int(rank)}.jsonl"
+    record = {
+        "schema_version": "rwwpo2-transaction-failure-v1",
+        "status": "NO_GO",
+        "decision": "RWWPO2_TRANSACTION_FAILURE_PRESERVED",
+        "attempt_id": str(attempt_id), "rank": int(rank),
+        "global_step": global_step, "inner_id": inner_id,
+        "proposal_clock": proposal_clock,
+        "reason": str(reason), "phase": str(phase),
+        "prefix_rows": list(prefix_rows),
+        "prefix_stats": list(prefix_stats),
+        "current_reference_max_abs": current_reference_max_abs,
+        "behavior_batch_digest": str(behavior_batch_digest),
+        "transaction_entry_buffer_digest": str(
+            transaction_entry_buffer_digest),
+        "diagnostics": dict(diagnostics or {}),
         "previous_record_sha256": _previous_tail(path),
     }
     _append_jsonl(path, record)

@@ -352,12 +352,29 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                         if row.get("program_version") != "rwwpo2-k2":
                             raise ValueError("RWWPO-2 program identity drift")
                         diagnostics = row.get("mechanism_diagnostics", {})
+                        buffer_digests = (
+                            diagnostics.get("transaction_entry_buffer_digest"),
+                            diagnostics.get("terminal_buffer_digest"),
+                        )
                         if diagnostics.get("optimizer_step_calls") != 1 \
+                                or diagnostics.get(
+                                    "post_commit_forward_verified") is not True \
                                 or any(not math.isfinite(float(diagnostics.get(field, float("nan"))))
                                        for field in ("policy_loss", "surrogate_loss",
                                                      "shared_kl_loss",
-                                                     "active_logprob_gradient_l2")) \
-                                or float(diagnostics.get("active_logprob_gradient_l2", -1)) < 0:
+                                                     "active_logprob_gradient_l2",
+                                                     "post_commit_forward_verification_max_abs",
+                                                     "post_commit_forward_verification_tolerance")) \
+                                or float(diagnostics.get("active_logprob_gradient_l2", -1)) < 0 \
+                                or float(diagnostics.get(
+                                    "post_commit_forward_verification_max_abs", -1)) < 0 \
+                                or float(diagnostics.get(
+                                    "post_commit_forward_verification_max_abs", float("inf"))) > \
+                                    float(diagnostics.get(
+                                        "post_commit_forward_verification_tolerance", -1)) \
+                                or any(not isinstance(value, str) or not re.fullmatch(
+                                    r"[0-9a-f]{64}", value) for value in buffer_digests) \
+                                or buffer_digests[0] != buffer_digests[1]:
                             raise ValueError("RWWPO-2 loss/optimizer-step evidence")
                         recomputed_loss = independently_recompute_actual_loss(row)
                         for field, actual_value in recomputed_loss.items():
@@ -482,17 +499,46 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                             raise ValueError("trial prefix/root tensor identity mismatch")
                     if evidence[0]["log_prob"] != row["proposed_post_log_prob"]:
                         raise ValueError("full proposal logprob does not bind alpha=1 trial")
+                    verification_reference = None
                     if declared_alpha>0:
                         selected=[trial for trial in evidence if float(trial["alpha"])==declared_alpha]
-                        if len(selected)!=1 or row["committed_log_prob"]!=selected[0]["log_prob"]:
-                            raise ValueError("committed logprob is not selected trial logprob")
-                        if row["post_prefix_rows"]!=selected[0]["prefix_rows"] or row["post_prefix_stats"]!=selected[0]["prefix_stats"]:
-                            raise ValueError("committed post certificate is not selected trial certificate")
+                        if len(selected)!=1:
+                            raise ValueError("committed trial is not unique")
+                        verification_reference = selected[0]["log_prob"]
+                        if row["schema_version"] != "rwwpo-actual-loss-v3":
+                            if row["committed_log_prob"]!=verification_reference:
+                                raise ValueError("committed logprob is not selected trial logprob")
+                            if row["post_prefix_rows"]!=selected[0]["prefix_rows"] or row["post_prefix_stats"]!=selected[0]["prefix_stats"]:
+                                raise ValueError("committed post certificate is not selected trial certificate")
                     else:
-                        if row["committed_log_prob"]!=row["current_log_prob"]:
-                            raise ValueError("zero-alpha commit did not restore behavior logprob")
-                        if row["post_prefix_rows"]!=row["prefix_rows"] or row["post_prefix_stats"]!=row["prefix_stats"]:
-                            raise ValueError("zero-alpha post certificate did not restore pre-step certificate")
+                        verification_reference = row["current_log_prob"]
+                        if row["schema_version"] != "rwwpo-actual-loss-v3":
+                            if row["committed_log_prob"]!=verification_reference:
+                                raise ValueError("zero-alpha commit did not restore behavior logprob")
+                            if row["post_prefix_rows"]!=row["prefix_rows"] or row["post_prefix_stats"]!=row["prefix_stats"]:
+                                raise ValueError("zero-alpha post certificate did not restore pre-step certificate")
+                    if row["schema_version"] == "rwwpo-actual-loss-v3":
+                        active_deltas = [
+                            abs(float(committed)-float(reference))
+                            for committed_row, reference_row, mask_row in zip(
+                                row["committed_log_prob"], verification_reference,
+                                row["response_mask"])
+                            for committed, reference, active in zip(
+                                committed_row, reference_row, mask_row) if bool(active)
+                        ]
+                        actual_verification_max = max(active_deltas, default=0.0)
+                        declared_verification_max = float(row[
+                            "mechanism_diagnostics"
+                        ]["post_commit_forward_verification_max_abs"])
+                        if actual_verification_max > declared_verification_max \
+                                and not math.isclose(
+                                    actual_verification_max,
+                                    declared_verification_max,
+                                    rel_tol=1e-9, abs_tol=1e-12):
+                            raise ValueError(
+                                "local post-commit verification exceeds declared global max")
+                        row["_audited_post_verification_local_max"] = \
+                            actual_verification_max
                 for stat in row["prefix_stats"]:
                     expected = 1.0 / (1.0 + stat["chi2"])
                     if not math.isclose(stat["ess_fraction"], expected, rel_tol=1e-9, abs_tol=1e-12):
@@ -557,6 +603,19 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
     for key,group in groups.items():
         if group[0]["schema_version"] in MODERN_SCHEMAS and sorted(int(row["rank"]) for row in group)!=[0,1]:
             raise ValueError(f"optimizer transaction lacks exact rank0/rank1 coverage for {key}")
+        if group[0]["schema_version"] == "rwwpo-actual-loss-v3":
+            declared_post_max = {
+                float(row["mechanism_diagnostics"][
+                    "post_commit_forward_verification_max_abs"])
+                for row in group
+            }
+            actual_post_max = max(float(row.pop(
+                "_audited_post_verification_local_max")) for row in group)
+            if len(declared_post_max) != 1 or not math.isclose(
+                    actual_post_max, next(iter(declared_post_max)),
+                    rel_tol=1e-9, abs_tol=1e-12):
+                raise ValueError(
+                    f"distributed post-commit verification max drift for {key}")
         q_values={float(row["q_min"]) for row in group}
         root_q_values={float(row.get("root_q_min",row["q_min"])) for row in group}
         caps={float(row["writer_log_ratio_cap"]) for row in group}
@@ -656,6 +715,9 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
         else:
             expected_accept=all(s["feasible"] for s in reconstruct("post_prefix_rows"))
             if next(iter(decisions)) != expected_accept: raise ValueError(f"accepted decision is not certified by post statistics for {key}")
+        post_pass=all(s["feasible"] for s in reconstruct("post_prefix_rows"))
+        if group[0].get("controller_variant") != "none" and not post_pass:
+            raise ValueError(f"fresh committed post certificate is infeasible for {key}")
         pre_pass=all(s["feasible"] for s in reconstruct("prefix_rows"))
         if group[0].get("controller_variant") != "none":
             if any(bool(row["constraint_pass"])!=pre_pass for row in group):

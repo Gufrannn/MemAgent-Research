@@ -18,10 +18,23 @@ receipt: the new 8191-token replay OOMed because the oracle used one monolithic
 FSDP wrapper and a full FP32 log-softmax rather than the live actor's layered
 auto-wrap, mixed precision, activation checkpointing, and selective log-prob
 kernel. The correction retains 8191 tokens and seven backwards but now binds
-those live execution semantics. A new exact-commit one-use release/numeric run
-remains mandatory. No consumed failure root or old numeric receipt may be
-reused. The previous K1 hard-rollback run remains diagnostic-only and is not a
-performance result for the method below.
+those live execution semantics. Commit
+`a512741e9d559d8a43b58695200cc512a0cb916e` then passed 126/126 authenticated
+tests, the CPU evidence gates, and the two-H20 numeric oracle. Its first
+B/seed-2026 R50 attempt completed round 1, then completed round-2 inner-1 with
+an alpha-zero rollback and failed at the round-2 inner-2 behavior precondition.
+The failed attempt contains three transaction receipts per rank, no round-10
+recovery checkpoint, and no valid R50 endpoint. Read-only reconstruction showed
+that the old alpha-zero receipt reused a cached pre-rollback tensor instead of
+performing a committed-state forward, while the transaction snapshot omitted
+forward-mutable model buffers. Therefore that receipt cannot certify complete
+rollback. The current correction snapshots/restores all named model buffers,
+performs an independent post-commit/post-rollback forward, and makes any
+closure failure an append-only attempt-level NO_GO. It must pass a new
+exact-commit authenticated suite and numeric oracle before another fresh-base
+R50 attempt. No consumed failure root or old numeric receipt may be reused. The
+previous K1 hard-rollback run remains diagnostic-only and is not a performance
+result for the method below.
 
 ## 1. Scientific question
 
@@ -135,10 +148,23 @@ Therefore p=1 uses `5e-7` and p>=2 uses `1e-6`. Before every proposal the runtim
 writes `S(p)` directly to every optimizer param group. The stateful framework
 scheduler is not advanced and is not part of a reject transaction. Immediately
 before the logical reseed, the runtime freezes Python, NumPy, Torch CPU, and all
-CUDA RNG states. A reject restores that complete transaction-entry snapshot,
-along with model parameters and Adam moments, but does not change the logical
-`p`. The ledger separately binds entry, post-reseed, post-gradient/pre-trial, and
-terminal RNG digests. An accepted transaction commits its deterministic
+CUDA RNG states plus every persistent and non-persistent named model buffer. A
+reject restores that complete transaction-entry snapshot, along with model
+parameters and Adam moments, but does not change the logical `p`. Every replay
+and trial starts from the frozen buffer state. After either commit or rollback,
+the runtime performs a separate forward from the committed parameter/buffer
+state; only that forward may populate the post-prefix certificate. Its active
+log-probability difference from the corresponding trial/behavior reference
+must not exceed the pre-R50 numeric-oracle `tau_logprob`. For controller cells
+A/B/C/E the reconstructed prefix distribution must also be feasible; cell D is
+the preregistered no-controller telemetry baseline and does not acquire a
+feasibility constraint through this evidence check. Named buffers are treated as
+non-optimizable implementation/cache state: every trial begins from the entry
+snapshot and the terminal buffer digest must equal the entry digest for both
+accepted and rejected transactions. Otherwise an append-only failure receipt
+is written and the attempt is ineligible for PASS. The ledger separately binds
+entry, post-reseed, post-gradient/pre-trial, and terminal RNG digests, plus entry
+and terminal buffer digests. An accepted transaction commits its deterministic
 post-trial RNG state; the next transaction is independently reset by its logical
 seed. The accepted optimizer clock `u` increments only after a
 nonzero commit and is diagnostic, never an input to `S`.
