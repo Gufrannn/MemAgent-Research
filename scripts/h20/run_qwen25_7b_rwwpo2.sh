@@ -71,6 +71,7 @@ fi
 read -r RWWPO_TAU_THETA RWWPO_TAU_LOGPROB RWWPO_TAU_GRADIENT \
   RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE \
   RWWPO_BEHAVIOR_GRADIENT_TOLERANCE \
+  RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS \
   RWWPO_RESOLVED_CONTRACT_REPORT_SHA256 \
   RWWPO_SOURCE_MANIFEST_SHA256 < <(
   "$RWWPO_PYTHON" -c '
@@ -79,12 +80,14 @@ r=json.load(open(sys.argv[1]))
 t=r["numeric_thresholds"]
 print(t["tau_theta"],t["tau_logprob"],t["tau_gradient"],
       r["behavior_coefficient_tolerance"],r["behavior_gradient_tolerance"],
+      r["gradient_sketch_chunk_elements"],
       r["report_sha256"],r["source_manifest_sha256"])
 ' "$RWWPO_RESOLVED_CONTRACT"
 )
 export RWWPO_TAU_THETA RWWPO_TAU_LOGPROB RWWPO_TAU_GRADIENT
 export RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE
 export RWWPO_BEHAVIOR_GRADIENT_TOLERANCE RWWPO_LINEAGE_START_ROUND
+export RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS
 export RWWPO_RESOLVED_CONTRACT_SHA256 RWWPO_RESOLVED_CONTRACT_REPORT_SHA256
 export RWWPO_SOURCE_MANIFEST_SHA256
 

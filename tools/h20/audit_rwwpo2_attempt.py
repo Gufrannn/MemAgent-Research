@@ -363,6 +363,8 @@ def main() -> None:
 
     thresholds = resolved["numeric_thresholds"]
     schedule = resolved["proposal_schedule"]
+    gradient_sketch_chunk_elements = int(
+        resolved["gradient_sketch_chunk_elements"])
     behavior_tolerance = float(resolved["behavior_coefficient_tolerance"])
     maximum_loo = float(resolved["maximum_root_loo_feasibility_flip_fraction"])
     round_groups = {}
@@ -374,6 +376,10 @@ def main() -> None:
             proposal_id=int(row["proposal_clock"]), kind=schedule["kind"],
         )
         diagnostics = row.get("mechanism_diagnostics", {})
+        if int(diagnostics.get("gradient_sketch_chunk_elements", -1)) != \
+                gradient_sketch_chunk_elements:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:gradient sketch chunk binding")
         if not math.isclose(float(diagnostics.get("proposal_lr", -1)), expected_lr,
                             rel_tol=0, abs_tol=0):
             raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:stateless LR")

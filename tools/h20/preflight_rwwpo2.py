@@ -17,6 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.h20.verify_rwwpo2_release_tests import verify_release_test_receipt
+from recurrent.research.rwwpo_transaction import (
+    RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
+)
 
 
 EXPECTED_BRANCH = "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"
@@ -199,6 +202,14 @@ def main() -> None:
             or float(resolved.get("behavior_gradient_tolerance", -1)) != float(
                 thresholds["tau_gradient"]):
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:numeric tolerance binding")
+    if int(resolved.get("gradient_sketch_chunk_elements", -1)) != \
+            RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS:
+        raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:gradient sketch chunk binding")
+    if resolved.get("streamed_replay_calibration") != {
+            "microbatches": 7, "sequence_length": 8191,
+            "active_response_tokens": 1024, "synthetic_label_free": True,
+    }:
+        raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:streamed replay calibration binding")
 
     original_path = Path(args.original_resolved_manifest).resolve()
     if sha256_file(original_path) != args.original_resolved_sha256:
@@ -336,6 +347,9 @@ def main() -> None:
         "numeric_thresholds": thresholds,
         "behavior_coefficient_tolerance": resolved["behavior_coefficient_tolerance"],
         "behavior_gradient_tolerance": resolved["behavior_gradient_tolerance"],
+        "gradient_sketch_chunk_elements":
+            resolved["gradient_sketch_chunk_elements"],
+        "streamed_replay_calibration": resolved["streamed_replay_calibration"],
         "resolved_contract_file_sha256": args.resolved_contract_sha256,
         "resolved_contract_report_sha256": resolved["report_sha256"],
         "source_manifest_sha256": resolved["source_manifest_sha256"],

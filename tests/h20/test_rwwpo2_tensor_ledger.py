@@ -92,6 +92,7 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None):
                                "active_logprob_gradient_l2":active_gradient_l2,
                                "optimizer_step_calls":1,
                                "proposal_lr":1e-6,
+                               "gradient_sketch_chunk_elements":8388608,
                                "transaction_entry_rng_digest":pre_digests["rng"],
                                "logical_seeded_rng_digest":"c"*64,
                                "proposal_gradient_rng_digest":"d"*64,

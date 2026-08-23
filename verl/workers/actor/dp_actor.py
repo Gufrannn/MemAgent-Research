@@ -16,6 +16,7 @@ Single Process Actor
 """
 
 import itertools
+import json
 import logging
 import os
 import time
@@ -37,7 +38,9 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 from recurrent.research.rwwpo_transaction import (
-    ALPHA_GRID, digest, displacement_norm, largest_tested_feasible,
+    ALPHA_GRID, RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS, digest,
+    displacement_norm, largest_tested_feasible,
+    local_gradient_sketch_sufficient_statistics,
     logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, relative_displacement_norm, restore_rng, rng_snapshot,
     seed_transaction_rng, set_interpolated_parameters,
@@ -679,20 +682,18 @@ class DataParallelPPOActor(BasePPOActor):
                             raise RuntimeError("RWWPO_STREAMING_GRADIENT_ALIGNMENT_FAILURE")
 
                     def current_parameter_gradient_sketch():
-                        values=torch.zeros(4,dtype=torch.float64,
-                                           device=torch.cuda.current_device())
-                        for parameter_index,parameter in enumerate(self.actor_module.parameters()):
-                            if parameter.grad is None:
-                                continue
-                            gradient=parameter.grad.detach().double().flatten()
-                            coordinate=torch.arange(
-                                gradient.numel(),device=gradient.device,dtype=torch.int64)
-                            alternating=((coordinate+parameter_index)&1).double().mul_(2).sub_(1)
-                            sawtooth=(((coordinate+17*parameter_index)%257).double()-128.0)/128.0
-                            values[0]+=gradient.square().sum()
-                            values[1]+=gradient.sum()
-                            values[2]+=(gradient*alternating).sum()
-                            values[3]+=(gradient*sawtooth).sum()
+                        chunk_elements = int(rwwpo_config.get(
+                            "gradient_sketch_chunk_elements",
+                            RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
+                        ))
+                        if rwwpo2_enabled and chunk_elements != \
+                                RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS:
+                            raise RuntimeError(
+                                "RWWPO2_GRADIENT_SKETCH_CHUNK_CONTRACT_DRIFT")
+                        values = local_gradient_sketch_sufficient_statistics(
+                            self.actor_module.parameters(),
+                            chunk_elements=chunk_elements,
+                        )
                         if torch.distributed.is_initialized():
                             torch.distributed.all_reduce(values,op=torch.distributed.ReduceOp.SUM)
                         return {"l2":float(values[0].sqrt().item()),
@@ -701,6 +702,7 @@ class DataParallelPPOActor(BasePPOActor):
                                 "sawtooth_projection":float(values[3].item())}
 
                     shadow_parameter_gradient_sketches={}
+                    shadow_parameter_gradient_pairwise_relative={}
                     shadow_anchor = round_id in {
                         int(value) for value in rwwpo_config.get("shadow_host_rounds", [])
                     }
@@ -727,11 +729,30 @@ class DataParallelPPOActor(BasePPOActor):
                             def projected_relative(left,right):
                                 return (sum((float(left[field])-float(right[field]))**2
                                             for field in fields)**0.5/control_norm)
-                            if (max(projected_relative(
+                            shadow_parameter_gradient_pairwise_relative = {
+                                f"{left}_vs_{right}": projected_relative(
                                     shadow_parameter_gradient_sketches[left],
                                     shadow_parameter_gradient_sketches[right])
-                                   for left,right in (("C","E"),("C","B"),("B","E")))
-                                    > tolerance):
+                                for left,right in (("C","E"),("C","B"),("B","E"))
+                            }
+                            maximum_relative = max(
+                                shadow_parameter_gradient_pairwise_relative.values())
+                            if maximum_relative > tolerance:
+                                print("[RWWPO2_BEHAVIOR_GRADIENT_DIAG] " + json.dumps({
+                                    "rank": rank,
+                                    "round_id": round_id,
+                                    "inner_id": inner_id,
+                                    "tolerance": tolerance,
+                                    "maximum_relative": maximum_relative,
+                                    "pairwise_relative":
+                                        shadow_parameter_gradient_pairwise_relative,
+                                    "coefficient_diagnostics":
+                                        shadow_coefficient_diagnostics,
+                                    "gradient_sketches":
+                                        shadow_parameter_gradient_sketches,
+                                    "gradient_sketch_chunk_elements":
+                                        RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
+                                }, sort_keys=True), flush=True)
                                 raise RuntimeError("RWWPO2_BEHAVIOR_PARAMETER_GRADIENT_SKETCH_MISMATCH")
 
                     logprob_gradient, = torch.autograd.grad(policy_loss, current_log_prob)
@@ -994,6 +1015,10 @@ class DataParallelPPOActor(BasePPOActor):
                             "whole_prefix_tokenwise_gradient_cosine": coefficient_cosine,
                             "shadow_coefficients": shadow_coefficient_diagnostics,
                             "shadow_parameter_gradient_sketches": shadow_parameter_gradient_sketches,
+                            "shadow_parameter_gradient_pairwise_relative":
+                                shadow_parameter_gradient_pairwise_relative,
+                            "gradient_sketch_chunk_elements":
+                                RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
                             "host_variant": str(rwwpo_config.get("cell", "legacy")),
                             "behavior_batch_digest": frozen_digest,
                             "round_id": round_id,

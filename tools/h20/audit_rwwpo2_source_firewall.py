@@ -148,18 +148,32 @@ def main():
     for token in ("ROOT = Path(__file__).resolve().parents[2]",
                   "sys.path.insert(0, str(ROOT))",
                   "from verl.trainer.ppo.core_algos import",
-                  "GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608",
+                  "GRADIENT_SKETCH_CHUNK_ELEMENTS=RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS",
                   "local_gradient_sketch_sufficient_statistics",
-                  "raw_gradient.is_contiguous()",
-                  "flattened=raw_gradient.view(-1)",
-                  "RWWPO2_NUMERIC_ORACLE_NONCONTIGUOUS_GRADIENT_NO_GO",
-                  "for chunk_start in range(0,flattened.numel(),chunk_elements)"):
+                  "STREAMED_ORACLE_MICROBATCHES=7",
+                  "STREAMED_ORACLE_SEQUENCE_LENGTH=8191",
+                  "streamed_replay_gradient_projection_relative_l2",
+                  '"synthetic_label_free":True'):
         if token not in numeric_oracle:
             violations.append("numeric oracle direct entry:"+token)
+    for token in ("RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608",
+                  "def local_gradient_sketch_sufficient_statistics(",
+                  "raw_gradient.is_contiguous()",
+                  "flattened = raw_gradient.view(-1)",
+                  "RWWPO2_GRADIENT_SKETCH_NONCONTIGUOUS_GRADIENT_NO_GO",
+                  "for chunk_start in range(0, flattened.numel(), chunk_elements)"):
+        if token not in transaction_source:
+            violations.append("registered gradient sketch:"+token)
+    for token in ("local_gradient_sketch_sufficient_statistics(",
+                  "RWWPO2_GRADIENT_SKETCH_CHUNK_CONTRACT_DRIFT",
+                  "[RWWPO2_BEHAVIOR_GRADIENT_DIAG]",
+                  '"gradient_sketch_chunk_elements":'):
+        if token not in actor_source:
+            violations.append("actor registered gradient sketch:"+token)
     for token in ("parameter.grad.detach().double().flatten()",
                   "parameter.grad.detach().flatten()"):
-        if token in numeric_oracle:
-            violations.append("numeric oracle full-shard materialization:"+token)
+        if token in numeric_oracle or token in actor_source:
+            violations.append("gradient sketch full-shard materialization:"+token)
     if all(token in numeric_oracle for token in (
             "sys.path.insert(0, str(ROOT))",
             "from verl.trainer.ppo.core_algos import")) \
@@ -173,6 +187,7 @@ def main():
         "RWWPO_R50_PROGRAM_GATE", "RWWPO_CONFIRMATION_SEAL",
         "RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE",
         "RWWPO_BEHAVIOR_GRADIENT_TOLERANCE",
+        "RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS",
         "RWWPO_RELEASE_TEST_RECEIPT",
     ):
         if token not in launcher:
@@ -209,6 +224,22 @@ def main():
         if token not in attempt:
             violations.append("attempt/preflight binding:"+token)
     preflight=(ROOT/"tools/h20/preflight_rwwpo2.py").read_text(encoding="utf-8")
+    numeric_auditor=(ROOT/"tools/h20/audit_rwwpo2_numeric_oracle.py").read_text(
+        encoding="utf-8")
+    resolver=(ROOT/"tools/h20/materialize_rwwpo2_resolved_contract.py").read_text(
+        encoding="utf-8")
+    for token in ("streamed_replay_calibration",
+                  "streamed_replay_gradient_projection_relative_l2"):
+        if token not in numeric_auditor:
+            violations.append("numeric auditor streaming calibration:"+token)
+    for token in ("streamed_replay_calibration",
+                  "STREAMED_REPLAY_CALIBRATION"):
+        if token not in resolver:
+            violations.append("resolved streaming calibration:"+token)
+    for token in ("gradient sketch chunk binding",
+                  "streamed replay calibration binding"):
+        if token not in preflight:
+            violations.append("preflight registered gradient sketch:"+token)
     numeric_launcher=(ROOT/"scripts/h20/run_rwwpo2_numeric_oracle.sh").read_text(
         encoding="utf-8")
     release_producer=(ROOT/"tools/h20/run_rwwpo2_release_tests.py").read_text(

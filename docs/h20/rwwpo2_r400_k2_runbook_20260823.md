@@ -177,7 +177,11 @@ train–S128 content/root overlap; S128 remains labeled adaptive development.
 ## 4. Two-H20 numeric oracle and resolved contract
 
 The numeric oracle consumes a separate one-use root and holds both GPU locks
-through producer and audit. No training starts here.
+through producer and audit. No training starts here. It uses the same registered
+chunk-bounded gradient projection as the live actor and includes a fixed
+synthetic, label-free 8191-token, seven-microbatch streaming replay. A source
+change, different chunk size, missing streaming calibration, or reused numeric
+root is `NO_GO`.
 
 ```bash
 export RWWPO_NUMERIC_ID=rwwpo2_numeric_${RWWPO_EXPECTED_COMMIT:0:8}_r1

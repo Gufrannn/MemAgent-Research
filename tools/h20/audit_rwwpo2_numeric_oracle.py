@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MULTIPLIER = 16.0
 GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
+STREAMED_ORACLE_MICROBATCHES = 7
+STREAMED_ORACLE_SEQUENCE_LENGTH = 8191
 FLOORS = {
     "tau_theta": 1e-12,
     "tau_logprob": 1e-6,
@@ -63,11 +65,18 @@ def main() -> None:
     if float(row.get("threshold_multiplier", -1)) != MULTIPLIER \
             or int(row.get("gradient_sketch_chunk_elements", -1)) != \
                 GRADIENT_SKETCH_CHUNK_ELEMENTS \
+            or row.get("streamed_replay_calibration") != {
+                "microbatches": STREAMED_ORACLE_MICROBATCHES,
+                "sequence_length": STREAMED_ORACLE_SEQUENCE_LENGTH,
+                "active_response_tokens": 1024,
+                "synthetic_label_free": True,
+            } \
             or row.get("threshold_floors") != FLOORS:
         raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:threshold rule")
     observed = row.get("observed", {})
     if set(observed) != {
         "repeated_logprob_max_abs", "repeated_gradient_projection_relative_l2",
+        "streamed_replay_gradient_projection_relative_l2",
         "save_load_parameter_relative_l2", "save_load_logprob_max_abs",
         "save_load_gradient_projection_relative_l2",
         "behavior_actual_loss_logprob_max_abs",
@@ -86,6 +95,7 @@ def main() -> None:
             float(observed["behavior_actual_loss_logprob_max_abs"]))),
         "tau_gradient": max(FLOORS["tau_gradient"], MULTIPLIER * max(
             float(observed["repeated_gradient_projection_relative_l2"]),
+            float(observed["streamed_replay_gradient_projection_relative_l2"]),
             float(observed["save_load_gradient_projection_relative_l2"]),
             float(observed["behavior_actual_loss_gradient_projection_relative_l2"]))),
         "tau_coefficient": max(FLOORS["tau_coefficient"], MULTIPLIER * float(
@@ -130,6 +140,7 @@ def main() -> None:
         "oracle_report_file_sha256": args.oracle_report_sha256,
         "oracle_report_sha256": declared, "thresholds": expected_thresholds,
         "gradient_sketch_chunk_elements": GRADIENT_SKETCH_CHUNK_ELEMENTS,
+        "streamed_replay_calibration": row["streamed_replay_calibration"],
         "gpu_pair": gpu_pair, "gpu_binding": binding,
         "rank_state_inventory": state_inventory,
     }

@@ -215,22 +215,25 @@ def test_numeric_oracle_calibrates_the_registered_projection_statistic():
         "from verl.trainer.ppo.core_algos import"
     )
     for token in ("repeated_gradient_projection_relative_l2",
+                  "streamed_replay_gradient_projection_relative_l2",
                   "save_load_gradient_projection_relative_l2",
                   "behavior_actual_loss_logprob_max_abs",
                   "behavior_actual_loss_coefficient_max_abs",
                   "behavior_actual_loss_gradient_projection_relative_l2",
                   "tau_coefficient"):
         assert token in producer and token in auditor
+    assert all("streamed_replay_calibration" in source
+               for source in (producer,auditor,resolver))
     assert "gradient_sketch_relative_l2" not in producer
     assert "threshold_multiplier" in producer and "threshold reconstruction" in auditor
-    assert "GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608" in producer
+    assert "GRADIENT_SKETCH_CHUNK_ELEMENTS=RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS" in producer
     assert "parameter.grad.detach().double().flatten()" not in producer
     assert all("gradient_sketch_chunk_elements" in source
                for source in (producer,auditor,resolver))
 
 
 def test_chunked_gradient_sketch_matches_registered_full_vector_projection():
-    from tools.h20.calibrate_rwwpo2_numeric_oracle import (
+    from recurrent.research.rwwpo_transaction import (
         local_gradient_sketch_sufficient_statistics,
     )
     parameters=[]
@@ -253,7 +256,7 @@ def test_chunked_gradient_sketch_matches_registered_full_vector_projection():
 
 
 def test_chunked_gradient_sketch_rejects_noncontiguous_full_shard_copy():
-    from tools.h20.calibrate_rwwpo2_numeric_oracle import (
+    from recurrent.research.rwwpo_transaction import (
         local_gradient_sketch_sufficient_statistics,
     )
     parameter=torch.nn.Parameter(torch.zeros((3,4),dtype=torch.float32))
@@ -262,6 +265,17 @@ def test_chunked_gradient_sketch_rejects_noncontiguous_full_shard_copy():
     with pytest.raises(RuntimeError,match="NONCONTIGUOUS_GRADIENT_NO_GO"):
         local_gradient_sketch_sufficient_statistics(
             [parameter],chunk_elements=3)
+
+
+def test_live_actor_uses_the_registered_bounded_gradient_sketch():
+    actor=(ROOT/"verl/workers/actor/dp_actor.py").read_text()
+    transaction=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text()
+    assert "local_gradient_sketch_sufficient_statistics(" in actor
+    assert "RWWPO2_GRADIENT_SKETCH_CHUNK_CONTRACT_DRIFT" in actor
+    assert '"gradient_sketch_chunk_elements":' in actor
+    assert "def local_gradient_sketch_sufficient_statistics(" in transaction
+    assert "parameter.grad.detach().double().flatten()" not in actor
+    assert "parameter.grad.detach().flatten()" not in actor
 
 
 def test_numeric_oracle_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path):

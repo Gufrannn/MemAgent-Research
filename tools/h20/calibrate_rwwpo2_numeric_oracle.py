@@ -26,57 +26,24 @@ from transformers import AutoModelForCausalLM
 from verl.trainer.ppo.core_algos import (
     agg_loss, compute_policy_loss, compute_rwwpo_policy_loss, kl_penalty,
 )
+from recurrent.research.rwwpo_transaction import (
+    RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
+    local_gradient_sketch_sufficient_statistics,
+)
 
 
 MULTIPLIER=16.0
 FLOORS={"tau_theta":1e-12,"tau_logprob":1e-6,"tau_gradient":1e-8,
         "tau_coefficient":1e-10}
-GRADIENT_SKETCH_CHUNK_ELEMENTS=8_388_608
+GRADIENT_SKETCH_CHUNK_ELEMENTS=RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS
+STREAMED_ORACLE_MICROBATCHES=7
+STREAMED_ORACLE_SEQUENCE_LENGTH=8191
 
 
 def global_max(value,device):
     tensor=torch.tensor(float(value),dtype=torch.float64,device=device)
     dist.all_reduce(tensor,op=dist.ReduceOp.MAX)
     return float(tensor.item())
-
-
-def local_gradient_sketch_sufficient_statistics(
-        parameters, *, chunk_elements=GRADIENT_SKETCH_CHUNK_ELEMENTS):
-    """Compute the registered projection without full-shard FP64 temporaries."""
-    chunk_elements=int(chunk_elements)
-    if chunk_elements < 1:
-        raise ValueError("gradient sketch chunk must be positive")
-    values=None
-    for parameter_index,parameter in enumerate(parameters):
-        if parameter.grad is None:
-            continue
-        raw_gradient=parameter.grad.detach()
-        if not raw_gradient.is_contiguous():
-            raise RuntimeError(
-                "RWWPO2_NUMERIC_ORACLE_NONCONTIGUOUS_GRADIENT_NO_GO")
-        # view(-1) is guaranteed to be zero-copy after the explicit
-        # contiguity gate; flatten()/reshape() could silently allocate a full
-        # FSDP shard before the bounded chunk loop.
-        flattened=raw_gradient.view(-1)
-        if values is None:
-            values=torch.zeros(4,dtype=torch.float64,device=flattened.device)
-        for chunk_start in range(0,flattened.numel(),chunk_elements):
-            chunk_stop=min(flattened.numel(),chunk_start+chunk_elements)
-            gradient=flattened[chunk_start:chunk_stop].to(dtype=torch.float64)
-            coordinate=torch.arange(
-                chunk_start,chunk_stop,device=gradient.device,dtype=torch.int64)
-            alternating=torch.bitwise_and(
-                coordinate+parameter_index,1).to(dtype=torch.float64).mul_(2).sub_(1)
-            coordinate.add_(17*parameter_index).remainder_(257)
-            saw=coordinate.to(dtype=torch.float64).sub_(128.).div_(128.)
-            values[0].add_(torch.dot(gradient,gradient))
-            values[1].add_(gradient.sum())
-            values[2].add_(torch.dot(gradient,alternating))
-            values[3].add_(torch.dot(gradient,saw))
-            del gradient,coordinate,alternating,saw
-    if values is None:
-        raise RuntimeError("RWWPO2_NUMERIC_ORACLE_MISSING_GRADIENT")
-    return values
 
 
 def gradient_sketch(model):
@@ -108,6 +75,33 @@ def forward_and_backward(model,input_ids):
         -1,labels.unsqueeze(-1)).squeeze(-1)
     (-selected.mean()).backward()
     return selected.detach(),gradient_sketch(model)
+
+
+def streamed_replay_gradient(model, *, vocab, rank):
+    """Match the actor's maximum seven-section long-context replay shape.
+
+    Inputs and coefficients are synthetic and label-free.  The probe measures
+    only repeated BF16/FlashAttention/FSDP backward noise under the registered
+    streaming accumulation pattern; it cannot observe R50 or task outcomes.
+    """
+    model.zero_grad(set_to_none=True)
+    for microbatch_id in range(STREAMED_ORACLE_MICROBATCHES):
+        input_ids=(torch.arange(
+            STREAMED_ORACLE_SEQUENCE_LENGTH,dtype=torch.long,
+            device=torch.cuda.current_device()
+        ) + 1009*microbatch_id + 65537*rank).remainder_(vocab).unsqueeze(0)
+        logits=model(input_ids=input_ids,use_cache=False).logits
+        selected=torch.log_softmax(logits[:,:-1].float(),dim=-1).gather(
+            -1,input_ids[:,1:].unsqueeze(-1)).squeeze(-1)
+        active=min(1024,selected.shape[1])
+        coefficient=torch.zeros_like(selected)
+        coordinate=torch.arange(active,device=selected.device)
+        coefficient[:,-active:]=torch.where(
+            torch.bitwise_and(coordinate,1)==0,1.0,-1.0
+        ).to(coefficient.dtype).div_(active)
+        (selected*coefficient).sum().backward()
+        del input_ids,logits,selected,coefficient,coordinate
+    return gradient_sketch(model)
 
 
 def behavior_actual_loss_gradient(model, input_ids, old_logp, objective):
@@ -199,6 +193,12 @@ def main():
     repeated_logp_error=global_max((first_logp-second_logp).abs().max().item(),device)
     repeated_gradient_error=global_max(
         projection_relative(first_gradient,second_gradient),device)
+    torch.manual_seed(17011+rank); torch.cuda.manual_seed_all(17011+rank)
+    first_streamed_gradient=streamed_replay_gradient(model,vocab=vocab,rank=rank)
+    torch.manual_seed(17011+rank); torch.cuda.manual_seed_all(17011+rank)
+    second_streamed_gradient=streamed_replay_gradient(model,vocab=vocab,rank=rank)
+    streamed_replay_gradient_error=global_max(
+        projection_relative(first_streamed_gradient,second_streamed_gradient),device)
     before=[parameter.detach().cpu().double().clone() for parameter in model.parameters()]
     config=ShardedStateDictConfig(offload_to_cpu=True)
     state_path=root/"state"/f"rank_{rank}.pt"
@@ -251,6 +251,8 @@ def main():
             "--format=csv,noheader"],text=True).strip().splitlines()
         observed={"repeated_logprob_max_abs":repeated_logp_error,
                   "repeated_gradient_projection_relative_l2":repeated_gradient_error,
+                  "streamed_replay_gradient_projection_relative_l2":
+                      streamed_replay_gradient_error,
                   "save_load_parameter_relative_l2":save_load_parameter_error,
                   "save_load_logprob_max_abs":save_load_logp_error,
                   "save_load_gradient_projection_relative_l2":save_load_gradient_error,
@@ -263,7 +265,8 @@ def main():
             "tau_logprob":max(FLOORS["tau_logprob"],MULTIPLIER*max(
                 repeated_logp_error,save_load_logp_error,behavior_logprob_error)),
             "tau_gradient":max(FLOORS["tau_gradient"],MULTIPLIER*max(
-                repeated_gradient_error,save_load_gradient_error,behavior_gradient_error)),
+                repeated_gradient_error,streamed_replay_gradient_error,
+                save_load_gradient_error,behavior_gradient_error)),
             "tau_coefficient":max(FLOORS["tau_coefficient"],
                                   MULTIPLIER*behavior_coefficient_error),
         }
@@ -274,6 +277,12 @@ def main():
                 "gpu_pair":[int(value) for value in gpu_pair.split(",")],
                 "gpu_binding":gpu_binding,
                 "gradient_sketch_chunk_elements":GRADIENT_SKETCH_CHUNK_ELEMENTS,
+                "streamed_replay_calibration":{
+                    "microbatches":STREAMED_ORACLE_MICROBATCHES,
+                    "sequence_length":STREAMED_ORACLE_SEQUENCE_LENGTH,
+                    "active_response_tokens":1024,
+                    "synthetic_label_free":True,
+                },
                 "threshold_multiplier":MULTIPLIER,"threshold_floors":FLOORS,
                 "observed":observed,"thresholds":thresholds,"rank_state_evidence":gathered}
         raw=json.dumps(report,sort_keys=True,separators=(",",":"),allow_nan=False)

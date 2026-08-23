@@ -20,6 +20,52 @@ import torch
 ALPHA_GRID = (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)
 RWWPO2_INNER_TRANSACTIONS = 2
 RWWPO2_SCHEDULE_KIND = "constant_with_linear_warmup"
+RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
+
+
+def local_gradient_sketch_sufficient_statistics(
+        parameters, *,
+        chunk_elements: int = RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS):
+    """Compute the registered local gradient projection with bounded memory.
+
+    The numeric oracle and the live actor must call this exact implementation.
+    Coordinates are local-FSDP flattened parameter coordinates; the caller is
+    responsible for the rank all-reduce and the final square root of element 0.
+    """
+    chunk_elements = int(chunk_elements)
+    if chunk_elements < 1:
+        raise ValueError("gradient sketch chunk must be positive")
+    values = None
+    for parameter_index, parameter in enumerate(parameters):
+        if parameter.grad is None:
+            continue
+        raw_gradient = parameter.grad.detach()
+        if not raw_gradient.is_contiguous():
+            raise RuntimeError(
+                "RWWPO2_GRADIENT_SKETCH_NONCONTIGUOUS_GRADIENT_NO_GO")
+        # The explicit contiguity gate makes view(-1) zero-copy.  A flatten or
+        # reshape here could allocate an unbounded full FSDP-shard temporary.
+        flattened = raw_gradient.view(-1)
+        if values is None:
+            values = torch.zeros(4, dtype=torch.float64, device=flattened.device)
+        for chunk_start in range(0, flattened.numel(), chunk_elements):
+            chunk_stop = min(flattened.numel(), chunk_start + chunk_elements)
+            gradient = flattened[chunk_start:chunk_stop].to(dtype=torch.float64)
+            coordinate = torch.arange(
+                chunk_start, chunk_stop, device=gradient.device, dtype=torch.int64)
+            alternating = torch.bitwise_and(
+                coordinate + parameter_index, 1
+            ).to(dtype=torch.float64).mul_(2).sub_(1)
+            coordinate.add_(17 * parameter_index).remainder_(257)
+            saw = coordinate.to(dtype=torch.float64).sub_(128.0).div_(128.0)
+            values[0].add_(torch.dot(gradient, gradient))
+            values[1].add_(gradient.sum())
+            values[2].add_(torch.dot(gradient, alternating))
+            values[3].add_(torch.dot(gradient, saw))
+            del gradient, coordinate, alternating, saw
+    if values is None:
+        raise RuntimeError("RWWPO2_GRADIENT_SKETCH_MISSING_GRADIENT")
+    return values
 
 
 def _cpu_clone(value):

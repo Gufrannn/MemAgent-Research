@@ -1,9 +1,17 @@
 # RWWPO-2 preregistration — controlled off-behavior geometry in recurrent state writing
 
-**Status:** frozen design; implementation and independent static release review
-complete; H20 runtime validation pending. No RWWPO-2 GPU run has started. The
-previous K1 hard-rollback run is diagnostic-only and is not a performance result
-for the method below.
+**Status:** frozen scientific design; pre-R50 release tests, data-boundary audit,
+base-protocol audit, numeric oracle, and independent numeric audit passed on H20
+at commit `2d0369040dc5aacd9e07369bc90466c305e38919`. The first B/seed-2026 R50
+attempt then failed closed before its first optimizer commit with
+`RWWPO2_BEHAVIOR_PARAMETER_GRADIENT_SKETCH_MISMATCH`. It produced no valid R50
+round. Inspection found that the live actor had duplicated the registered
+numeric-oracle projection with a different, unbounded implementation and that
+the oracle lacked the live seven-section long-context streaming replay. The
+implementation correction is pending a new exact-commit release review and new
+one-use pre-R50 evidence; neither the failed attempt nor the old numeric receipt
+may be reused. The previous K1 hard-rollback run remains diagnostic-only and is
+not a performance result for the method below.
 
 ## 1. Scientific question
 
@@ -186,7 +194,13 @@ A round is exposed only when both exceed frozen tolerances. `alpha > 0` alone is
 inadmissible because BF16 quantization can erase a nominal displacement.
 `tau_theta`, `tau_logp`, and the gradient-separation threshold `tau_g` are fixed
 from no-op, save/load, all-reduce, and BF16/FSDP numeric-oracle tests before R50;
-they may not be selected from R50 outcomes.
+they may not be selected from R50 outcomes. The registered parameter-gradient
+projection is one shared chunk-bounded implementation used by both oracle and
+live actor. Its oracle additionally repeats a synthetic, label-free 8191-token,
+seven-microbatch streaming backward—the maximum frozen R50 actor section count—
+and the independent auditor reconstructs the unchanged 16-times-noise threshold
+rule. Runtime mismatch diagnostics report only aggregate coefficient and
+projection statistics, never examples, tokens, rewards, or outcomes.
 
 An eligible round has a complete two-rank inner-1 commit/reject record, at least
 one writer token for every included trajectory, and a complete inner-2 shadow

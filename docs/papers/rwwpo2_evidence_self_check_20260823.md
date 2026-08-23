@@ -1,8 +1,9 @@
-# RWWPO-2 evidence-level self-check (pre-H20)
+# RWWPO-2 evidence-level self-check
 
-**Scope.** This audit covers only Paper I / RWWPO and distinguishes the completed
-K1 T25 diagnostic from the unrun RWWPO-2 R50/R400 program. It is a pre-run
-certificate specification, not a claim that H20 evidence already exists.
+**Scope.** This audit covers only Paper I / RWWPO. It distinguishes the completed
+K1 T25 diagnostic, the passed RWWPO-2 pre-R50 evidence at commit `2d036904...`,
+and the first B/seed-2026 R50 attempt that failed before any optimizer commit.
+No valid R50 mechanism result and no R400 performance result currently exist.
 
 ## 1. Training-budget interpretation
 
@@ -53,16 +54,19 @@ ground_truth_hash))`, and joins those sets to the 128 identities authenticated
 by the frozen S128 resolved manifest. It emits counts and hashes only—never raw
 questions, contexts, or outcomes.
 
-Until that read-only H20 entry succeeds, the intersections are:
+The authenticated H20 data-boundary report is
+`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_2d03690_r1/data_boundary.json`.
+It reports:
 
-- `actor-train ∩ S128`: `PENDING_H20_CONTENT_HASH_AUDIT`;
+- `actor-train ∩ S128`: content 0, canonical root 0;
 - `critic-fit ∩ S128`: exactly 0 because no critic is fit;
 - `prior/auxiliary-fit ∩ S128`: exactly 0 because neither fit exists;
 - `selection ∩ S128`: 128 by design, because all S128 results were viewed.
 
-The last item is adaptive benchmark use, not direct optimizer leakage. Direct
-leakage remains pending rather than inferred from the filenames `train` and
-`dev`. Any nonzero actor root/content intersection makes preflight fail.
+The last item is adaptive benchmark use, not direct optimizer leakage. The
+dataset-local semantic-ID diagnostic intersects in 73 values, but canonical
+content/root hashes intersect in zero; it is not treated as identity evidence.
+Any nonzero canonical actor root/content intersection makes preflight fail.
 
 ## 3. Adaptive use and next untouched test
 
@@ -85,7 +89,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 K2 is scientifically KEEP but unrun. | `PENDING` actor/S128 canonical intersection; critic/prior/aux are zero by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence, or blind-test claim; R400 is a medium-budget conditional test. | Code/static review is GO. Run the H20 test suite, content audit, and numeric oracle; pass performance-free R50; materialize an unseen confirmation seal before R400. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP, but the first R50 attempt is implementation-failure evidence only and contains zero valid commits. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence, or blind-test claim; R400 is a medium-budget conditional test. | Release tests, boundary, base protocol and old numeric oracle passed at `2d036904...`; live/oracle gradient-sketch implementation drift caused first-update NO_GO. Release and rerun the shared registered projection plus long-context streaming oracle under a new commit/root, then restart B/seed2026 from fresh base. |
 
 ## 5. Reproducible read-only H20 entry
 
@@ -114,6 +118,7 @@ mkdir "$RWWPO2_AUDIT_ROOT"
 
 Required report location is the absolute path printed by the command. Its
 `git_commit`, file SHA, signed `report_sha256`, intersection counts, and PASS or
-NO-GO decision must be copied into the run's P0. At this pre-H20 revision the
-runtime report path/SHA and intersection result remain intentionally `PENDING`;
-code/static release readiness does not fill in server evidence.
+NO-GO decision must be copied into the run's P0. The command is retained as a
+reproducibility entry. The `2d036904...` report is historical authenticated
+pre-R50 evidence only; a source change requires a new commit-bound report and
+may not inherit its PASS.
