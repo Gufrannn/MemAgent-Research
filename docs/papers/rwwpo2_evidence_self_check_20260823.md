@@ -2,8 +2,11 @@
 
 **Scope.** This audit covers only Paper I / RWWPO. It distinguishes the completed
 K1 T25 diagnostic, the passed RWWPO-2 pre-R50 evidence at commit `2d036904...`,
-and the first B/seed-2026 R50 attempt that failed before any optimizer commit.
-No valid R50 mechanism result and no R400 performance result currently exist.
+the first B/seed-2026 R50 attempt that failed before any optimizer commit, and
+the later `5e9e60d...` release-test attempt that failed before GPU work because
+two subprocess tests selected a non-project Python without Torch. That
+124/126 attempt is `NO_GO` and cannot be reused. No valid R50 mechanism result
+and no R400 performance result currently exist.
 
 ## 1. Training-budget interpretation
 

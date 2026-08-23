@@ -8,10 +8,17 @@ attempt then failed closed before its first optimizer commit with
 round. Inspection found that the live actor had duplicated the registered
 numeric-oracle projection with a different, unbounded implementation and that
 the oracle lacked the live seven-section long-context streaming replay. The
-implementation correction is pending a new exact-commit release review and new
-one-use pre-R50 evidence; neither the failed attempt nor the old numeric receipt
-may be reused. The previous K1 hard-rollback run remains diagnostic-only and is
-not a performance result for the method below.
+implementation correction was independently reviewed and released at commit
+`5e9e60d1547ac82c76e762090f3d7fe6518f0692`, but its first authenticated H20
+release-test attempt stopped before any GPU work: 124/126 tests passed and two
+foreign-cwd direct-file auditor tests selected an unrelated system Python
+without Torch instead of the authenticated test interpreter. That consumed
+release-test root is `NO_GO`. The test harness now explicitly uses its
+authenticated `sys.executable` for Python direct-file entries while retaining
+foreign cwd and removing `PYTHONPATH`; a new exact-commit one-use release-test
+run remains mandatory. Neither failed attempt nor any old numeric receipt may
+be reused. The previous K1 hard-rollback run remains diagnostic-only and is not
+a performance result for the method below.
 
 ## 1. Scientific question
 

@@ -1,4 +1,4 @@
-import hashlib, json, os, subprocess
+import hashlib, json, os, subprocess, sys
 from pathlib import Path
 import pytest
 from tools.h20.materialize_rwwpo_baseline_bundle import authenticated_root,safe_file
@@ -7,7 +7,10 @@ from tools.h20.audit_rwwpo_baseline_bundle import safe_file as audit_safe_file
 ROOT=Path(__file__).resolve().parents[2]
 
 def run(script,*args,env=None,cwd=ROOT):
-    return subprocess.run([str(script),*map(str,args)],cwd=cwd,text=True,
+    script = Path(script)
+    command = ([sys.executable, str(script)] if script.suffix == ".py"
+               else [str(script)])
+    return subprocess.run([*command,*map(str,args)],cwd=cwd,text=True,
                           capture_output=True,env=env)
 
 
