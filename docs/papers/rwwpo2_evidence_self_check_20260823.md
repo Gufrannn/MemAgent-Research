@@ -4,9 +4,11 @@
 K1 T25 diagnostic, the passed RWWPO-2 pre-R50 evidence at commit `2d036904...`,
 the first B/seed-2026 R50 attempt that failed before any optimizer commit, and
 the later `5e9e60d...` release-test attempt that failed before GPU work because
-two subprocess tests selected a non-project Python without Torch. That
-124/126 attempt is `NO_GO` and cannot be reused. No valid R50 mechanism result
-and no R400 performance result currently exist.
+two subprocess tests selected a non-project Python without Torch, and the
+`d69a238...` rerun that passed 126/126 tests and CPU evidence but OOMed in the
+pre-R50 numeric oracle before producing a PASS receipt. All consumed failed
+roots are `NO_GO` and cannot be reused. No valid R50 mechanism result and no
+R400 performance result currently exist.
 
 ## 1. Training-budget interpretation
 
@@ -57,9 +59,10 @@ ground_truth_hash))`, and joins those sets to the 128 identities authenticated
 by the frozen S128 resolved manifest. It emits counts and hashes only—never raw
 questions, contexts, or outcomes.
 
-The authenticated H20 data-boundary report is
-`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_2d03690_r1/data_boundary.json`.
-It reports:
+The most recent authenticated H20 data-boundary report is
+`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_d69a238_r1/data_boundary.json`.
+It reports the same frozen intersection counts below, but remains historical
+commit-bound evidence and must be regenerated after any source commit:
 
 - `actor-train ∩ S128`: content 0, canonical root 0;
 - `critic-fit ∩ S128`: exactly 0 because no critic is fit;

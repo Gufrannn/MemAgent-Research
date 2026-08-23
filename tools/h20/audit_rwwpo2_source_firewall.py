@@ -153,9 +153,34 @@ def main():
                   "STREAMED_ORACLE_MICROBATCHES=7",
                   "STREAMED_ORACLE_SEQUENCE_LENGTH=8191",
                   "streamed_replay_gradient_projection_relative_l2",
-                  '"synthetic_label_free":True'):
+                  '"synthetic_label_free":True',
+                  "gradient_checkpointing_enable(",
+                  'gradient_checkpointing_kwargs={"use_reentrant":False}',
+                  "get_fsdp_wrap_policy(",
+                  "auto_wrap_policy=auto_wrap_policy",
+                  "mixed_precision=mixed_precision",
+                  "sharding_strategy=ShardingStrategy.FULL_SHARD",
+                  "sync_module_states=True,use_orig_params=False",
+                  "forward_prefetch=False",
+                  'torch.autocast(device_type="cuda",dtype=torch.bfloat16)',
+                  "apply_monkey_patch(model=model,ulysses_sp_size=1)",
+                  "logprobs_from_logits(",
+                  "inplace_backward=True"):
         if token not in numeric_oracle:
             violations.append("numeric oracle direct entry:"+token)
+    for token in ("torch.log_softmax(logits[:,:-1].float()",
+                  "torch.log_softmax(logits[:, :-1].float()"):
+        if token in numeric_oracle.split("def streamed_replay_gradient",1)[1].split(
+                "def behavior_actual_loss_gradient",1)[0]:
+            violations.append("numeric oracle unbounded streamed logprob:"+token)
+    behavior_old_anchor=(
+        'with torch.no_grad():\n'
+        '        with torch.autocast(device_type="cuda",dtype=torch.bfloat16):\n'
+        '            behavior_logits=model(input_ids=tokens,use_cache=False).logits\n'
+        '            behavior_old_logp=logprobs_from_logits('
+    )
+    if behavior_old_anchor not in numeric_oracle:
+        violations.append("numeric oracle behavior-old autocast binding")
     for token in ("RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608",
                   "def local_gradient_sketch_sufficient_statistics(",
                   "raw_gradient.is_contiguous()",

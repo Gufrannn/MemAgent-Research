@@ -9,16 +9,19 @@ round. Inspection found that the live actor had duplicated the registered
 numeric-oracle projection with a different, unbounded implementation and that
 the oracle lacked the live seven-section long-context streaming replay. The
 implementation correction was independently reviewed and released at commit
-`5e9e60d1547ac82c76e762090f3d7fe6518f0692`, but its first authenticated H20
-release-test attempt stopped before any GPU work: 124/126 tests passed and two
-foreign-cwd direct-file auditor tests selected an unrelated system Python
-without Torch instead of the authenticated test interpreter. That consumed
-release-test root is `NO_GO`. The test harness now explicitly uses its
-authenticated `sys.executable` for Python direct-file entries while retaining
-foreign cwd and removing `PYTHONPATH`; a new exact-commit one-use release-test
-run remains mandatory. Neither failed attempt nor any old numeric receipt may
-be reused. The previous K1 hard-rollback run remains diagnostic-only and is not
-a performance result for the method below.
+`5e9e60d1547ac82c76e762090f3d7fe6518f0692`; its first authenticated H20
+release-test attempt stopped before GPU work because two direct-file tests used
+an unrelated Python without Torch. Commit `d69a238743a394f6dde2f6fc98b26d5fd33d87db`
+fixed that interpreter isolation and passed 126/126 authenticated tests plus
+the CPU evidence gates. Its numeric oracle then failed closed without a PASS
+receipt: the new 8191-token replay OOMed because the oracle used one monolithic
+FSDP wrapper and a full FP32 log-softmax rather than the live actor's layered
+auto-wrap, mixed precision, activation checkpointing, and selective log-prob
+kernel. The correction retains 8191 tokens and seven backwards but now binds
+those live execution semantics. A new exact-commit one-use release/numeric run
+remains mandatory. No consumed failure root or old numeric receipt may be
+reused. The previous K1 hard-rollback run remains diagnostic-only and is not a
+performance result for the method below.
 
 ## 1. Scientific question
 

@@ -179,9 +179,13 @@ train–S128 content/root overlap; S128 remains labeled adaptive development.
 The numeric oracle consumes a separate one-use root and holds both GPU locks
 through producer and audit. No training starts here. It uses the same registered
 chunk-bounded gradient projection as the live actor and includes a fixed
-synthetic, label-free 8191-token, seven-microbatch streaming replay. A source
-change, different chunk size, missing streaming calibration, or reused numeric
-root is `NO_GO`.
+synthetic, label-free 8191-token, seven-microbatch streaming replay. The replay
+also freezes the actor's non-reentrant activation checkpointing, default
+transformer-layer FSDP auto-wrap, BF16-parameter/FP32-reduction mixed precision,
+remove-padding FlashAttention patch, and selective log-prob kernel; it must not
+materialize a full FP32 vocabulary log-softmax. A source change, different
+chunk or replay execution contract, missing calibration, or reused numeric root
+is `NO_GO`.
 
 ```bash
 export RWWPO_NUMERIC_ID=rwwpo2_numeric_${RWWPO_EXPECTED_COMMIT:0:8}_r1

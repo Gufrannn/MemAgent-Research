@@ -20,7 +20,9 @@ if str(ROOT) not in sys.path:
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import ShardedStateDictConfig,StateDictType
+from torch.distributed.fsdp import (
+    MixedPrecision,ShardedStateDictConfig,ShardingStrategy,StateDictType,
+)
 from transformers import AutoModelForCausalLM
 
 from verl.trainer.ppo.core_algos import (
@@ -30,6 +32,9 @@ from recurrent.research.rwwpo_transaction import (
     RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
     local_gradient_sketch_sufficient_statistics,
 )
+from verl.models.transformers.monkey_patch import apply_monkey_patch
+from verl.utils.fsdp_utils import get_fsdp_wrap_policy
+from verl.utils.torch_functional import logprobs_from_logits
 
 
 MULTIPLIER=16.0
@@ -38,6 +43,25 @@ FLOORS={"tau_theta":1e-12,"tau_logprob":1e-6,"tau_gradient":1e-8,
 GRADIENT_SKETCH_CHUNK_ELEMENTS=RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS
 STREAMED_ORACLE_MICROBATCHES=7
 STREAMED_ORACLE_SEQUENCE_LENGTH=8191
+STREAMED_REPLAY_CALIBRATION={
+    "microbatches":STREAMED_ORACLE_MICROBATCHES,
+    "sequence_length":STREAMED_ORACLE_SEQUENCE_LENGTH,
+    "active_response_tokens":1024,
+    "synthetic_label_free":True,
+    "gradient_checkpointing":True,
+    "gradient_checkpointing_use_reentrant":False,
+    "remove_padding_flash_attention_patch":True,
+    "fsdp_auto_wrap_policy":"default_transformer_no_split_modules",
+    "fsdp_sharding_strategy":"FULL_SHARD",
+    "fsdp_use_orig_params":False,
+    "fsdp_sync_module_states":True,
+    "fsdp_forward_prefetch":False,
+    "fsdp_param_dtype":"bfloat16",
+    "fsdp_reduce_dtype":"float32",
+    "fsdp_buffer_dtype":"float32",
+    "cuda_autocast_dtype":"bfloat16",
+    "selective_logprob_kernel":"verl.utils.torch_functional.logprobs_from_logits",
+}
 
 
 def global_max(value,device):
@@ -69,10 +93,11 @@ def projection_relative_to_control(left, right, control):
 
 def forward_and_backward(model,input_ids):
     model.zero_grad(set_to_none=True)
-    logits=model(input_ids=input_ids,use_cache=False).logits
-    labels=input_ids[:,1:]
-    selected=torch.log_softmax(logits[:,:-1].float(),dim=-1).gather(
-        -1,labels.unsqueeze(-1)).squeeze(-1)
+    with torch.autocast(device_type="cuda",dtype=torch.bfloat16):
+        logits=model(input_ids=input_ids,use_cache=False).logits
+        labels=input_ids[:,1:]
+        selected=logprobs_from_logits(
+            logits=logits[:,:-1],labels=labels,inplace_backward=True)
     (-selected.mean()).backward()
     return selected.detach(),gradient_sketch(model)
 
@@ -90,27 +115,36 @@ def streamed_replay_gradient(model, *, vocab, rank):
             STREAMED_ORACLE_SEQUENCE_LENGTH,dtype=torch.long,
             device=torch.cuda.current_device()
         ) + 1009*microbatch_id + 65537*rank).remainder_(vocab).unsqueeze(0)
-        logits=model(input_ids=input_ids,use_cache=False).logits
-        selected=torch.log_softmax(logits[:,:-1].float(),dim=-1).gather(
-            -1,input_ids[:,1:].unsqueeze(-1)).squeeze(-1)
-        active=min(1024,selected.shape[1])
-        coefficient=torch.zeros_like(selected)
-        coordinate=torch.arange(active,device=selected.device)
-        coefficient[:,-active:]=torch.where(
-            torch.bitwise_and(coordinate,1)==0,1.0,-1.0
-        ).to(coefficient.dtype).div_(active)
-        (selected*coefficient).sum().backward()
-        del input_ids,logits,selected,coefficient,coordinate
+        position_ids=torch.arange(
+            STREAMED_ORACLE_SEQUENCE_LENGTH,dtype=torch.long,
+            device=input_ids.device).unsqueeze(0)
+        with torch.autocast(device_type="cuda",dtype=torch.bfloat16):
+            logits=model(
+                input_ids=input_ids,attention_mask=None,position_ids=position_ids,
+                use_cache=False).logits.squeeze(0)
+            labels=torch.roll(input_ids,shifts=-1,dims=1).squeeze(0)
+            selected=logprobs_from_logits(
+                logits=logits,labels=labels,inplace_backward=True).unsqueeze(0)
+            active=min(1024,selected.shape[1]-1)
+            coefficient=torch.zeros_like(selected)
+            coordinate=torch.arange(active,device=selected.device)
+            coefficient[:,-active-1:-1]=torch.where(
+                torch.bitwise_and(coordinate,1)==0,1.0,-1.0
+            ).to(coefficient.dtype).div_(active)
+            streamed_loss=(selected*coefficient).sum()
+        streamed_loss.backward()
+        del input_ids,position_ids,labels,logits,selected,coefficient,coordinate,streamed_loss
     return gradient_sketch(model)
 
 
 def behavior_actual_loss_gradient(model, input_ids, old_logp, objective):
     """Run complete C/E/B actual losses at one common behavior point."""
     model.zero_grad(set_to_none=True)
-    logits = model(input_ids=input_ids, use_cache=False).logits
-    labels = input_ids[:, 1:]
-    selected = torch.log_softmax(logits[:, :-1].float(), dim=-1).gather(
-        -1, labels.unsqueeze(-1)).squeeze(-1)
+    with torch.autocast(device_type="cuda",dtype=torch.bfloat16):
+        logits = model(input_ids=input_ids, use_cache=False).logits
+        labels = input_ids[:, 1:]
+        selected = logprobs_from_logits(
+            logits=logits[:, :-1],labels=labels,inplace_backward=True)
     response_mask = torch.zeros_like(selected, dtype=torch.bool)
     response_mask[:, :2] = True
     final_mask = torch.tensor([False, False, False, True], device=selected.device)
@@ -175,9 +209,20 @@ def main():
     dist.barrier()
     model=AutoModelForCausalLM.from_pretrained(
         args.model,local_files_only=True,torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2").to(device)
-    model.eval()
-    model=FSDP(model,device_id=device,sync_module_states=True)
+        attn_implementation="flash_attention_2")
+    model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant":False})
+    apply_monkey_patch(model=model,ulysses_sp_size=1)
+    auto_wrap_policy=get_fsdp_wrap_policy(
+        module=model,config={"min_num_params":0})
+    mixed_precision=MixedPrecision(
+        param_dtype=torch.bfloat16,reduce_dtype=torch.float32,
+        buffer_dtype=torch.float32)
+    model=FSDP(
+        model,device_id=device,sync_module_states=True,use_orig_params=False,
+        auto_wrap_policy=auto_wrap_policy,mixed_precision=mixed_precision,
+        sharding_strategy=ShardingStrategy.FULL_SHARD,forward_prefetch=False)
+    model.train()
     vocab=int(model.module.config.vocab_size)
     tokens=torch.tensor([
         [value%vocab for value in row]
@@ -221,10 +266,11 @@ def main():
     expected=allreduce_probe*world; dist.all_reduce(allreduce_probe)
     allreduce_error=global_max((allreduce_probe-expected).abs().max().item(),device)
     with torch.no_grad():
-        behavior_logits=model(input_ids=tokens,use_cache=False).logits
-        behavior_old_logp=torch.log_softmax(
-            behavior_logits[:,:-1].float(),dim=-1).gather(
-                -1,tokens[:,1:].unsqueeze(-1)).squeeze(-1).detach()
+        with torch.autocast(device_type="cuda",dtype=torch.bfloat16):
+            behavior_logits=model(input_ids=tokens,use_cache=False).logits
+            behavior_old_logp=logprobs_from_logits(
+                logits=behavior_logits[:,:-1],labels=tokens[:,1:],
+                inplace_backward=True).detach()
     actual_losses={}
     for objective in ("C","E","B"):
         actual_losses[objective]=behavior_actual_loss_gradient(
@@ -277,12 +323,7 @@ def main():
                 "gpu_pair":[int(value) for value in gpu_pair.split(",")],
                 "gpu_binding":gpu_binding,
                 "gradient_sketch_chunk_elements":GRADIENT_SKETCH_CHUNK_ELEMENTS,
-                "streamed_replay_calibration":{
-                    "microbatches":STREAMED_ORACLE_MICROBATCHES,
-                    "sequence_length":STREAMED_ORACLE_SEQUENCE_LENGTH,
-                    "active_response_tokens":1024,
-                    "synthetic_label_free":True,
-                },
+                "streamed_replay_calibration":STREAMED_REPLAY_CALIBRATION,
                 "threshold_multiplier":MULTIPLIER,"threshold_floors":FLOORS,
                 "observed":observed,"thresholds":thresholds,"rank_state_evidence":gathered}
         raw=json.dumps(report,sort_keys=True,separators=(",",":"),allow_nan=False)

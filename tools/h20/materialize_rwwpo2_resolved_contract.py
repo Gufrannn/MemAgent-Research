@@ -19,6 +19,20 @@ STREAMED_REPLAY_CALIBRATION = {
     "sequence_length": 8191,
     "active_response_tokens": 1024,
     "synthetic_label_free": True,
+    "gradient_checkpointing": True,
+    "gradient_checkpointing_use_reentrant": False,
+    "remove_padding_flash_attention_patch": True,
+    "fsdp_auto_wrap_policy": "default_transformer_no_split_modules",
+    "fsdp_sharding_strategy": "FULL_SHARD",
+    "fsdp_use_orig_params": False,
+    "fsdp_sync_module_states": True,
+    "fsdp_forward_prefetch": False,
+    "fsdp_param_dtype": "bfloat16",
+    "fsdp_reduce_dtype": "float32",
+    "fsdp_buffer_dtype": "float32",
+    "cuda_autocast_dtype": "bfloat16",
+    "selective_logprob_kernel":
+        "verl.utils.torch_functional.logprobs_from_logits",
 }
 
 

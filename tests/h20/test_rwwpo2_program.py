@@ -230,6 +230,32 @@ def test_numeric_oracle_calibrates_the_registered_projection_statistic():
     assert "parameter.grad.detach().double().flatten()" not in producer
     assert all("gradient_sketch_chunk_elements" in source
                for source in (producer,auditor,resolver))
+    streamed = producer.split("def streamed_replay_gradient",1)[1].split(
+        "def behavior_actual_loss_gradient",1)[0]
+    for token in ("gradient_checkpointing_enable(",
+                  'gradient_checkpointing_kwargs={"use_reentrant":False}',
+                  "get_fsdp_wrap_policy(",
+                  "auto_wrap_policy=auto_wrap_policy",
+                  "mixed_precision=mixed_precision",
+                  "sharding_strategy=ShardingStrategy.FULL_SHARD",
+                  "sync_module_states=True,use_orig_params=False",
+                  "forward_prefetch=False",
+                  'torch.autocast(device_type="cuda",dtype=torch.bfloat16)',
+                  "apply_monkey_patch(model=model,ulysses_sp_size=1)",
+                  "logprobs_from_logits(", "inplace_backward=True"):
+        assert token in producer
+    assert "torch.log_softmax" not in streamed
+    behavior_old_anchor = (
+        'with torch.no_grad():\n'
+        '        with torch.autocast(device_type="cuda",dtype=torch.bfloat16):\n'
+        '            behavior_logits=model(input_ids=tokens,use_cache=False).logits\n'
+        '            behavior_old_logp=logprobs_from_logits('
+    )
+    assert behavior_old_anchor in producer
+    for token in ("gradient_checkpointing", "fsdp_auto_wrap_policy",
+                  "cuda_autocast_dtype",
+                  "selective_logprob_kernel"):
+        assert all(token in source for source in (producer,auditor,resolver))
 
 
 def test_chunked_gradient_sketch_matches_registered_full_vector_projection():

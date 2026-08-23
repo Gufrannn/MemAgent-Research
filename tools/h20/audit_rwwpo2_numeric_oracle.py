@@ -16,6 +16,26 @@ MULTIPLIER = 16.0
 GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
 STREAMED_ORACLE_MICROBATCHES = 7
 STREAMED_ORACLE_SEQUENCE_LENGTH = 8191
+STREAMED_REPLAY_CALIBRATION = {
+    "microbatches": STREAMED_ORACLE_MICROBATCHES,
+    "sequence_length": STREAMED_ORACLE_SEQUENCE_LENGTH,
+    "active_response_tokens": 1024,
+    "synthetic_label_free": True,
+    "gradient_checkpointing": True,
+    "gradient_checkpointing_use_reentrant": False,
+    "remove_padding_flash_attention_patch": True,
+    "fsdp_auto_wrap_policy": "default_transformer_no_split_modules",
+    "fsdp_sharding_strategy": "FULL_SHARD",
+    "fsdp_use_orig_params": False,
+    "fsdp_sync_module_states": True,
+    "fsdp_forward_prefetch": False,
+    "fsdp_param_dtype": "bfloat16",
+    "fsdp_reduce_dtype": "float32",
+    "fsdp_buffer_dtype": "float32",
+    "cuda_autocast_dtype": "bfloat16",
+    "selective_logprob_kernel":
+        "verl.utils.torch_functional.logprobs_from_logits",
+}
 FLOORS = {
     "tau_theta": 1e-12,
     "tau_logprob": 1e-6,
@@ -65,12 +85,8 @@ def main() -> None:
     if float(row.get("threshold_multiplier", -1)) != MULTIPLIER \
             or int(row.get("gradient_sketch_chunk_elements", -1)) != \
                 GRADIENT_SKETCH_CHUNK_ELEMENTS \
-            or row.get("streamed_replay_calibration") != {
-                "microbatches": STREAMED_ORACLE_MICROBATCHES,
-                "sequence_length": STREAMED_ORACLE_SEQUENCE_LENGTH,
-                "active_response_tokens": 1024,
-                "synthetic_label_free": True,
-            } \
+            or row.get("streamed_replay_calibration") != \
+                STREAMED_REPLAY_CALIBRATION \
             or row.get("threshold_floors") != FLOORS:
         raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:threshold rule")
     observed = row.get("observed", {})
