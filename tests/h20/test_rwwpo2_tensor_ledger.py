@@ -214,6 +214,32 @@ def test_v3_self_reported_actual_loss_is_independently_recomputed(tmp_path):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
 
 
+def test_v3_rehashed_extra_trial_after_first_feasible_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    def append_impossible_tail(row):
+        extra=dict(row["trial_evidence"][0])
+        extra.update(alpha=.5,feasible=False)
+        row["alpha_test_order"].append(.5)
+        row["trial_evidence"].append(extra)
+    _tamper_last_receipt(path,append_impossible_tail)
+    with pytest.raises(ValueError,match="terminate tested prefix"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_rehashed_truncated_all_infeasible_grid_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["trial_evidence"][0].update(
+        feasible=False))
+    with pytest.raises(ValueError,match="did not exhaust alpha grid"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
 def test_v3_missing_rng_phase_digest_is_rejected_after_receipt_rehash(tmp_path):
     for inner in (1,2):
         for rank in (0,1):

@@ -37,7 +37,7 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 from recurrent.research.rwwpo_transaction import (
-    ALPHA_GRID, digest, displacement_norm,
+    ALPHA_GRID, digest, displacement_norm, largest_tested_feasible,
     logical_transaction_seed, off_behavior_exposed, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, relative_displacement_norm, restore_rng, rng_snapshot,
     seed_transaction_rng, set_interpolated_parameters,
@@ -820,11 +820,11 @@ class DataParallelPPOActor(BasePPOActor):
                             restore_rng(transaction_entry_rng)
                             raise RuntimeError("RWWPO_TRIAL_FORWARD_BUDGET_EXCEEDED")
                         if rwwpo_controller == "feasible_backtracking":
-                            # Complete the declared evidence grid after an early choice is unnecessary;
-                            # decision is over the tested descending prefix only.
-                            decision = next((a for a in candidates if tested.get(a)), 0.0)
-                            alpha_committed = 0.0 if proposal_zero else float(decision)
-                            accepted = alpha_committed > 0.0
+                            decision = largest_tested_feasible(
+                                [(row["alpha"], row["feasible"]) for row in trial_rows],
+                                proposal_zero=proposal_zero, alpha_grid=candidates)
+                            alpha_committed = decision.alpha
+                            accepted = decision.accepted_nonzero
                         elif rwwpo_controller == "hard_rollback":
                             accepted = bool(tested[1.0]) and not proposal_zero
                             alpha_committed = 1.0 if accepted else 0.0

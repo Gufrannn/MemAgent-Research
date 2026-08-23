@@ -328,21 +328,34 @@ class TrialDecision:
 
 
 def largest_tested_feasible(trials, proposal_zero=False, alpha_grid=ALPHA_GRID):
-    """Return the first feasible grid point in declared descending test order.
+    """Validate actual backtracking evidence and return its canonical decision.
 
-    No monotonicity is assumed.  ``trials`` maps an actually evaluated alpha to
-    its global feasibility decision; an untested alpha can never be committed.
+    ``trials`` is either an insertion-ordered mapping or an ordered iterable of
+    ``(alpha, feasible)`` pairs.  It must be the exact descending prefix that a
+    fail-closed runtime evaluated: the first feasible point terminates the
+    prefix, while an all-infeasible decision must exhaust the declared grid.
     """
     order = tuple(float(value) for value in alpha_grid)
     if order != tuple(sorted(order, reverse=True)) or len(set(order)) != len(order):
         raise ValueError("alpha grid must be unique and descending")
-    tested_order = []
-    for alpha in order:
-        if alpha not in trials:
-            raise ValueError(f"alpha {alpha} was not actually tested")
-        tested_order.append(alpha)
-        if bool(trials[alpha]):
-            if proposal_zero:
-                return TrialDecision(0.0, False, True, tuple(tested_order))
-            return TrialDecision(alpha, True, False, tuple(tested_order))
-    return TrialDecision(0.0, False, bool(proposal_zero), tuple(tested_order))
+    raw_items = list(trials.items()) if hasattr(trials, "items") else list(trials)
+    if not raw_items:
+        raise ValueError("backtracking trial evidence is empty")
+    if any(not isinstance(feasible, (bool, np.bool_))
+           for _, feasible in raw_items):
+        raise ValueError("trial feasibility evidence must be boolean")
+    items = [(float(alpha), bool(feasible)) for alpha, feasible in raw_items]
+    tested_order = tuple(alpha for alpha, _ in items)
+    if tested_order != order[:len(tested_order)]:
+        raise ValueError("trials are not an exact descending alpha-grid prefix")
+    feasible_indices = [index for index, (_, feasible) in enumerate(items) if feasible]
+    if feasible_indices:
+        if feasible_indices != [len(items) - 1]:
+            raise ValueError("first feasible trial did not terminate tested prefix")
+        selected = tested_order[-1]
+    else:
+        if len(items) != len(order):
+            raise ValueError("all-infeasible trials did not exhaust alpha grid")
+        selected = 0.0
+    alpha = 0.0 if proposal_zero else selected
+    return TrialDecision(alpha, alpha > 0.0, bool(proposal_zero), tested_order)

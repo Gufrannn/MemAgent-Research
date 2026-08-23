@@ -19,7 +19,8 @@ if str(ROOT) not in sys.path:
 import torch
 
 from recurrent.research.rwwpo_transaction import (
-    logical_transaction_seed, prefix_distribution_stats, proposal_clock,
+    largest_tested_feasible, logical_transaction_seed,
+    prefix_distribution_stats, proposal_clock,
 )
 
 
@@ -430,16 +431,29 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                         raise ValueError("trial test order/evidence mismatch")
                     if not order or order[0] != 1.0 or any(a not in row["alpha_grid"] for a in order):
                         raise ValueError("trial alpha evidence malformed")
-                    if row["controller_variant"]=="feasible_backtracking" and order != row["alpha_grid"][:len(order)]:
-                        raise ValueError("trial order is not descending grid prefix")
                     declared_alpha=float(row["alpha_committed"])
-                    largest=next((float(item["alpha"]) for item in evidence if item.get("feasible")),0.0)
-                    if row["controller_variant"] == "none":
+                    if row["controller_variant"] == "feasible_backtracking":
+                        try:
+                            decision = largest_tested_feasible(
+                                [(item["alpha"], item.get("feasible"))
+                                 for item in evidence],
+                                proposal_zero=bool(row["proposal_zero"]),
+                                alpha_grid=row["alpha_grid"])
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"invalid canonical backtracking evidence: {exc}") from exc
+                        expected_alpha = decision.alpha
+                    elif row["controller_variant"] == "none":
+                        if order != [1.0]:
+                            raise ValueError("no-controller trial evidence must contain alpha=1 only")
                         expected_alpha = 0.0 if row["proposal_zero"] else 1.0
                     else:
-                        expected_alpha=0.0 if row["proposal_zero"] else largest
+                        if order != [1.0]:
+                            raise ValueError("hard-rollback trial evidence must contain alpha=1 only")
+                        expected_alpha = (0.0 if row["proposal_zero"] or
+                                          not bool(evidence[0].get("feasible")) else 1.0)
                     if declared_alpha != expected_alpha:
-                        raise ValueError("committed alpha is not largest tested feasible")
+                        raise ValueError("committed alpha is not canonical controller decision")
                     for trial in evidence:
                         if len(trial.get("log_prob",[])) != len(row["old_log_prob"]):
                             raise ValueError("trial logprob row alignment failure")

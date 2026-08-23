@@ -15,12 +15,12 @@ from recurrent.research.rwwpo_transaction import (
 
 
 def test_alpha_one_feasible():
-    decision = largest_tested_feasible({alpha: alpha == 1.0 for alpha in ALPHA_GRID})
+    decision = largest_tested_feasible({1.0: True})
     assert decision.alpha == 1.0 and decision.accepted_nonzero
 
 
 def test_full_infeasible_half_feasible():
-    decision = largest_tested_feasible({alpha: alpha <= 0.5 for alpha in ALPHA_GRID})
+    decision = largest_tested_feasible({1.0: False, 0.5: True})
     assert decision.alpha == 0.5
 
 
@@ -34,9 +34,9 @@ def test_all_nonzero_infeasible():
     assert decision.alpha == 0 and not decision.accepted_nonzero
 
 
-def test_nonmonotone_feasibility_chooses_largest_tested():
-    feasible = {alpha: alpha in (0.5, 0.125) for alpha in ALPHA_GRID}
-    assert largest_tested_feasible(feasible).alpha == 0.5
+def test_first_feasible_must_terminate_actual_evidence():
+    with pytest.raises(ValueError, match="terminate tested prefix"):
+        largest_tested_feasible({1.0: False, 0.5: True, 0.25: False})
 
 
 def test_descending_prefix_can_stop_at_first_feasible_candidate():
@@ -46,12 +46,22 @@ def test_descending_prefix_can_stop_at_first_feasible_candidate():
 
 
 def test_skipped_untested_candidate_is_fail_closed():
-    with pytest.raises(ValueError, match="not actually tested"):
+    with pytest.raises(ValueError, match="exact descending alpha-grid prefix"):
         largest_tested_feasible({1.0: False, 0.25: True})
 
 
+def test_truncated_all_infeasible_prefix_is_fail_closed():
+    with pytest.raises(ValueError, match="did not exhaust alpha grid"):
+        largest_tested_feasible({1.0: False, 0.5: False})
+
+
+def test_nonboolean_feasibility_evidence_is_fail_closed():
+    with pytest.raises(ValueError, match="must be boolean"):
+        largest_tested_feasible([(1.0, "false")])
+
+
 def test_zero_proposal_cannot_be_accepted():
-    decision = largest_tested_feasible({alpha: True for alpha in ALPHA_GRID}, proposal_zero=True)
+    decision = largest_tested_feasible({1.0: True}, proposal_zero=True)
     assert decision.alpha == 0 and decision.proposal_zero and not decision.accepted_nonzero
 
 

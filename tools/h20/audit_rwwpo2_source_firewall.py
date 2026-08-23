@@ -93,6 +93,7 @@ def main():
         "RWWPO transactions require one full optimizer minibatch per inner update",
         "RWWPO2_BEHAVIOR_BATCH_MUTATED_BETWEEN_INNER_UPDATES",
         "logical_proposal_id = proposal_clock(round_id, inner_id)",
+        "decision = largest_tested_feasible(",
         "transaction_optimizer_step_calls += 1",
         "RWWPO2_OPTIMIZER_STEP_COUNT_DRIFT",
         '"behavior_coefficient_tolerance", 1e-9',
@@ -125,6 +126,7 @@ def main():
             violations.append("actual-loss tensor ledger:"+token)
     for token in ("independently_recompute_actual_loss", "actual_loss_contract",
                   "shared_kl_loss", "active_logprob_gradient_l2",
+                  "invalid canonical backtracking evidence",
                   "validate_rwwpo2_rng_phase_digests",
                   "RWWPO-2 RNG phase digest closure",
                   "RWWPO-2 rejected transaction RNG rollback"):

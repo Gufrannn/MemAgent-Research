@@ -30,14 +30,15 @@ def main():
                         "--expected-commit",head,"--output",str(base)],check=True)
         original=json.loads(base.read_text())
     cases={
-        "alpha_one":largest_tested_feasible({x:x==1 for x in ALPHA_GRID}).alpha,
-        "half":largest_tested_feasible({x:x<=.5 for x in ALPHA_GRID}).alpha,
+        "alpha_one":largest_tested_feasible({1.0:True}).alpha,
+        "half":largest_tested_feasible({1.0:False,.5:True}).alpha,
         "smallest":largest_tested_feasible({x:x==1/32 for x in ALPHA_GRID}).alpha,
         "all_reject":largest_tested_feasible({x:False for x in ALPHA_GRID}).alpha,
-        "nonmonotone":largest_tested_feasible({x:x in (.5,.125) for x in ALPHA_GRID}).alpha,
-        "zero_proposal":largest_tested_feasible({x:True for x in ALPHA_GRID},proposal_zero=True).alpha,
+        "descending_prefix":largest_tested_feasible({1.0:False,.5:False,.25:True}).alpha,
+        "zero_proposal":largest_tested_feasible({1.0:True},proposal_zero=True).alpha,
     }
-    expected={"alpha_one":1.0,"half":.5,"smallest":1/32,"all_reject":0.0,"nonmonotone":.5,"zero_proposal":0.0}
+    expected={"alpha_one":1.0,"half":.5,"smallest":1/32,"all_reject":0.0,
+              "descending_prefix":.25,"zero_proposal":0.0}
     status="PASS" if original["status"]=="PASS" and cases==expected else "FAIL"
     report={"status":status,"decision":"RWWPO_E0_PASS" if status=="PASS" else "TF_RWWPO_E0_NO_GO",
             "git_commit":head,"base_e0_report_sha256":original["report_sha256"],"controller_cases":cases,

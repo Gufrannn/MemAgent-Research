@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 import torch
 
 from recurrent.research.rwwpo_transaction import (
+    ALPHA_GRID, largest_tested_feasible,
     logical_transaction_seed,
     proposal_clock,
     set_stateless_proposal_lr,
@@ -179,10 +180,34 @@ def main():
                                          rank=1,stream="actor_transaction")
     seed_other_stream=logical_transaction_seed(experiment_seed=2026,round_id=27,inner_id=2,
                                                 rank=1,stream="trial_forward")
+    controller_cases={
+        "alpha_one":largest_tested_feasible({1.0:True}).alpha,
+        "half":largest_tested_feasible({1.0:False,.5:True}).alpha,
+        "smallest":largest_tested_feasible(
+            {value:value==ALPHA_GRID[-1] for value in ALPHA_GRID}).alpha,
+        "all_reject":largest_tested_feasible(
+            {value:False for value in ALPHA_GRID}).alpha,
+        "zero_proposal":largest_tested_feasible(
+            {1.0:True},proposal_zero=True).alpha,
+    }
+    controller_expected={"alpha_one":1.0,"half":.5,"smallest":1/32,
+                         "all_reject":0.0,"zero_proposal":0.0}
+    controller_attacks={}
+    for name,trials in (
+            ("extra_tail_after_feasible",[(1.0,False),(.5,True),(.25,False)]),
+            ("truncated_all_infeasible",[(1.0,False),(.5,False)]),
+            ("skipped_grid_point",[(1.0,False),(.25,True)])):
+        try:
+            largest_tested_feasible(trials)
+        except ValueError:
+            controller_attacks[name]=True
+        else:
+            controller_attacks[name]=False
     status=(behavior_max<=1e-12 and behavior_parameter_max<=1e-12
             and off_be>1e-8 and off_parameter_max>1e-8
             and clocks==[1,2,3,800] and lrs==[5e-7,1e-6,1e-6,1e-6]
-            and all(k1_round_closure) and seed==seed_replay and seed!=seed_other_stream)
+            and all(k1_round_closure) and seed==seed_replay and seed!=seed_other_stream
+            and controller_cases==controller_expected and all(controller_attacks.values()))
     report=signed({"status":"PASS" if status else "FAIL",
         "decision":"RWWPO2_E0_PASS" if status else "RWWPO2_E0_NO_GO",
         "git_commit":head,"manifest_sha256":hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
@@ -193,6 +218,8 @@ def main():
         "proposal_clocks":clocks,"proposal_lrs":lrs,"logical_seed_probe":seed,
         "logical_seed_replay_equal":seed==seed_replay,
         "logical_seed_stream_separated":seed!=seed_other_stream,
+        "canonical_controller_cases":controller_cases,
+        "canonical_controller_attacks_rejected":controller_attacks,
         "k1_transition_kernel_round_closure":k1_round_closure,
         "k1_scope":"common-host full parameter gradients plus exact complete optimizer-state induction",
         "k2_scope":"off-behavior objective geometry"})
