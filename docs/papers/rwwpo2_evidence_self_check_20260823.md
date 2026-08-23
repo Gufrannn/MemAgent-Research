@@ -10,11 +10,18 @@ pre-R50 numeric oracle before producing a PASS receipt. Commit `a512741...`
 subsequently passed 126/126 tests, CPU evidence, and the numeric oracle, but its
 first B/seed-2026 R50 attempt failed during round-2 inner-2 after an alpha-zero
 round-2 inner-1 transaction exposed incomplete rollback evidence. All consumed
-failed roots are `NO_GO` and cannot be reused. There is one completed round in
-that failed attempt, but no valid R50 mechanism endpoint and no R400 performance
-result currently exist.
+failed roots are `NO_GO` and cannot be reused. Commit `b540521...` implemented
+the complete-state correction, but its first authenticated H20 release-test
+root stopped before GPU work at 139/140 PASS: one synthetic fixture reused the
+fresh committed-forward prefix rows as the cached trial prefix rows even though
+their tensors intentionally differed by `5e-7`. The formal auditor correctly
+rejected that contradiction. The fixture correction separates trial and
+committed certificates; it still requires a new exact-commit authenticated
+suite. There is one completed round in the failed `a512741...` training attempt,
+but no valid R50 mechanism endpoint and no R400 performance result currently
+exist.
 
-The latest failed attempt is preserved at
+The latest failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_a512741_r1`;
 its operator log is
 `/data/cw/memagent_work/logs/rwwpo2_B_2026_a512741.screen.log`. The read-only

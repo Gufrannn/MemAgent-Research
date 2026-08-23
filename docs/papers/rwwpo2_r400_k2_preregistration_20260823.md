@@ -30,7 +30,12 @@ performing a committed-state forward, while the transaction snapshot omitted
 forward-mutable model buffers. Therefore that receipt cannot certify complete
 rollback. The current correction snapshots/restores all named model buffers,
 performs an independent post-commit/post-rollback forward, and makes any
-closure failure an append-only attempt-level NO_GO. It must pass a new
+closure failure an append-only attempt-level NO_GO. Commit `b540521...`
+contained that correction, but its first authenticated H20 suite stopped before
+GPU work at 139/140 PASS because one synthetic test fixture attached the fresh
+committed-forward prefix rows to a distinct cached trial tensor. The production
+auditor correctly rejected the inconsistent fixture. The fixture is now split
+into separate trial and committed certificates; the correction must pass a new
 exact-commit authenticated suite and numeric oracle before another fresh-base
 R50 attempt. No consumed failure root or old numeric receipt may be reused. The
 previous K1 hard-rollback run remains diagnostic-only and is not a performance

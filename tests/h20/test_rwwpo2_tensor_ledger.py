@@ -36,7 +36,10 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
     root_name=str(100+rank)
     pre_local=[{"turn":0,"sample_index":rank,"root_identity_hash":root_name,
                 "log_ratio":0.2*(inner-1) if active else 0.,"prefix_token_count":2}]
-    post_ratio=(0.2*inner if active else 0.)+2.0*float(verified_delta)
+    trial_ratio=0.2*inner if active else 0.
+    trial_local=[{"turn":0,"sample_index":rank,"root_identity_hash":root_name,
+                  "log_ratio":trial_ratio,"prefix_token_count":2}]
+    post_ratio=trial_ratio+2.0*float(verified_delta)
     post_local=[{"turn":0,"sample_index":rank,"root_identity_hash":root_name,
                  "log_ratio":post_ratio,"prefix_token_count":2}]
     pre_global=prefix_distribution_stats([
@@ -44,6 +47,10 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
          "log_ratio":0.2*(inner-1) if active else 0.},
         {"turn":0,"sample_index":1,"root_identity_hash":"101",
          "log_ratio":0.2*(inner-1) if active else 0.}],q_min=.5,root_q_min=.5,log_ratio_cap=4.)
+    trial_global=prefix_distribution_stats([
+        {"turn":0,"sample_index":0,"root_identity_hash":"100","log_ratio":trial_ratio},
+        {"turn":0,"sample_index":1,"root_identity_hash":"101","log_ratio":trial_ratio}],
+        q_min=.5,root_q_min=.5,log_ratio_cap=4.)
     post_global=prefix_distribution_stats([
         {"turn":0,"sample_index":0,"root_identity_hash":"100","log_ratio":post_ratio},
         {"turn":0,"sample_index":1,"root_identity_hash":"101","log_ratio":post_ratio}],
@@ -80,7 +87,7 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
         alpha_committed=1. if active else 0.,accepted_nonzero=active,
         proposal_zero=not active,
         trial_evidence=[{"alpha":1.,"feasible":True,"log_prob":proposed,
-                         "prefix_rows":post_local,"prefix_stats":post_global}],
+                         "prefix_rows":trial_local,"prefix_stats":trial_global}],
         full_parameter_displacement_norm=.1 if active else 0.,
         committed_parameter_displacement_norm=.1 if active else 0.,
         pre_digests=pre_digests,commit_digests=commit_digests,
@@ -153,6 +160,11 @@ def test_v3_fresh_post_forward_may_differ_from_trial_within_frozen_tolerance(
     result=audit([tmp_path/"actual_loss_rank0.jsonl",
                   tmp_path/"actual_loss_rank1.jsonl"],require_method=True)
     assert result["status"]=="PASS"
+    receipt=json.loads((tmp_path/"actual_loss_rank0.jsonl").read_text().splitlines()[0])
+    hydrated=hydrate_authenticated_v3_receipt(
+        receipt,tmp_path/"actual_loss_rank0.jsonl")
+    assert hydrated["trial_evidence"][0]["prefix_rows"] != \
+        hydrated["post_prefix_rows"]
 
 
 def test_v3_tensor_shard_byte_tamper_is_rejected(tmp_path):
