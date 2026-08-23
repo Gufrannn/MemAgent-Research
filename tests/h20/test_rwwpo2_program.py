@@ -156,6 +156,7 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     assert '"preflight_report_sha256"' in attempt
     assert "R400 preflight gate binding" in attempt
     assert "preflight lineage start" in attempt
+    assert "validate_rwwpo2_rng_phase_digests(row)" in attempt
     gate = (ROOT / "tools/h20/audit_rwwpo2_r50_program.py").read_text()
     assert "segment contract binding" in gate
 

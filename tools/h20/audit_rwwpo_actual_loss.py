@@ -128,6 +128,29 @@ def validate_v3_schema(receipt):
         raise ValueError("RWWPO-2 receipt schema failure: " + errors[0].message)
 
 
+def validate_rwwpo2_rng_phase_digests(row):
+    """Bind diagnostic RNG phases to the authenticated transaction state."""
+    diagnostics = row.get("mechanism_diagnostics", {})
+    rng_fields = (
+        "transaction_entry_rng_digest",
+        "logical_seeded_rng_digest",
+        "proposal_gradient_rng_digest",
+        "terminal_rng_digest",
+    )
+    if any(not isinstance(diagnostics.get(field), str)
+           or re.fullmatch(r"[0-9a-f]{64}", diagnostics[field]) is None
+           for field in rng_fields) \
+            or diagnostics["transaction_entry_rng_digest"] != \
+                row.get("pre_digests", {}).get("rng") \
+            or diagnostics["terminal_rng_digest"] != \
+                row.get("commit_digests", {}).get("rng"):
+        raise ValueError("RWWPO-2 RNG phase digest closure")
+    if not bool(row.get("accepted_nonzero")) \
+            and diagnostics["terminal_rng_digest"] != \
+                diagnostics["transaction_entry_rng_digest"]:
+        raise ValueError("RWWPO-2 rejected transaction RNG rollback")
+
+
 def hydrate_authenticated_v3_receipt(receipt, ledger_path):
     ledger_root = Path(ledger_path).resolve().parent
     evidence = receipt.get("tensor_shard", {})
@@ -310,6 +333,8 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                     required={"model","optimizer","scheduler","scaler","rng"}
                     if set(row.get("pre_digests",{}))!=required or set(row.get("commit_digests",{}))!=required:
                         raise ValueError("transaction digest closure failure")
+                    if row["schema_version"] == "rwwpo-actual-loss-v3":
+                        validate_rwwpo2_rng_phase_digests(row)
                     if alpha==0:
                         for key in required:
                             if row["pre_digests"][key] != row["commit_digests"][key]:
@@ -325,20 +350,6 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                                                      "active_logprob_gradient_l2")) \
                                 or float(diagnostics.get("active_logprob_gradient_l2", -1)) < 0:
                             raise ValueError("RWWPO-2 loss/optimizer-step evidence")
-                        rng_fields = (
-                            "transaction_entry_rng_digest",
-                            "logical_seeded_rng_digest",
-                            "proposal_gradient_rng_digest",
-                            "terminal_rng_digest",
-                        )
-                        if any(not isinstance(diagnostics.get(field), str)
-                               or re.fullmatch(r"[0-9a-f]{64}", diagnostics[field]) is None
-                               for field in rng_fields) \
-                                or diagnostics["transaction_entry_rng_digest"] != \
-                                    row["pre_digests"]["rng"] \
-                                or diagnostics["terminal_rng_digest"] != \
-                                    row["commit_digests"]["rng"]:
-                            raise ValueError("RWWPO-2 RNG phase digest closure")
                         recomputed_loss = independently_recompute_actual_loss(row)
                         for field, actual_value in recomputed_loss.items():
                             if not math.isclose(

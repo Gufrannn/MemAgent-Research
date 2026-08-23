@@ -24,6 +24,7 @@ from recurrent.research.rwwpo_transaction import (
 )
 from tools.h20.audit_rwwpo_actual_loss import (
     audit, canonical_sha, hydrate_authenticated_v3_receipt,
+    validate_rwwpo2_rng_phase_digests,
 )
 
 
@@ -327,7 +328,12 @@ def main() -> None:
                 raise SystemExit(
                     "RWWPO2_ATTEMPT_AUDIT_NO_GO:actual prefix crosses target"
                 )
-            rows.append(hydrate_authenticated_v3_receipt(receipt, ledger))
+            row = hydrate_authenticated_v3_receipt(receipt, ledger)
+            # Defense in depth: the actual-loss audit above already validates
+            # this closure, but the formal attempt entry must visibly bind the
+            # four phase digests to pre/commit state as well.
+            validate_rwwpo2_rng_phase_digests(row)
+            rows.append(row)
     start_round = min(int(row["global_step"]) for row in rows)
     if int(preflight.get("lineage_start_round", -1)) != start_round:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:preflight lineage start")

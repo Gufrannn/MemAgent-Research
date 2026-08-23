@@ -13,7 +13,7 @@ from recurrent.research.rwwpo_transaction import (
 )
 from tools.h20.audit_rwwpo_actual_loss import (
     audit, canonical_sha, hydrate_authenticated_v3_receipt,
-    independently_recompute_actual_loss,
+    independently_recompute_actual_loss, validate_rwwpo2_rng_phase_digests,
 )
 
 
@@ -209,6 +209,60 @@ def test_v3_self_reported_actual_loss_is_independently_recomputed(tmp_path):
         policy_loss=float(row["mechanism_diagnostics"]["policy_loss"])+.25))
     with pytest.raises(ValueError,match="independently recomputed actual loss"):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_missing_rng_phase_digest_is_rejected_after_receipt_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].pop(
+        "transaction_entry_rng_digest"))
+    with pytest.raises(ValueError,match="receipt schema failure"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_forged_entry_rng_digest_is_rejected_after_receipt_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        transaction_entry_rng_digest="e"*64))
+    with pytest.raises(ValueError,match="RNG phase digest closure"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_forged_terminal_rng_digest_is_rejected_after_receipt_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        terminal_rng_digest="e"*64))
+    with pytest.raises(ValueError,match="RNG phase digest closure"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_rejected_terminal_rng_must_equal_entry_after_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner,active=False)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    def forge_rejected_terminal(row):
+        row["mechanism_diagnostics"]["terminal_rng_digest"]="e"*64
+        row["commit_digests"]["rng"]="e"*64
+    _tamper_last_receipt(path,forge_rejected_terminal)
+    with pytest.raises(ValueError,match="rejected transaction RNG rollback"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path],require_method=False)
+
+
+def test_formal_rng_phase_semantics_accept_authentic_hydrated_row(tmp_path):
+    _append_round(tmp_path,0,1)
+    ledger=tmp_path/"actual_loss_rank0.jsonl"
+    receipt=json.loads(ledger.read_text().splitlines()[0])
+    row=hydrate_authenticated_v3_receipt(receipt,ledger)
+    validate_rwwpo2_rng_phase_digests(row)
 
 
 def test_v3_frozen_reference_input_drift_between_inner_transactions_is_rejected(tmp_path):

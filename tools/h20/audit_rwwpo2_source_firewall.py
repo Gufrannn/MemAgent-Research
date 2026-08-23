@@ -112,7 +112,9 @@ def main():
             violations.append("actual-loss tensor ledger:"+token)
     for token in ("independently_recompute_actual_loss", "actual_loss_contract",
                   "shared_kl_loss", "active_logprob_gradient_l2",
-                  "RWWPO-2 RNG phase digest closure"):
+                  "validate_rwwpo2_rng_phase_digests",
+                  "RWWPO-2 RNG phase digest closure",
+                  "RWWPO-2 rejected transaction RNG rollback"):
         if token not in actual_auditor:
             violations.append("actual-loss independent audit:"+token)
     if '"actual_loss_contract"' not in actor_source:
@@ -163,7 +165,7 @@ def main():
     for token in (
         'parser.add_argument("--preflight", required=True)',
         '"preflight_report_sha256"', "R400 preflight gate binding",
-        "preflight lineage start",
+        "preflight lineage start", "validate_rwwpo2_rng_phase_digests(row)",
     ):
         if token not in attempt:
             violations.append("attempt/preflight binding:"+token)
