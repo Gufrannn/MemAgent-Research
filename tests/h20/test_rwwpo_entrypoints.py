@@ -34,9 +34,17 @@ def test_actual_ledger_rejects_hash_tamper(tmp_path):
     assert result.returncode != 0 and "hash mismatch" in result.stderr
 
 def test_launcher_requires_semantic_identity_and_explicit_pair():
-    env=os.environ.copy(); env.update(RWWPO_WORK_ROOT="/tmp/rwwpo-test",RWWPO_REPO_DIR=str(ROOT),RWWPO_EXPECTED_COMMIT="0"*40,RWWPO_PHASE="t5")
-    result=run(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh",env=env)
-    assert result.returncode != 0 and "GPU_PAIR" in result.stderr
+    env=os.environ.copy()
+    env.update(RWWPO_WORK_ROOT="/tmp/rwwpo-test",RWWPO_REPO_DIR=str(ROOT),
+               RWWPO_EXPECTED_COMMIT="0"*40,RWWPO_PHASE="t5")
+    env.pop("GPU_PAIR",None)
+    env.pop("RWWPO_RUN_ID",None)
+    missing_pair=run(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh",env=env)
+    assert missing_pair.returncode != 0 and "GPU_PAIR" in missing_pair.stderr
+
+    env["GPU_PAIR"]="0,1"
+    missing_identity=run(ROOT/"scripts/h20/run_qwen25_7b_rwwpo.sh",env=env)
+    assert missing_identity.returncode != 0 and "RWWPO_RUN_ID" in missing_identity.stderr
 
 def _signed(record):
     record=dict(record)
