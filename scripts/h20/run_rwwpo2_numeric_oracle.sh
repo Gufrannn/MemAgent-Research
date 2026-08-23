@@ -20,6 +20,12 @@ IFS=, read -r GPU_A GPU_B <<< "$GPU_PAIR"
 [[ -n ${RWWPO_NUMERIC_ORACLE_ROOT:-} && $RWWPO_NUMERIC_ORACLE_ROOT == /* ]] || {
   echo 'RWWPO2_NUMERIC_ORACLE_NO_GO:set absolute one-use output root' >&2; exit 65;
 }
+[[ -f ${RWWPO_RELEASE_TEST_RECEIPT:-} \
+   && ${RWWPO_RELEASE_TEST_RECEIPT_SHA256:-} =~ ^[0-9a-f]{64}$ \
+   && -f ${RWWPO_MANIFEST:-} \
+   && ${RWWPO_MANIFEST_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+  echo 'RWWPO2_NUMERIC_ORACLE_NO_GO:bind release-test and manifest receipts' >&2; exit 71;
+}
 [[ ! -e $RWWPO_NUMERIC_ORACLE_ROOT ]] || {
   echo 'RWWPO2_NUMERIC_ORACLE_NO_GO:output root already consumed' >&2; exit 66;
 }
@@ -33,6 +39,15 @@ IFS=, read -r GPU_A GPU_B <<< "$GPU_PAIR"
    && -f $RWWPO_WORK_ROOT/models/Qwen2.5-7B-Instruct/config.json ]] || {
   echo 'RWWPO2_NUMERIC_ORACLE_NO_GO:runtime/model' >&2; exit 68;
 }
+
+"$RWWPO_WORK_ROOT/.venv/bin/python" \
+  "$RWWPO_REPO_DIR/tools/h20/verify_rwwpo2_release_tests.py" \
+  --receipt "$RWWPO_RELEASE_TEST_RECEIPT" \
+  --receipt-sha256 "$RWWPO_RELEASE_TEST_RECEIPT_SHA256" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --manifest "$RWWPO_MANIFEST" \
+  --manifest-sha256 "$RWWPO_MANIFEST_SHA256" \
+  --work-root "$RWWPO_WORK_ROOT"
 
 mkdir -p "$RWWPO_WORK_ROOT/locks"
 exec 8>"$RWWPO_WORK_ROOT/locks/memagent_h20_gpu_${GPU_A}.lock"

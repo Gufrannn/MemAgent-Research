@@ -18,6 +18,9 @@ ENTRY=(
     ROOT/"scripts/h20/rwwpo2_common.sh",
     ROOT/"scripts/h20/run_qwen25_7b_rwwpo2.sh",
     ROOT/"scripts/h20/run_rwwpo2_numeric_oracle.sh",
+    ROOT/"tools/h20/run_rwwpo2_release_tests.py",
+    ROOT/"tools/h20/verify_rwwpo2_release_tests.py",
+    ROOT/"tools/h20/rwwpo2_pytest_evidence_plugin.py",
     ROOT/"tools/h20/preflight_rwwpo2.py",
     ROOT/"tools/h20/audit_rwwpo_actual_loss.py",
     ROOT/"tools/h20/run_rwwpo2_e0.py",
@@ -148,6 +151,7 @@ def main():
         "RWWPO_R50_PROGRAM_GATE", "RWWPO_CONFIRMATION_SEAL",
         "RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE",
         "RWWPO_BEHAVIOR_GRADIENT_TOLERANCE",
+        "RWWPO_RELEASE_TEST_RECEIPT",
     ):
         if token not in launcher:
             violations.append("launcher contract:"+token)
@@ -182,6 +186,41 @@ def main():
     ):
         if token not in attempt:
             violations.append("attempt/preflight binding:"+token)
+    preflight=(ROOT/"tools/h20/preflight_rwwpo2.py").read_text(encoding="utf-8")
+    numeric_launcher=(ROOT/"scripts/h20/run_rwwpo2_numeric_oracle.sh").read_text(
+        encoding="utf-8")
+    release_producer=(ROOT/"tools/h20/run_rwwpo2_release_tests.py").read_text(
+        encoding="utf-8")
+    release_verifier=(ROOT/"tools/h20/verify_rwwpo2_release_tests.py").read_text(
+        encoding="utf-8")
+    for token in ("--release-test-receipt", "verify_release_test_receipt"):
+        if token not in preflight:
+            violations.append("training preflight release-test gate:"+token)
+    for token in ("ROOT = Path(__file__).resolve().parents[2]",
+                  "sys.path.insert(0, str(ROOT))"):
+        if token not in preflight:
+            violations.append("training preflight direct entry:"+token)
+    if all(token in preflight for token in (
+            "sys.path.insert(0, str(ROOT))",
+            "from tools.h20.verify_rwwpo2_release_tests import")) \
+            and preflight.index("sys.path.insert(0, str(ROOT))") > \
+                preflight.index("from tools.h20.verify_rwwpo2_release_tests import"):
+        violations.append("training preflight repo bootstrap order")
+    for token in ("RWWPO_RELEASE_TEST_RECEIPT",
+                  "verify_rwwpo2_release_tests.py"):
+        if token not in numeric_launcher:
+            violations.append("numeric oracle release-test gate:"+token)
+    for token in ("TEST_INVENTORY", "RWWPO2_RELEASE_TESTS_PASS",
+                  "checkout_postcondition", "pytest_command(mode=\"collect\"",
+                  "runtime_environment"):
+        if token not in release_producer:
+            violations.append("release-test producer:"+token)
+    for token in ("--junitxml", "junit_summary", "test_source_sha256",
+                  "release-test Python environment drift",
+                  "python_executable_sha256", "installed_distributions_sha256",
+                  "collect_current_node_ids", "non-PASS/skip/xfail"):
+        if token not in release_verifier:
+            violations.append("release-test verifier:"+token)
     confirmation=(ROOT/"tools/h20/finalize_rwwpo2_confirmation.py").read_text(
         encoding="utf-8")
     confirmation_protocol=(ROOT/"recurrent/research/rwwpo2_confirmation.py").read_text(

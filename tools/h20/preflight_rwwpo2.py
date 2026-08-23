@@ -6,12 +6,19 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.h20.verify_rwwpo2_release_tests import verify_release_test_receipt
+
+
 EXPECTED_BRANCH = "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"
 CELLS = {
     "D": ("original_tokenwise", "none", 400),
@@ -62,6 +69,8 @@ def main() -> None:
     parser.add_argument("--e0", required=True)
     parser.add_argument("--data-boundary-audit", required=True)
     parser.add_argument("--base-protocol-audit", required=True)
+    parser.add_argument("--release-test-receipt", required=True)
+    parser.add_argument("--release-test-receipt-sha256", required=True)
     parser.add_argument("--original-resolved-manifest", required=True)
     parser.add_argument("--original-resolved-sha256", required=True)
     parser.add_argument("--lineage-parent")
@@ -115,6 +124,17 @@ def main() -> None:
     if schema_path != (ROOT / "rwwpo2_experiment_manifest.schema.json").resolve() \
             or sha256_file(schema_path) != resolved.get("source_manifest_schema_sha256"):
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:manifest schema drift")
+    try:
+        release_tests = verify_release_test_receipt(
+            args.release_test_receipt,
+            receipt_sha256=args.release_test_receipt_sha256,
+            expected_commit=head,
+            manifest_path=manifest_path,
+            manifest_sha256=resolved["source_manifest_sha256"],
+            work_root=os.environ.get("RWWPO_WORK_ROOT", ""),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:release tests:" + str(error)) from error
     receipt(args.e0, decision="RWWPO2_E0_PASS", commit=head)
     data_audit = receipt(
         args.data_boundary_audit,
@@ -321,6 +341,8 @@ def main() -> None:
         "source_manifest_sha256": resolved["source_manifest_sha256"],
         "original_resolved_sha256": args.original_resolved_sha256,
         "base_protocol_audit_report_sha256": base_audit["report_sha256"],
+        "release_test_receipt_file_sha256": args.release_test_receipt_sha256,
+        "release_test_receipt_report_sha256": release_tests["report_sha256"],
         "s128_consumed_by_training": False,
         "r50_program_gate_report_sha256": (
             None if r50_gate is None else r50_gate["report_sha256"]

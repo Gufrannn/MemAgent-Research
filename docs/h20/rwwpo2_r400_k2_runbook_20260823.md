@@ -58,7 +58,7 @@ exits without killing any process if either card is busy.
 ## 2. Static release checks
 
 ```bash
-python3 -m py_compile \
+"$RWWPO_PYTHON" -m py_compile \
   recurrent/research/rwwpo_transaction.py \
   recurrent/research/rwwpo_ledger.py \
   verl/trainer/ppo/core_algos.py \
@@ -72,7 +72,10 @@ python3 -m py_compile \
   tools/h20/preflight_rwwpo2_confirmation.py \
   tools/h20/materialize_rwwpo2_confirmation_eval.py \
   tools/h20/audit_rwwpo2_confirmation_eval.py \
-  tools/h20/finalize_rwwpo2_confirmation.py
+  tools/h20/finalize_rwwpo2_confirmation.py \
+  tools/h20/run_rwwpo2_release_tests.py \
+  tools/h20/verify_rwwpo2_release_tests.py \
+  tools/h20/rwwpo2_pytest_evidence_plugin.py
 bash -n scripts/h20/rwwpo2_common.sh \
   scripts/h20/run_rwwpo2_numeric_oracle.sh \
   scripts/h20/run_qwen25_7b_rwwpo2.sh \
@@ -81,20 +84,39 @@ bash -n scripts/h20/rwwpo2_common.sh \
 git diff --check
 test -z "$(git status --porcelain)"
 
-"$RWWPO_PYTHON" -m pytest --version
-"$RWWPO_PYTHON" -m pytest -q \
-  tests/h20/test_rwwpo2_program.py \
-  tests/h20/test_rwwpo2_tensor_ledger.py \
-  tests/h20/test_rwwpo_core.py \
-  tests/h20/test_rwwpo_entrypoints.py \
-  tests/h20/test_rwwpo_transaction.py \
-  tests/h20/test_tf_rwwpo_budget_leakage.py \
-  recurrent/research/tests/test_actor_batch.py
+export RWWPO_RELEASE_TEST_ID=rwwpo2_release_tests_${RWWPO_EXPECTED_COMMIT:0:8}_r1
+export RWWPO_RELEASE_TEST_ROOT="$RWWPO_WORK_ROOT/logs/rwwpo2_release_tests/$RWWPO_RELEASE_TEST_ID"
+test ! -e "$RWWPO_RELEASE_TEST_ROOT"
+
+"$RWWPO_PYTHON" tools/h20/run_rwwpo2_release_tests.py \
+  --manifest "$RWWPO_MANIFEST" \
+  --manifest-sha256 "$RWWPO_MANIFEST_SHA256" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --work-root "$RWWPO_WORK_ROOT" \
+  --output-root "$RWWPO_RELEASE_TEST_ROOT"
+
+export RWWPO_RELEASE_TEST_RECEIPT="$RWWPO_RELEASE_TEST_ROOT/release_tests.json"
+export RWWPO_RELEASE_TEST_RECEIPT_SHA256="$(sha256sum "$RWWPO_RELEASE_TEST_RECEIPT" | awk '{print $1}')"
+
+"$RWWPO_PYTHON" tools/h20/verify_rwwpo2_release_tests.py \
+  --receipt "$RWWPO_RELEASE_TEST_RECEIPT" \
+  --receipt-sha256 "$RWWPO_RELEASE_TEST_RECEIPT_SHA256" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --manifest "$RWWPO_MANIFEST" \
+  --manifest-sha256 "$RWWPO_MANIFEST_SHA256" \
+  --work-root "$RWWPO_WORK_ROOT"
 ```
 
-The pytest command above is a mandatory related-regression gate before using
-GPUs. A missing `pytest` or `torch` installation is a `NO_GO`; a later hand-written
-`echo PASS` is not evidence that the suite ran.
+The producer above is the mandatory related-regression gate before using GPUs.
+It consumes a one-use ID even on failure and authenticates the exact collected
+and executed pytest node IDs, per-phase PASS outcomes, JUnit cases, raw logs,
+test-source hashes, Python binary and runtime/dependency fingerprint, commit, and
+manifest. Automatic third-party pytest plugins, repository `conftest.py`, and
+ambient `PYTEST_ADDOPTS` are disabled. Both the numeric-oracle and training
+preflights reopen the artifacts, reproduce collection, and compare the current
+runtime before acquiring GPU locks. A missing `pytest` or `torch` installation,
+skip, xfail, deselection, collection drift, or environment drift is a `NO_GO`; a
+later hand-written `echo PASS` is not evidence that the suite ran.
 
 ## 3. One-time CPU evidence and data-boundary audit
 

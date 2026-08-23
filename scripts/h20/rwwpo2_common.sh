@@ -42,6 +42,10 @@ IFS=, read -r RWWPO_GPU_A RWWPO_GPU_B <<< "$GPU_PAIR"
 [[ -f ${RWWPO_ORIGINAL_RESOLVED_MANIFEST:-} && ${RWWPO_ORIGINAL_RESOLVED_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
   echo 'RWWPO2_NO_GO:bind accepted Original training resolved path/SHA' >&2; exit 72;
 }
+[[ -f ${RWWPO_RELEASE_TEST_RECEIPT:-} \
+   && ${RWWPO_RELEASE_TEST_RECEIPT_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+  echo 'RWWPO2_NO_GO:bind mandatory release-test receipt path/SHA' >&2; exit 91;
+}
 
 readonly RWWPO_EXPECTED_BRANCH=h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822
 readonly RWWPO_MANIFEST=$RWWPO_REPO_DIR/manifests/h20/qwen25_7b_rwwpo2_r400_k2_seed2026.json

@@ -12,6 +12,11 @@ from tools.h20.audit_rwwpo2_r50_program import wilson_interval
 from tools.h20.audit_rwwpo2_attempt import execution_prefix_through_round
 from tools.h20.audit_rwwpo2_lineage_parent import execution_prefix_to_checkpoint
 from tools.h20.preflight_rwwpo2 import receipt
+from tools.h20.verify_rwwpo2_release_tests import (
+    TEST_INVENTORY, canonical_sha as release_test_canonical_sha,
+    collect_current_node_ids, junit_summary as release_test_junit_summary,
+    node_evidence, runtime_environment, sha256_file, verify_release_test_receipt,
+)
 from recurrent.research.gate_a_execution import append_jsonl
 from recurrent.research.rwwpo2_confirmation import (
     generation_protocol_projection, holm_two_test_decisions,
@@ -232,6 +237,155 @@ def test_numeric_oracle_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path
     )
     assert result.returncode == 0, result.stderr
     assert "--expected-commit" in result.stdout
+
+
+def test_preflight_direct_file_entry_imports_repo_from_foreign_cwd(tmp_path):
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/h20/preflight_rwwpo2.py"), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--release-test-receipt" in result.stdout
+
+
+def test_release_test_receipt_is_machine_bound_to_both_gpu_entries(tmp_path):
+    producer = (ROOT / "tools/h20/run_rwwpo2_release_tests.py").read_text()
+    verifier = (ROOT / "tools/h20/verify_rwwpo2_release_tests.py").read_text()
+    numeric = (ROOT / "scripts/h20/run_rwwpo2_numeric_oracle.sh").read_text()
+    launcher = (ROOT / "scripts/h20/run_qwen25_7b_rwwpo2.sh").read_text()
+    preflight = (ROOT / "tools/h20/preflight_rwwpo2.py").read_text()
+    for token in ("TEST_INVENTORY", "RWWPO2_RELEASE_TESTS_PASS",
+                  "checkout_postcondition", "pytest_command(mode=\"collect\""):
+        assert token in producer
+    for token in ("--junitxml", "junit_summary", "test_source_sha256",
+                  "python_executable_sha256", "installed_distributions_sha256",
+                  "collect_current_node_ids", "non-PASS/skip/xfail"):
+        assert token in verifier
+    assert "verify_rwwpo2_release_tests.py" in numeric
+    assert "RWWPO_RELEASE_TEST_RECEIPT" in numeric + launcher
+    assert "verify_release_test_receipt" in preflight
+
+
+def test_release_test_receipt_reopens_nodes_environment_log_and_sources(
+        tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    root = work / "logs/rwwpo2_release_tests/release_test_fixture"
+    root.mkdir(parents=True)
+    tombstone = root / "RUN_ID_CONSUMED"
+    collect_log = root / "pytest_collect.log"
+    collection_json = root / "collection.json"
+    log = root / "pytest.log"
+    execution_json = root / "execution.json"
+    junit = root / "pytest.xml"
+    manifest_sha = sha256_file(MANIFEST_PATH)
+    commit = "a" * 40
+    tombstone.write_text(f"{commit}:{manifest_sha}\n")
+    collect_log.write_text("fixture collection pass\n")
+    log.write_text("fixture pass\n")
+    nodeids = collect_current_node_ids()
+    collection_json.write_text(json.dumps({
+        "schema_version": "rwwpo2-pytest-node-evidence-v1",
+        "mode": "collect", "pytest_exitstatus": 0,
+        "collected_node_ids": nodeids,
+        "phase_reports": {nodeid: [] for nodeid in nodeids},
+    }, sort_keys=True, indent=2) + "\n")
+    execution_json.write_text(json.dumps({
+        "schema_version": "rwwpo2-pytest-node-evidence-v1",
+        "mode": "execute", "pytest_exitstatus": 0,
+        "collected_node_ids": nodeids,
+        "phase_reports": {nodeid: [
+            {"when": "setup", "outcome": "passed", "wasxfail": False},
+            {"when": "call", "outcome": "passed", "wasxfail": False},
+            {"when": "teardown", "outcome": "passed", "wasxfail": False},
+        ] for nodeid in nodeids},
+    }, sort_keys=True, indent=2) + "\n")
+    junit.write_text('<testsuites><testsuite>' + "".join(
+        f'<testcase classname="fixture" name="pass_{index}"/>'
+        for index in range(len(nodeids))
+    ) + '</testsuite></testsuites>\n')
+    def evidence(path):
+        return {"relative_path": path.name, "size": path.stat().st_size,
+                "sha256": sha256_file(path)}
+    row = {
+        "schema_version": "rwwpo2-release-tests-v1",
+        "status": "PASS", "decision": "RWWPO2_RELEASE_TESTS_PASS",
+        "git_commit": commit, "manifest_path": str(MANIFEST_PATH),
+        "manifest_sha256": manifest_sha, "run_id": root.name,
+        "runtime_environment": runtime_environment(),
+        "pytest_collection_returncode": 0, "pytest_returncode": 0,
+        "checkout_postcondition": True,
+        "test_inventory": list(TEST_INVENTORY),
+        "test_source_sha256": {
+            relative: sha256_file(ROOT / relative) for relative in TEST_INVENTORY
+        },
+        "collected_node_ids": nodeids,
+        "run_id_tombstone": evidence(tombstone),
+        "pytest_collect_log": evidence(collect_log),
+        "collection_evidence": evidence(collection_json),
+        "pytest_log": evidence(log),
+        "execution_evidence": evidence(execution_json),
+        "junit_xml": evidence(junit),
+        "junit_summary": release_test_junit_summary(junit),
+    }
+    row["report_sha256"] = release_test_canonical_sha(row)
+    report = root / "release_tests.json"
+    report.write_text(json.dumps(row, sort_keys=True, indent=2) + "\n")
+    report_sha = sha256_file(report)
+    verify_release_test_receipt(
+        report, receipt_sha256=report_sha, expected_commit=commit,
+        manifest_path=MANIFEST_PATH, manifest_sha256=manifest_sha,
+        work_root=work,
+    )
+    log.write_text("forged pass\n")
+    with pytest.raises(ValueError, match="evidence byte drift"):
+        verify_release_test_receipt(
+            report, receipt_sha256=report_sha, expected_commit=commit,
+            manifest_path=MANIFEST_PATH, manifest_sha256=manifest_sha,
+            work_root=work,
+        )
+    log.write_text("fixture pass\n")
+    drifted_environment = copy.deepcopy(row["runtime_environment"])
+    drifted_environment["installed_distributions_sha256"] = "f" * 64
+    monkeypatch.setattr(
+        "tools.h20.verify_rwwpo2_release_tests.runtime_environment",
+        lambda: drifted_environment,
+    )
+    with pytest.raises(ValueError, match="Python environment drift"):
+        verify_release_test_receipt(
+            report, receipt_sha256=report_sha, expected_commit=commit,
+            manifest_path=MANIFEST_PATH, manifest_sha256=manifest_sha,
+            work_root=work,
+        )
+
+
+def test_release_test_node_evidence_rejects_skip_or_deselection(tmp_path):
+    nodeids = [f"{relative}::test_fixture" for relative in TEST_INVENTORY]
+    execution = tmp_path / "execution.json"
+    execution.write_text(json.dumps({
+        "schema_version": "rwwpo2-pytest-node-evidence-v1",
+        "mode": "execute", "pytest_exitstatus": 0,
+        "collected_node_ids": nodeids,
+        "phase_reports": {nodeid: [
+            {"when": "setup", "outcome": "passed", "wasxfail": False},
+            {"when": "call", "outcome": "passed", "wasxfail": False},
+            {"when": "teardown", "outcome": "passed", "wasxfail": False},
+        ] for nodeid in nodeids},
+    }))
+    row = json.loads(execution.read_text())
+    row["phase_reports"][nodeids[0]][1]["outcome"] = "skipped"
+    execution.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="skip/xfail"):
+        node_evidence(execution, mode="execute")
+    row["phase_reports"].pop(nodeids[-1])
+    execution.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="execution outcomes"):
+        node_evidence(execution, mode="execute")
 
 
 def test_runtime_uses_distinct_behavior_coefficient_and_parameter_tolerances():

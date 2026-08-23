@@ -19,6 +19,8 @@ PREFLIGHT=(
   --e0 "$RWWPO_E0"
   --data-boundary-audit "$RWWPO_DATA_BOUNDARY_AUDIT"
   --base-protocol-audit "$RWWPO_BASE_PROTOCOL_AUDIT"
+  --release-test-receipt "$RWWPO_RELEASE_TEST_RECEIPT"
+  --release-test-receipt-sha256 "$RWWPO_RELEASE_TEST_RECEIPT_SHA256"
   --original-resolved-manifest "$RWWPO_ORIGINAL_RESOLVED_MANIFEST"
   --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256"
   --output "$RWWPO_PREFLIGHT"
