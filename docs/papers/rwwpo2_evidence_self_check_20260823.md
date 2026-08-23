@@ -85,13 +85,13 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 K2 is scientifically KEEP but unrun. | `PENDING` actor/S128 canonical intersection; critic/prior/aux are zero by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence, or blind-test claim; R400 is a medium-budget conditional test. | Finish code/review; run content audit and numeric oracle; pass performance-free R50; materialize unseen confirmation seal before R400. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 K2 is scientifically KEEP but unrun. | `PENDING` actor/S128 canonical intersection; critic/prior/aux are zero by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence, or blind-test claim; R400 is a medium-budget conditional test. | Code/static review is GO. Run the H20 test suite, content audit, and numeric oracle; pass performance-free R50; materialize an unseen confirmation seal before R400. |
 
 ## 5. Reproducible read-only H20 entry
 
-Run this only from the eventual exact clean release commit; replace the output
-root with a new one-use evidence directory. It does not start training or use a
-GPU:
+Run this only from the exact clean commit approved by the independent release
+review; replace the output root with a new one-use evidence directory. It does
+not start training or use a GPU:
 
 ```bash
 export RWWPO2_MANIFEST="$PWD/manifests/h20/qwen25_7b_rwwpo2_r400_k2_seed2026.json"
@@ -115,5 +115,5 @@ mkdir "$RWWPO2_AUDIT_ROOT"
 Required report location is the absolute path printed by the command. Its
 `git_commit`, file SHA, signed `report_sha256`, intersection counts, and PASS or
 NO-GO decision must be copied into the run's P0. At this pre-H20 revision the
-release commit and report path/SHA are intentionally `PENDING`; the worktree is
-not yet a releasable experiment commit.
+runtime report path/SHA and intersection result remain intentionally `PENDING`;
+code/static release readiness does not fill in server evidence.

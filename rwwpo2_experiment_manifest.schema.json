@@ -11,7 +11,7 @@
     "schema_version": {"const": 3},
     "program": {"const": "RWWPO-2"},
     "branch": {"const": "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"},
-    "status": {"const": "IMPLEMENTATION_PENDING_NO_H20"},
+    "status": {"const": "IMPLEMENTED_STATIC_RELEASE_GO_NO_H20"},
     "method_cells": {
       "const": {
         "D": {"objective_variant": "original_tokenwise", "controller_variant": "none"},

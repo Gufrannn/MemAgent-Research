@@ -1,8 +1,9 @@
 # RWWPO-2 preregistration — controlled off-behavior geometry in recurrent state writing
 
-**Status:** frozen design; implementation and CPU/H20-entry validation pending. No
-RWWPO-2 GPU run has started. The previous K1 hard-rollback run is diagnostic-only
-and is not a performance result for the method below.
+**Status:** frozen design; implementation and independent static release review
+complete; H20 runtime validation pending. No RWWPO-2 GPU run has started. The
+previous K1 hard-rollback run is diagnostic-only and is not a performance result
+for the method below.
 
 ## 1. Scientific question
 
