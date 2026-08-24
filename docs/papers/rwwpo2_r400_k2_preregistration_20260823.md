@@ -69,6 +69,16 @@ failure root or old numeric receipt may be reused. The
 previous K1 hard-rollback run remains diagnostic-only and is not a performance
 result for the method below.
 
+Commit `dc14d0aab388aea0bc191ba186eded2d1439db5c` contained the reviewed
+FSDP-safe writeback implementation, but its first authenticated H20 release-test
+root stopped before CPU or GPU work at 154/156 PASS. The failures were confined
+to test evidence: a brittle static slice selected the earlier writeback branch
+rather than the actual trial replay branch, and the synthetic transaction-closure
+fixture did not populate the phase fields required by the independent auditor.
+The production algorithm and audit thresholds were unchanged. The consumed root
+is `NO_GO`; a new exact commit must pass a fresh authenticated suite and numeric
+oracle before R50 is unlocked.
+
 ## 1. Scientific question
 
 A recurrent memory writer emits free text that is materialized as the next

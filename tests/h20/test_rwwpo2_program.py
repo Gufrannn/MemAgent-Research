@@ -174,16 +174,28 @@ def test_trial_and_fresh_certificates_use_behavior_microbatch_rng_replay():
         "current_log_prob =", 1)[0]
     trial = actor.split("for alpha in candidates:", 1)[1].split(
         "trial_prefix_rows =", 1)[0]
-    trial_rwwpo2 = trial.split("if rwwpo2_enabled:", 1)[1].split(
-        "else:", 1)[0]
+    trial_rwwpo2_replay = (
+        "if rwwpo2_enabled:\n"
+        "                                with torch.no_grad():\n"
+        "                                    trial_log_prob = "
+        "replay_behavior_log_probs()"
+    )
+    trial_legacy_replay = (
+        "else:\n"
+        "                                restore_rng(proposal_gradient_rng)"
+    )
+    trial_rwwpo2_start = trial.index(trial_rwwpo2_replay)
+    trial_rwwpo2 = trial[trial_rwwpo2_start:trial.index(
+        "\n                            else:", trial_rwwpo2_start)]
     fresh = actor.split(
         "# A trial tensor is not a commit certificate.", 1)[1].split(
             "post_prefix_rows =", 1)[0]
     assert "restore_named_buffers(" in helper
     assert "replay_with_rng_snapshots(" in helper
     assert "finally:" in helper
-    assert "replay_behavior_log_probs()" in trial_rwwpo2
+    assert trial_rwwpo2_replay in trial_rwwpo2
     assert "restore_rng(proposal_gradient_rng)" not in trial_rwwpo2
+    assert trial_legacy_replay in trial
     assert "replay_behavior_log_probs()" in fresh
     assert "restore_rng(proposal_gradient_rng)" not in fresh
     assert "def ordered_rng_state_digests(" in transaction
@@ -410,12 +422,6 @@ def _numeric_transaction_closure_fixture():
             "nonzero_data_ptr_count": 2,
         }},
     }
-    phase_names = [
-        "T0_behavior", "T1_after_backward", "T2_after_real_optimizer_step",
-        "T3_legacy_raw_restore_diagnostic",
-        "T4_safe_behavior_writeback", "T5_safe_candidate_recommit",
-        "T6_safe_restore_fresh",
-    ]
     return [{
         "rank": rank, "status": "PASS",
         "decision": "RWWPO2_FSDP_TRANSACTION_CLOSURE_PASS",
@@ -445,8 +451,28 @@ def _numeric_transaction_closure_fixture():
             "grad_clip": 1.0, "step_calls": 1, "grad_norm": 1.5,
             "proposal_max_abs": 1e-6, "state_entry_counts": [2, 2],
         },
-        "phases": [{"phase": name, "execution_inventory": inventory}
-                   for name in phase_names],
+        "phases": [
+            {"phase": "T0_behavior", "logprob_digest": str(rank) * 64,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T1_after_backward", "max_abs": 0.0,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T2_after_real_optimizer_step",
+             "optimizer_proposal_max_abs": 1e-6,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T3_legacy_raw_restore_diagnostic",
+             "candidate_activation_max_abs": 0.01,
+             "restore_max_abs": 0.8,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T4_safe_behavior_writeback", "max_abs": 0.0,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T5_safe_candidate_recommit",
+             "candidate_activation_max_abs": 0.01,
+             "recommit_max_abs": 0.0,
+             "execution_inventory": copy.deepcopy(inventory)},
+            {"phase": "T6_safe_restore_fresh", "max_abs": 0.0,
+             "second_forward_max_abs": 0.0,
+             "execution_inventory": copy.deepcopy(inventory)},
+        ],
     } for rank in (0, 1)]
 
 

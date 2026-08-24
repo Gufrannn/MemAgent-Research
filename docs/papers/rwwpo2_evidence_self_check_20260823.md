@@ -36,6 +36,17 @@ second failed root is immutable `NO_GO`; its exact absolute run-root and signed
 failure inventory remain `PENDING_H20_READONLY_CAPTURE` in this local branch and
 must not be guessed.
 
+Commit `dc14d0aab388aea0bc191ba186eded2d1439db5c` implemented the
+FSDP-safe transaction writeback correction and passed independent static review,
+but its first authenticated H20 release-test root stopped before CPU evidence or
+GPU work at 154/156 PASS. One static test selected the newly added writeback
+branch instead of the later replay branch, and one synthetic numeric-closure
+fixture omitted phase fields that the production auditor correctly requires.
+The production actor, writeback primitive, thresholds, and auditor were not
+changed by either failure. That consumed release-test root is `NO_GO` and may
+not be reused; the test-only correction requires a new exact commit and fresh
+authenticated release-test root before any numeric oracle or R50 work.
+
 The latest failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
 its operator pipeline log is
