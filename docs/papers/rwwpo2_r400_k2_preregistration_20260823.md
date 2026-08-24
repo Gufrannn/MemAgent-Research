@@ -46,7 +46,25 @@ microbatch, while trial and fresh replay restored only one post-gradient RNG
 for the whole sequence. The correction makes every diagnostic replay consume
 the ordered behavior microbatch RNG schedule and binds its ordered digest vector
 and aggregate in each receipt. It must pass a new exact-commit authenticated
-suite and numeric oracle before another fresh-base R50 attempt. No consumed
+suite and numeric oracle before another fresh-base R50 attempt. Commit
+`7d7054a7a7269052f9194f59906a94c664523cd4` implemented and tested that replay
+binding, but the subsequent B/seed-2026 attempt falsified replay RNG as the
+complete explanation: all seven behavior-forward RNG digests were identical,
+two rounds completed, and round-3 inner-2 again failed the alpha-zero fresh
+closure (`max_abs=0.8136634826660156`, frozen `tau_logprob=1e-6`). That root is
+also attempt-level `NO_GO` and has no valid R50 endpoint. Code audit then found
+an execution-contract mismatch that the prior oracle did not test: the live
+actor loads FP32 optimizer parameters and executes BF16 FSDP mixed-precision
+forwards, while the prior oracle loaded the model directly in BF16; moreover,
+the transaction interpolated visible rank-local FlatParameter shards outside
+an FSDP writeback context. This is a leading, falsifiable FSDP derived-state
+hypothesis, not yet a proven root cause. The next pre-R50 oracle therefore must
+load FP32, run an 8191-token backward, contrast the legacy raw-shard path with a
+unit-wise all-gather plus public `summon_full_params(writeback=True)` commit,
+verify repeated candidate and alpha-zero restore forwards within the
+independently calibrated tolerance, and enforce a 120-second maximum for every
+full writeback. R50 remains locked until that exact-commit oracle and its
+independent audit pass. No consumed
 failure root or old numeric receipt may be reused. The
 previous K1 hard-rollback run remains diagnostic-only and is not a performance
 result for the method below.
@@ -174,6 +192,30 @@ RNG and entry model buffers in `finally` paths, so diagnostic forwards cannot
 advance training randomness or retain forward-mutated cache state. Each receipt
 binds the ordered per-microbatch RNG digest vector,
 its aggregate digest, and its exact count. After either commit or rollback,
+RWWPO-2 does not mutate a visible FSDP shard and assume the next mixed-precision
+forward will discover it. For each FSDP unit, every rank constructs the intended
+FP32 local shard, all-gathers the intended shards, overwrites the independently
+constructed full target inside public
+`FSDP.summon_full_params(recurse=False, writeback=True)`, and verifies the
+resharded local target exactly. This unit-wise primitive is frozen as
+`fsdp_unitwise_allgather_summon_writeback_v1`; legacy RWWPO retains its old raw
+shard behavior. Before R50, the two-rank numeric oracle must prove this primitive
+under the live FP32-load/BF16-forward contract at 8191 tokens. The probe executes
+the frozen AdamW `(lr=1e-6, betas=(0.9,0.999), weight_decay=0.01)` step after
+global-norm clipping at 1.0 before testing candidate/restore closure; a backward
+without that optimizer transition is insufficient evidence. Every
+rank must report a positive finite gradient norm, exactly one optimizer step,
+and optimizer state covering every managed FSDP unit, while every recorded
+probe phase must have all FSDP units in `TrainingState.IDLE`. The independent
+auditor binds these phase inventories and their cross-rank sufficient
+statistics; source-level presence of an optimizer call is not evidence. Every
+live writeback is timed with a cross-rank maximum and must finish within 120
+seconds. The complete ordered writeback-plus-trial-forward search is separately
+capped at 600 seconds per transaction; both limits are manifest-, resolved-
+contract-, receipt-, and formal-audit-bound. The final tested feasible trial is
+already the committed parameter state and is not redundantly written a second
+time; the oracle nevertheless tests repeat-write idempotence. Alpha-zero still
+performs an explicit complete-state writeback/restore. After either commit or rollback,
 the runtime performs a separate forward from the committed parameter/buffer
 state; only that forward may populate the post-prefix certificate. Its active
 log-probability difference from the corresponding trial/behavior reference
@@ -258,7 +300,11 @@ projection is one shared chunk-bounded implementation used by both oracle and
 live actor. Its oracle additionally repeats a synthetic, label-free 8191-token,
 seven-microbatch streaming backward—the maximum frozen R50 actor section count—
 and the independent auditor reconstructs the unchanged 16-times-noise threshold
-rule. Runtime mismatch diagnostics report only aggregate coefficient and
+rule. The same oracle also tests the live FP32 optimizer-shard to BF16 forward
+transition, an 8191-token no-update backward, candidate recommit, alpha-zero
+restore, a second fresh forward, exact behavior-reference integrity, and the
+frozen writeback-time ceiling. None of these closure outcomes enters the numeric
+threshold calculation. Runtime mismatch diagnostics report only aggregate coefficient and
 projection statistics, never examples, tokens, rewards, or outcomes.
 
 An eligible round has a complete two-rank inner-1 commit/reject record, at least

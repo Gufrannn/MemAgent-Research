@@ -72,6 +72,9 @@ read -r RWWPO_TAU_THETA RWWPO_TAU_LOGPROB RWWPO_TAU_GRADIENT \
   RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE \
   RWWPO_BEHAVIOR_GRADIENT_TOLERANCE \
   RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS \
+  RWWPO_FSDP_PARAMETER_COMMIT_PRIMITIVE \
+  RWWPO_FSDP_WRITEBACK_MAX_WALL_SECONDS \
+  RWWPO_MAX_TRIAL_FORWARD_SECONDS \
   RWWPO_RESOLVED_CONTRACT_REPORT_SHA256 \
   RWWPO_SOURCE_MANIFEST_SHA256 < <(
   "$RWWPO_PYTHON" -c '
@@ -81,6 +84,9 @@ t=r["numeric_thresholds"]
 print(t["tau_theta"],t["tau_logprob"],t["tau_gradient"],
       r["behavior_coefficient_tolerance"],r["behavior_gradient_tolerance"],
       r["gradient_sketch_chunk_elements"],
+      r["fsdp_parameter_commit_primitive"],
+      r["fsdp_parameter_writeback_max_wall_seconds"],
+      r["max_trial_forward_wall_seconds_per_transaction"],
       r["report_sha256"],r["source_manifest_sha256"])
 ' "$RWWPO_RESOLVED_CONTRACT"
 )
@@ -88,6 +94,9 @@ export RWWPO_TAU_THETA RWWPO_TAU_LOGPROB RWWPO_TAU_GRADIENT
 export RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE
 export RWWPO_BEHAVIOR_GRADIENT_TOLERANCE RWWPO_LINEAGE_START_ROUND
 export RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS
+export RWWPO_FSDP_PARAMETER_COMMIT_PRIMITIVE
+export RWWPO_FSDP_WRITEBACK_MAX_WALL_SECONDS
+export RWWPO_MAX_TRIAL_FORWARD_SECONDS
 export RWWPO_RESOLVED_CONTRACT_SHA256 RWWPO_RESOLVED_CONTRACT_REPORT_SHA256
 export RWWPO_SOURCE_MANIFEST_SHA256
 

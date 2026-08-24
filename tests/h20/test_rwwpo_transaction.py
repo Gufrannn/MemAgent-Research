@@ -13,6 +13,7 @@ from recurrent.research.rwwpo_transaction import (
     replay_with_rng_snapshots, restore_named_buffers, restore_rng, rng_snapshot,
     seed_transaction_rng,
     stateless_proposal_lr,
+    tensor_content_digest,
     writer_logprob_rms,
 )
 
@@ -76,6 +77,23 @@ def test_scaled_parameter_displacement_is_real_not_ledger_only():
     committed = parameter_snapshot(model)
     torch.testing.assert_close(committed[0], old[0] + 0.5)
     assert displacement_norm(old, committed) == pytest.approx(0.25 * displacement_norm(old, full))
+
+
+def test_fsdp_safe_interpolation_rejects_non_fsdp_module():
+    model = torch.nn.Linear(2, 1, bias=False)
+    old = parameter_snapshot(model)
+    with pytest.raises(RuntimeError, match="REQUIRES_FSDP_ROOT"):
+        set_interpolated_parameters(
+            model, old, old, 0.0, synchronize_fsdp=True)
+
+
+def test_tensor_content_digest_binds_dtype_shape_and_exact_bytes():
+    value = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+    assert tensor_content_digest(value) == tensor_content_digest(value.clone())
+    assert tensor_content_digest(value) != tensor_content_digest(value.double())
+    assert tensor_content_digest(value) != tensor_content_digest(value.reshape(2, 1))
+    changed = value.clone(); changed[0, 1] += 1.0
+    assert tensor_content_digest(value) != tensor_content_digest(changed)
 
 
 def test_optimizer_rollback_digest_detects_tamper():

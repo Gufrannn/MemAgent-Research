@@ -26,18 +26,40 @@ the frozen `tau_logprob=1e-6`. The failed root is `NO_GO` and cannot be resumed
 or reused. No valid R50 mechanism endpoint and no R400 performance result
 currently exist.
 
+Commit `7d7054a7a7269052f9194f59906a94c664523cd4` subsequently bound the ordered
+per-microbatch RNG replay and passed its pre-R50 gates, but its fresh B/seed-2026
+attempt completed only two rounds before round-3 inner-2 failed the same
+alpha-zero closure with `max_abs=0.8136634826660156` against
+`tau_logprob=1e-6`. All seven behavior-forward RNG digests were identical, so
+the H20 evidence falsifies stochastic replay as the complete root cause. This
+second failed root is immutable `NO_GO`; its exact absolute run-root and signed
+failure inventory remain `PENDING_H20_READONLY_CAPTURE` in this local branch and
+must not be guessed.
+
 The latest failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
 its operator pipeline log is
 `/data/cw/memagent_work/logs/rwwpo2_b540521_B_2026_pipeline.log` (the stale
 `b540521` substring is an operator-facing screen/log label, not the authenticated
-experiment commit). Read-only failure output localizes the defect to replay RNG:
+experiment commit). The earlier read-only failure output suggested replay RNG:
 behavior materialization saved a distinct RNG snapshot for each microbatch, but
 alpha trials and the fresh committed-state certificate restored only the single
-post-gradient RNG before replaying the entire sequence. The alpha-zero check
-therefore did not use the same stochastic transition as the behavior forward.
-These partial rounds diagnose an implementation failure; they are not a
-completed R50 result.
+post-gradient RNG before replaying the entire sequence. That was a valid missing
+contract but is no longer accepted as the root-cause explanation. The later
+`7d7054a...` evidence instead exposes a previously untested execution boundary:
+live actor optimizer shards are FP32, live FSDP forwards use BF16 mixed
+precision, and the old transaction wrote visible local FlatParameter shards
+outside a supported full-parameter writeback context. The prior numeric oracle
+loaded BF16 directly and therefore could not certify that transition. The
+current correction is deliberately falsifiable: a new pre-R50-only oracle must
+compare the raw path with unit-wise public FSDP writeback under an 8191-token
+backward plus the frozen clipped AdamW optimizer step, repeated candidate/restore
+forwards, immutable behavior-reference
+hashes, a fixed 120-second per-writeback ceiling, and a 600-second full-trial
+ceiling that are both enforced and audited during training. Until that exact-commit oracle
+passes independently, this remains a leading hypothesis rather than a proven
+root cause. These partial rounds diagnose implementation failures; they are not
+completed R50 results.
 
 ## 1. Training-budget interpretation
 
@@ -124,7 +146,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; `eab35b9...` completed six full rounds but has no valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The latest failure localized an ordered replay defect: trial/fresh forwards ignored the distinct behavior RNG snapshot saved for each microbatch. The correction must pass new exact-commit tests, numeric oracle and independent review before a fresh-base B/seed2026 R50 restart. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...` nor `7d7054a...` has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The RNG fix was necessary but insufficient. The leading FSDP derived-state hypothesis must pass exact-commit release tests, the FP32-shard/BF16-forward transaction closure oracle, independent audit and review before a fresh-base B/seed2026 R50 restart. |
 
 ## 5. Reproducible read-only H20 entry
 

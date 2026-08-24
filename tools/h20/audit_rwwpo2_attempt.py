@@ -444,6 +444,12 @@ def main() -> None:
     schedule = resolved["proposal_schedule"]
     gradient_sketch_chunk_elements = int(
         resolved["gradient_sketch_chunk_elements"])
+    fsdp_parameter_commit_primitive = str(
+        resolved["fsdp_parameter_commit_primitive"])
+    fsdp_writeback_max_wall_seconds = float(
+        resolved["fsdp_parameter_writeback_max_wall_seconds"])
+    max_trial_forward_wall_seconds = float(
+        resolved["max_trial_forward_wall_seconds_per_transaction"])
     behavior_tolerance = float(resolved["behavior_coefficient_tolerance"])
     maximum_loo = float(resolved["maximum_root_loo_feasibility_flip_fraction"])
     try:
@@ -464,6 +470,29 @@ def main() -> None:
                 gradient_sketch_chunk_elements:
             raise SystemExit(
                 "RWWPO2_ATTEMPT_AUDIT_NO_GO:gradient sketch chunk binding")
+        if diagnostics.get("fsdp_parameter_commit_primitive") != \
+                fsdp_parameter_commit_primitive:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:FSDP commit primitive binding")
+        writeback_times = diagnostics.get(
+            "fsdp_parameter_writeback_wall_seconds")
+        if float(diagnostics.get(
+                "fsdp_parameter_writeback_max_wall_seconds", -1)) != \
+                fsdp_writeback_max_wall_seconds \
+                or not isinstance(writeback_times, list) \
+                or not 1 <= len(writeback_times) <= 7 \
+                or any(not math.isfinite(float(value))
+                       or not 0.0 <= float(value) <=
+                       fsdp_writeback_max_wall_seconds
+                       for value in writeback_times) \
+                or float(diagnostics.get(
+                    "max_trial_forward_wall_seconds", -1)) != \
+                    max_trial_forward_wall_seconds \
+                or not 0.0 <= float(row.get(
+                    "trial_forward_wall_seconds", -1)) <= \
+                    max_trial_forward_wall_seconds:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:FSDP/trial wall-time binding")
         if not math.isclose(float(diagnostics.get("proposal_lr", -1)), expected_lr,
                             rel_tol=0, abs_tol=0):
             raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:stateless LR")
@@ -492,6 +521,22 @@ def main() -> None:
                 (0, 1), (1, 1), (0, 2), (1, 2)
         }:
             raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:K2 round closure")
+        for inner_id in (1, 2):
+            paired = [row for row in group
+                      if int(row["inner_id"]) == inner_id]
+            writeback_evidence = {
+                json.dumps(row["mechanism_diagnostics"][
+                    "fsdp_parameter_writeback_wall_seconds"],
+                    separators=(",", ":"))
+                for row in paired
+            }
+            trial_wall_evidence = {
+                float(row["trial_forward_wall_seconds"])
+                for row in paired
+            }
+            if len(writeback_evidence) != 1 or len(trial_wall_evidence) != 1:
+                raise SystemExit(
+                    "RWWPO2_ATTEMPT_AUDIT_NO_GO:distributed wall-time drift")
         inner1 = [row for row in group if int(row["inner_id"]) == 1]
         inner2 = [row for row in group if int(row["inner_id"]) == 2]
         for row in inner1:

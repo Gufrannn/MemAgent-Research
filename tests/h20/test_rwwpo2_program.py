@@ -15,6 +15,9 @@ from tools.h20.audit_rwwpo2_attempt import (
     validate_post_commit_forward_binding,
 )
 from tools.h20.audit_rwwpo2_lineage_parent import execution_prefix_to_checkpoint
+from tools.h20.audit_rwwpo2_numeric_oracle import (
+    validate_fsdp_transaction_closure,
+)
 from tools.h20.preflight_rwwpo2 import receipt
 from tools.h20.verify_rwwpo2_release_tests import (
     TEST_INVENTORY, canonical_sha as release_test_canonical_sha,
@@ -346,8 +349,162 @@ def test_numeric_oracle_calibrates_the_registered_projection_statistic():
     assert behavior_old_anchor in producer
     for token in ("gradient_checkpointing", "fsdp_auto_wrap_policy",
                   "cuda_autocast_dtype",
-                  "selective_logprob_kernel"):
+                  "selective_logprob_kernel", "model_load_dtype",
+                  "fsdp_sharded_parameter_dtype",
+                  "transaction_closure_probe",
+                  "transaction_optimizer_probe",
+                  "transaction_optimizer_lr",
+                  "transaction_optimizer_betas",
+            "transaction_optimizer_weight_decay",
+            "transaction_optimizer_grad_clip",
+                  "transaction_closure_sequence_length",
+                  "transaction_closure_active_tokens",
+                  "transaction_writeback_max_wall_seconds",
+                  "fsdp_parameter_commit_primitive"):
         assert all(token in source for source in (producer,auditor,resolver))
+    assert "torch_dtype=torch.float32" in producer
+    assert "torch_dtype=torch.bfloat16" not in producer.split(
+        "AutoModelForCausalLM.from_pretrained", 1)[1].split(")", 1)[0]
+    for token in (
+            "RWWPO2_FSDP_TRANSACTION_CLOSURE_NO_GO",
+            "safe_candidate_recommit_max_abs", "safe_restore_max_abs",
+            "transaction_backward_probe(model, input_ids)",
+            '"step_calls": 1',
+            "legacy_raw_copy_diagnostic", "FSDP.summon_full_params(",
+            "torch.distributed.all_gather_into_tensor(",
+            "RWWPO2_FSDP_DISTRIBUTED_INVENTORY_DRIFT"):
+        assert token in producer + (ROOT / "recurrent/research/rwwpo_transaction.py").read_text()
+
+
+def test_live_rwwpo2_binds_fsdp_safe_writeback_and_behavior_reference():
+    actor = (ROOT / "verl/workers/actor/dp_actor.py").read_text()
+    auditor = (ROOT / "tools/h20/audit_rwwpo_actual_loss.py").read_text()
+    schema = (ROOT / "rwwpo2_actual_loss_receipt.schema.json").read_text()
+    for token in (
+            "synchronize_fsdp=rwwpo2_enabled",
+            "behavior_current_logprob_digest",
+            "behavior_current_logprob_integrity_verified",
+            "RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE",
+            "RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS",
+            "_timed_set_interpolated_parameters",
+            "RWWPO2_FSDP_WRITEBACK_BUDGET_EXCEEDED",
+            "already the exact committed parameter state"):
+        assert token in actor
+    for token in (
+            "immutable behavior logprob digest mismatch",
+            "RWWPO-2 FSDP/behavior-reference closure"):
+        assert token in auditor
+    assert "fsdp_unitwise_allgather_summon_writeback_v1" in schema
+    assert '"fsdp_parameter_writeback_max_wall_seconds": {"const": 120.0}' in schema
+    assert '"max_trial_forward_wall_seconds": {"const": 600.0}' in schema
+    frozen_batch = actor.split("frozen_digest = digest({", 1)[1].split("})", 1)[0]
+    assert "current_log_prob" not in frozen_batch
+
+
+def _numeric_transaction_closure_fixture():
+    inventory = {
+        "unit_count": 2, "managed_unit_count": 2,
+        "training_states": {"TrainingState.IDLE": 2},
+        "storage": {"flat_param_data:torch.float32:cuda": {
+            "tensor_count": 2, "numel": 8, "allocated_bytes": 32,
+            "nonzero_data_ptr_count": 2,
+        }},
+    }
+    phase_names = [
+        "T0_behavior", "T1_after_backward", "T2_after_real_optimizer_step",
+        "T3_legacy_raw_restore_diagnostic",
+        "T4_safe_behavior_writeback", "T5_safe_candidate_recommit",
+        "T6_safe_restore_fresh",
+    ]
+    return [{
+        "rank": rank, "status": "PASS",
+        "decision": "RWWPO2_FSDP_TRANSACTION_CLOSURE_PASS",
+        "primitive": "fsdp_unitwise_allgather_summon_writeback_v1",
+        "behavior_logprob_digest": str(rank) * 64,
+        "sequence_length": 8191, "active_tokens": 1024,
+        "tau_logprob": 1e-6,
+        "writeback_max_wall_seconds": 120.0,
+        "writeback_wall_seconds": {
+            "safe_behavior": 1.0, "safe_candidate": 1.1,
+            "safe_candidate_recommit": 1.2, "safe_restore": 1.3,
+        },
+        "safe_errors": {
+            "after_backward_max_abs": 0.0,
+            "safe_noop_writeback_max_abs": 0.0,
+            "safe_candidate_recommit_max_abs": 0.0,
+            "safe_restore_max_abs": 0.0,
+            "safe_second_forward_max_abs": 0.0,
+        },
+        "safe_candidate_activation_max_abs": 0.01,
+        "legacy_raw_copy_diagnostic": {
+            "candidate_activation_max_abs": 0.01, "restore_max_abs": 0.8,
+        },
+        "optimizer_probe": {
+            "kind": "AdamW", "lr": 1e-6,
+            "betas": [0.9, 0.999], "weight_decay": 0.01,
+            "grad_clip": 1.0, "step_calls": 1, "grad_norm": 1.5,
+            "proposal_max_abs": 1e-6, "state_entry_counts": [2, 2],
+        },
+        "phases": [{"phase": name, "execution_inventory": inventory}
+                   for name in phase_names],
+    } for rank in (0, 1)]
+
+
+def test_numeric_transaction_closure_semantics_are_independently_enforced():
+    authentic = _numeric_transaction_closure_fixture()
+    assert validate_fsdp_transaction_closure(
+        authentic, tau_logprob=1e-6) == authentic
+    attacks = []
+    drift = copy.deepcopy(authentic)
+    drift[1]["sequence_length"] = 8
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["safe_errors"]["safe_restore_max_abs"] = 0.8
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["writeback_wall_seconds"]["safe_restore"] = 121.0
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["safe_candidate_activation_max_abs"] = 1e-6
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["optimizer_probe"]["proposal_max_abs"] = 0.0
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[1]["optimizer_probe"]["state_entry_counts"] = [2, 0]
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["optimizer_probe"]["step_calls"] = 0
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["optimizer_probe"]["grad_norm"] = 0.0
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["optimizer_probe"]["state_entry_counts"] = [2, 3]
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["phases"][2]["execution_inventory"]["training_states"] = {
+        "TrainingState.FORWARD_BACKWARD": 2}
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["phases"][5]["recommit_max_abs"] = 1e-7
+    attacks.append(drift)
+    drift = copy.deepcopy(authentic)
+    drift[0]["phases"].pop()
+    attacks.append(drift)
+    for attack in attacks:
+        with pytest.raises(ValueError, match="transaction closure"):
+            validate_fsdp_transaction_closure(attack, tau_logprob=1e-6)
+
+
+def test_manifest_freezes_fsdp_transaction_cost_and_commit_contract():
+    manifest = json.loads((ROOT /
+        "manifests/h20/qwen25_7b_rwwpo2_r400_k2_seed2026.json").read_text())
+    method = manifest["method"]
+    assert method["fsdp_parameter_commit_primitive"] == \
+        "fsdp_unitwise_allgather_summon_writeback_v1"
+    assert method["fsdp_parameter_writeback_max_wall_seconds"] == 120.0
+    assert method["max_trial_forward_wall_seconds_per_transaction"] == 600.0
 
 
 def test_chunked_gradient_sketch_matches_registered_full_vector_projection():

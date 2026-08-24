@@ -19,8 +19,11 @@ if str(ROOT) not in sys.path:
 import torch
 
 from recurrent.research.rwwpo_transaction import (
-    digest, largest_tested_feasible, logical_transaction_seed,
+    RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE, digest,
+    RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS,
+    largest_tested_feasible, logical_transaction_seed,
     prefix_distribution_stats, proposal_clock,
+    tensor_content_digest,
 )
 
 
@@ -204,6 +207,10 @@ def hydrate_authenticated_v3_receipt(receipt, ledger_path):
     trial_keys = {str(item.get("tensor_key")) for item in receipt.get("trial_evidence", [])}
     if set(payload) != required | trial_keys or any(not key.startswith("trial_log_prob_") for key in trial_keys):
         raise ValueError("tensor shard required/trial key closure failure")
+    diagnostics = receipt.get("mechanism_diagnostics", {})
+    if tensor_content_digest(payload["current_log_prob"]) != diagnostics.get(
+            "behavior_current_logprob_digest"):
+        raise ValueError("RWWPO-2 immutable behavior logprob digest mismatch")
     row = dict(receipt)
     for key in required:
         row[key] = payload[key].tolist()
@@ -388,6 +395,34 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                                     r"[0-9a-f]{64}", value) for value in buffer_digests) \
                                 or buffer_digests[0] != buffer_digests[1]:
                             raise ValueError("RWWPO-2 loss/optimizer-step evidence")
+                        if diagnostics.get(
+                                "fsdp_parameter_commit_primitive") != \
+                                RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE \
+                                or diagnostics.get(
+                                    "behavior_current_logprob_integrity_verified") is not True \
+                                or float(diagnostics.get(
+                                    "behavior_current_logprob_integrity_max_abs", -1)) != 0.0:
+                            raise ValueError(
+                                "RWWPO-2 FSDP/behavior-reference closure")
+                        writeback_times = diagnostics.get(
+                            "fsdp_parameter_writeback_wall_seconds")
+                        if float(diagnostics.get(
+                                "fsdp_parameter_writeback_max_wall_seconds", -1)) != \
+                                RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS \
+                                or not isinstance(writeback_times, list) \
+                                or not 1 <= len(writeback_times) <= 7 \
+                                or any(not math.isfinite(float(value))
+                                       or not 0.0 <= float(value) <=
+                                       RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS
+                                       for value in writeback_times) \
+                                or float(diagnostics.get(
+                                    "max_trial_forward_wall_seconds", -1)) != 600.0 \
+                                or not math.isfinite(float(receipt.get(
+                                    "trial_forward_wall_seconds", float("nan")))) \
+                                or not 0.0 <= float(receipt.get(
+                                    "trial_forward_wall_seconds", -1)) <= 600.0:
+                            raise ValueError(
+                                "RWWPO-2 FSDP/trial wall-time closure")
                         recomputed_loss = independently_recompute_actual_loss(row)
                         for field, actual_value in recomputed_loss.items():
                             if not math.isclose(
@@ -628,6 +663,19 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                     rel_tol=1e-9, abs_tol=1e-12):
                 raise ValueError(
                     f"distributed post-commit verification max drift for {key}")
+            writeback_evidence = {
+                json.dumps(row["mechanism_diagnostics"][
+                    "fsdp_parameter_writeback_wall_seconds"],
+                    separators=(",", ":"))
+                for row in group
+            }
+            trial_wall_evidence = {
+                float(row["trial_forward_wall_seconds"])
+                for row in group
+            }
+            if len(writeback_evidence) != 1 or len(trial_wall_evidence) != 1:
+                raise ValueError(
+                    f"distributed FSDP/trial wall-time drift for {key}")
         q_values={float(row["q_min"]) for row in group}
         root_q_values={float(row.get("root_q_min",row["q_min"])) for row in group}
         caps={float(row["writer_log_ratio_cap"]) for row in group}

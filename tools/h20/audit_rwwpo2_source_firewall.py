@@ -109,6 +109,11 @@ def main():
         "def replay_behavior_log_probs():",
         "replay_with_rng_snapshots(",
         '"replay_rng_bound": True',
+        '"behavior_current_logprob_integrity_verified"',
+        '"fsdp_parameter_commit_primitive"',
+        '"fsdp_parameter_writeback_wall_seconds"',
+        "RWWPO2_FSDP_WRITEBACK_BUDGET_EXCEEDED",
+        "_timed_set_interpolated_parameters(",
         "post_commit_forward_verified = True",
         'rwwpo_controller == "none"',
         "post_constraint_valid",
@@ -149,7 +154,11 @@ def main():
                   "validate_rwwpo2_rng_phase_digests",
                   "RWWPO-2 RNG phase digest closure",
                   "RWWPO-2 rejected transaction RNG rollback",
-                  "RWWPO-2 behavior replay RNG binding"):
+                  "RWWPO-2 behavior replay RNG binding",
+                  "immutable behavior logprob digest mismatch",
+                  "RWWPO-2 FSDP/behavior-reference closure",
+                  "RWWPO-2 FSDP/trial wall-time closure",
+                  "distributed FSDP/trial wall-time drift"):
         if token not in actual_auditor:
             violations.append("actual-loss independent audit:"+token)
     if '"actual_loss_contract"' not in actor_source:
@@ -158,7 +167,13 @@ def main():
         encoding="utf-8")
     for token in ('"behavior_forward_rng_digests"',
                   '"behavior_forward_rng_aggregate_digest"',
-                  '"replay_microbatch_count"', '"replay_rng_bound"'):
+                  '"replay_microbatch_count"', '"replay_rng_bound"',
+                  '"behavior_current_logprob_digest"',
+                  '"behavior_current_logprob_integrity_verified"',
+                  '"fsdp_parameter_commit_primitive"',
+                  '"fsdp_parameter_writeback_max_wall_seconds"',
+                  '"fsdp_parameter_writeback_wall_seconds"',
+                  '"max_trial_forward_wall_seconds"'):
         if token not in receipt_schema:
             violations.append("actual-loss replay RNG schema:"+token)
     transaction_source=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text(
@@ -168,6 +183,13 @@ def main():
                   "def restore_named_buffers(", "def module_state_digest(",
                   "def ordered_rng_state_digests(",
                   "def replay_with_rng_snapshots(",
+                  "def _set_fsdp_interpolated_parameters(",
+                  "torch.distributed.all_gather_into_tensor(",
+                  "torch.distributed.all_gather_object(",
+                  "FSDP.summon_full_params(",
+                  "writeback=True", "RWWPO2_FSDP_WRITEBACK_LOCAL_SHARD_MISMATCH",
+                  "RWWPO2_FSDP_DISTRIBUTED_INVENTORY_DRIFT",
+                  "RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS = 120.0",
                   "finally:\n        restore_rng(terminal)"):
         if token not in transaction_source:
             violations.append("complete transaction RNG:"+token)
@@ -183,6 +205,9 @@ def main():
                   "local_gradient_sketch_sufficient_statistics",
                   "STREAMED_ORACLE_MICROBATCHES=7",
                   "STREAMED_ORACLE_SEQUENCE_LENGTH=8191",
+                  "TRANSACTION_CLOSURE_SEQUENCE_LENGTH=8191",
+                  "TRANSACTION_CLOSURE_ACTIVE_TOKENS=1024",
+                  "TRANSACTION_WRITEBACK_MAX_WALL_SECONDS=120.0",
                   "streamed_replay_gradient_projection_relative_l2",
                   '"synthetic_label_free":True',
                   "gradient_checkpointing_enable(",
@@ -193,6 +218,20 @@ def main():
                   "sharding_strategy=ShardingStrategy.FULL_SHARD",
                   "sync_module_states=True,use_orig_params=False",
                   "forward_prefetch=False",
+                  "torch_dtype=torch.float32",
+                  '"fsdp_sharded_parameter_dtype":"float32"',
+                  "transaction_closure_probe(",
+                  "transaction_backward_probe(",
+                  "torch.optim.AdamW(",
+                  "model.clip_grad_norm_(max_norm=1.0)",
+                  "optimizer.step()",
+                  '"optimizer_probe"',
+                  '"step_calls": 1',
+                  '"transaction_optimizer_probe":"adamw_fp32_shard_step_v1"',
+                  "timed_safe_writeback(",
+                  "RWWPO2_FSDP_TRANSACTION_CLOSURE_NO_GO",
+                  "RWWPO2_FSDP_WRITEBACK_BUDGET_NO_GO",
+                  "set_interpolated_parameters(",
                   'torch.autocast(device_type="cuda",dtype=torch.bfloat16)',
                   "apply_monkey_patch(model=model,ulysses_sp_size=1)",
                   "logprobs_from_logits(",
@@ -244,6 +283,9 @@ def main():
         "RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE",
         "RWWPO_BEHAVIOR_GRADIENT_TOLERANCE",
         "RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS",
+        "RWWPO_FSDP_PARAMETER_COMMIT_PRIMITIVE",
+        "RWWPO_FSDP_WRITEBACK_MAX_WALL_SECONDS",
+        "RWWPO_MAX_TRIAL_FORWARD_SECONDS",
         "RWWPO_RELEASE_TEST_RECEIPT",
     ):
         if token not in launcher:
@@ -280,6 +322,8 @@ def main():
         "transaction failure inside audited prefix",
         "validate_post_commit_forward_binding(",
         "post-commit forward binding",
+        "FSDP/trial wall-time binding",
+        "distributed wall-time drift",
     ):
         if token not in attempt:
             violations.append("attempt/preflight binding:"+token)
@@ -289,15 +333,31 @@ def main():
     resolver=(ROOT/"tools/h20/materialize_rwwpo2_resolved_contract.py").read_text(
         encoding="utf-8")
     for token in ("streamed_replay_calibration",
-                  "streamed_replay_gradient_projection_relative_l2"):
+                  "streamed_replay_gradient_projection_relative_l2",
+                  "fsdp_transaction_closure",
+                  "validate_fsdp_transaction_closure",
+                  "FSDP_PARAMETER_COMMIT_PRIMITIVE",
+                  "transaction_optimizer_probe",
+                  '"TrainingState.IDLE"',
+                  '"transaction closure phase binding"',
+                  '"transaction closure distributed binding"'):
         if token not in numeric_auditor:
             violations.append("numeric auditor streaming calibration:"+token)
     for token in ("streamed_replay_calibration",
-                  "STREAMED_REPLAY_CALIBRATION"):
+                  "STREAMED_REPLAY_CALIBRATION",
+                  "fsdp_transaction_closure",
+                  "validate_fsdp_transaction_closure",
+                  "FSDP_PARAMETER_COMMIT_PRIMITIVE",
+                  "transaction_optimizer_probe"):
         if token not in resolver:
             violations.append("resolved streaming calibration:"+token)
     for token in ("gradient sketch chunk binding",
-                  "streamed replay calibration binding"):
+                  "streamed replay calibration binding",
+                  "FSDP transaction closure binding",
+                  "FSDP transaction closure semantics",
+                  "fsdp_parameter_writeback_max_wall_seconds",
+                  "max_trial_forward_wall_seconds_per_transaction",
+                  "validate_fsdp_transaction_closure"):
         if token not in preflight:
             violations.append("preflight registered gradient sketch:"+token)
     numeric_launcher=(ROOT/"scripts/h20/run_rwwpo2_numeric_oracle.sh").read_text(

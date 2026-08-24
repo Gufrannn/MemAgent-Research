@@ -13,7 +13,8 @@
     "writer_log_ratio_cap", "constraint_pass", "accepted", "alpha_grid",
     "alpha_test_order", "alpha_committed", "accepted_nonzero",
     "proposal_zero", "trial_evidence", "tensor_shard", "pre_digests",
-    "commit_digests", "mechanism_diagnostics", "previous_record_sha256",
+    "commit_digests", "trial_forward_wall_seconds",
+    "mechanism_diagnostics", "previous_record_sha256",
     "record_sha256"
   ],
   "properties": {
@@ -39,6 +40,7 @@
     "q_min": {"const": 0.5},
     "root_q_min": {"const": 0.5},
     "writer_log_ratio_cap": {"const": 4.0},
+    "trial_forward_wall_seconds": {"type": "number", "minimum": 0, "maximum": 600.0},
     "constraint_pass": {"type": "boolean"},
     "accepted": {"type": "boolean"},
     "accepted_nonzero": {"type": "boolean"},
@@ -58,7 +60,7 @@
     },
     "mechanism_diagnostics": {
       "type": "object",
-      "required": ["policy_loss", "surrogate_loss", "shared_kl_loss", "actual_loss_contract", "active_logprob_gradient_l2", "post_commit_forward_verified", "post_commit_forward_verification_max_abs", "post_commit_forward_verification_tolerance", "transaction_entry_buffer_digest", "terminal_buffer_digest", "optimizer_step_calls", "shadow_coefficients", "inner1_exposure", "proposal_lr", "gradient_sketch_chunk_elements", "transaction_entry_rng_digest", "logical_seeded_rng_digest", "proposal_gradient_rng_digest", "behavior_forward_rng_digests", "behavior_forward_rng_aggregate_digest", "replay_microbatch_count", "replay_rng_bound", "terminal_rng_digest"],
+      "required": ["policy_loss", "surrogate_loss", "shared_kl_loss", "actual_loss_contract", "active_logprob_gradient_l2", "post_commit_forward_verified", "post_commit_forward_verification_max_abs", "post_commit_forward_verification_tolerance", "behavior_current_logprob_digest", "behavior_current_logprob_integrity_max_abs", "behavior_current_logprob_integrity_verified", "fsdp_parameter_commit_primitive", "fsdp_parameter_writeback_max_wall_seconds", "fsdp_parameter_writeback_wall_seconds", "max_trial_forward_wall_seconds", "transaction_entry_buffer_digest", "terminal_buffer_digest", "optimizer_step_calls", "shadow_coefficients", "inner1_exposure", "proposal_lr", "gradient_sketch_chunk_elements", "transaction_entry_rng_digest", "logical_seeded_rng_digest", "proposal_gradient_rng_digest", "behavior_forward_rng_digests", "behavior_forward_rng_aggregate_digest", "replay_microbatch_count", "replay_rng_bound", "terminal_rng_digest"],
       "properties": {
         "policy_loss": {"type": "number"},
         "surrogate_loss": {"type": "number"},
@@ -81,6 +83,16 @@
         "post_commit_forward_verified": {"const": true},
         "post_commit_forward_verification_max_abs": {"type": "number", "minimum": 0},
         "post_commit_forward_verification_tolerance": {"type": "number", "minimum": 0},
+        "behavior_current_logprob_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "behavior_current_logprob_integrity_max_abs": {"const": 0.0},
+        "behavior_current_logprob_integrity_verified": {"const": true},
+        "fsdp_parameter_commit_primitive": {"const": "fsdp_unitwise_allgather_summon_writeback_v1"},
+        "fsdp_parameter_writeback_max_wall_seconds": {"const": 120.0},
+        "fsdp_parameter_writeback_wall_seconds": {
+          "type": "array", "minItems": 1, "maxItems": 7,
+          "items": {"type": "number", "minimum": 0, "maximum": 120.0}
+        },
+        "max_trial_forward_wall_seconds": {"const": 600.0},
         "transaction_entry_buffer_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "terminal_buffer_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "optimizer_step_calls": {"const": 1},

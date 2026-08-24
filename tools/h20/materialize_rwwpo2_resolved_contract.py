@@ -7,13 +7,25 @@ import hashlib
 import json
 import math
 import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.h20.audit_rwwpo2_numeric_oracle import (
+    validate_fsdp_transaction_closure,
+)
 EXPECTED_BRANCH = "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"
 NUMERIC_FIELDS = ("tau_theta", "tau_logprob", "tau_gradient", "tau_coefficient")
 GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
+FSDP_PARAMETER_COMMIT_PRIMITIVE = \
+    "fsdp_unitwise_allgather_summon_writeback_v1"
+TRANSACTION_CLOSURE_SEQUENCE_LENGTH = 8191
+TRANSACTION_CLOSURE_ACTIVE_TOKENS = 1024
+TRANSACTION_WRITEBACK_MAX_WALL_SECONDS = 120.0
 STREAMED_REPLAY_CALIBRATION = {
     "microbatches": 7,
     "sequence_length": 8191,
@@ -27,12 +39,26 @@ STREAMED_REPLAY_CALIBRATION = {
     "fsdp_use_orig_params": False,
     "fsdp_sync_module_states": True,
     "fsdp_forward_prefetch": False,
+    "model_load_dtype": "float32",
+    "fsdp_sharded_parameter_dtype": "float32",
     "fsdp_param_dtype": "bfloat16",
     "fsdp_reduce_dtype": "float32",
     "fsdp_buffer_dtype": "float32",
     "cuda_autocast_dtype": "bfloat16",
     "selective_logprob_kernel":
         "verl.utils.torch_functional.logprobs_from_logits",
+    "transaction_closure_probe": "unitwise_fp32_shard_to_bf16_forward_v1",
+    "transaction_optimizer_probe": "adamw_fp32_shard_step_v1",
+    "transaction_optimizer_lr": 1e-6,
+    "transaction_optimizer_betas": [0.9, 0.999],
+    "transaction_optimizer_weight_decay": 0.01,
+    "transaction_optimizer_grad_clip": 1.0,
+    "transaction_closure_sequence_length":
+        TRANSACTION_CLOSURE_SEQUENCE_LENGTH,
+    "transaction_closure_active_tokens": TRANSACTION_CLOSURE_ACTIVE_TOKENS,
+    "transaction_writeback_max_wall_seconds":
+        TRANSACTION_WRITEBACK_MAX_WALL_SECONDS,
+    "fsdp_parameter_commit_primitive": FSDP_PARAMETER_COMMIT_PRIMITIVE,
 }
 
 
@@ -71,6 +97,10 @@ def verified_oracle_audit(path: Path, *, commit: str, oracle: dict) -> dict:
                 int(oracle.get("gradient_sketch_chunk_elements", -2)) \
             or row.get("streamed_replay_calibration") != \
                 oracle.get("streamed_replay_calibration") \
+            or row.get("fsdp_parameter_commit_primitive") != \
+                oracle.get("fsdp_parameter_commit_primitive") \
+            or row.get("fsdp_transaction_closure") != \
+                oracle.get("fsdp_transaction_closure") \
             or row.get("thresholds") != oracle.get("thresholds"):
         raise ValueError("numeric oracle audit is not authentic for this commit")
     return {**row, "report_sha256": declared}
@@ -138,6 +168,18 @@ def main() -> None:
         raise SystemExit("RWWPO2_RESOLVE_NO_GO:gradient sketch chunk contract")
     if oracle.get("streamed_replay_calibration") != STREAMED_REPLAY_CALIBRATION:
         raise SystemExit("RWWPO2_RESOLVE_NO_GO:streamed replay calibration contract")
+    if oracle.get("fsdp_parameter_commit_primitive") != \
+            FSDP_PARAMETER_COMMIT_PRIMITIVE \
+            or not isinstance(oracle.get("fsdp_transaction_closure"), list) \
+            or len(oracle["fsdp_transaction_closure"]) != 2:
+        raise SystemExit("RWWPO2_RESOLVE_NO_GO:FSDP transaction closure contract")
+    try:
+        validate_fsdp_transaction_closure(
+            oracle["fsdp_transaction_closure"],
+            tau_logprob=float(thresholds["tau_logprob"]))
+    except (TypeError, ValueError) as error:
+        raise SystemExit(
+            "RWWPO2_RESOLVE_NO_GO:FSDP transaction closure semantics") from error
     if any(not math.isfinite(float(thresholds[name])) or float(thresholds[name]) <= 0
            for name in NUMERIC_FIELDS):
         raise SystemExit("RWWPO2_RESOLVE_NO_GO:threshold values")
@@ -163,6 +205,11 @@ def main() -> None:
         "numeric_oracle_audit_report_sha256": oracle_audit["report_sha256"],
         "gradient_sketch_chunk_elements": GRADIENT_SKETCH_CHUNK_ELEMENTS,
         "streamed_replay_calibration": STREAMED_REPLAY_CALIBRATION,
+        "fsdp_parameter_commit_primitive": FSDP_PARAMETER_COMMIT_PRIMITIVE,
+        "fsdp_parameter_writeback_max_wall_seconds":
+            TRANSACTION_WRITEBACK_MAX_WALL_SECONDS,
+        "max_trial_forward_wall_seconds_per_transaction": 600.0,
+        "fsdp_transaction_closure": oracle["fsdp_transaction_closure"],
         "numeric_thresholds": {name: float(thresholds[name]) for name in NUMERIC_FIELDS},
         "behavior_coefficient_tolerance": float(thresholds["tau_coefficient"]),
         "behavior_gradient_tolerance": float(thresholds["tau_gradient"]),

@@ -181,11 +181,33 @@ through producer and audit. No training starts here. It uses the same registered
 chunk-bounded gradient projection as the live actor and includes a fixed
 synthetic, label-free 8191-token, seven-microbatch streaming replay. The replay
 also freezes the actor's non-reentrant activation checkpointing, default
-transformer-layer FSDP auto-wrap, BF16-parameter/FP32-reduction mixed precision,
+transformer-layer FSDP auto-wrap, FP32 sharded optimizer parameters with
+BF16-forward/FP32-reduction mixed precision,
 remove-padding FlashAttention patch, and selective log-prob kernel; it must not
 materialize a full FP32 vocabulary log-softmax. A source change, different
 chunk or replay execution contract, missing calibration, or reused numeric root
 is `NO_GO`.
+
+The oracle also reproduces the live actor's FP32 model load and rank-local
+optimizer shards followed by BF16 FSDP forwards. On a synthetic 8191-token
+transaction it executes a real backward, the frozen clipped AdamW optimizer
+step, records the legacy raw-shard
+path only as a diagnostic, and then requires the registered unit-wise
+all-gather/`summon_full_params(writeback=True)` primitive to close behavior,
+candidate recommit, alpha-zero restore, and a second fresh forward within the
+independently calibrated `tau_logprob`. Each complete writeback has a frozen
+120-second ceiling. Live training applies the same cross-rank ceiling to every
+writeback and a separate 600-second ceiling to the full trial search, with all
+successful writeback times preserved in each authenticated receipt. These
+closure results never calibrate or relax the
+threshold. Any failure or timeout leaves no usable oracle receipt and keeps R50
+locked.
+
+The independent oracle audit additionally requires a positive finite global
+gradient norm, exactly one AdamW step, optimizer state for every managed FSDP
+unit on both ranks, `TrainingState.IDLE` at every recorded phase, exact phase-to-
+summary consistency, and identical distributed maxima on both ranks. A source
+token saying `optimizer.step()` is not accepted as runtime evidence.
 
 ```bash
 export RWWPO_NUMERIC_ID=rwwpo2_numeric_${RWWPO_EXPECTED_COMMIT:0:8}_r1

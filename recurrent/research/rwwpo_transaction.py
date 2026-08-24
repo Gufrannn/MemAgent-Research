@@ -1,14 +1,16 @@
 """Transactional helpers for prefix-certified actor updates.
 
-The helpers are deliberately independent of FSDP orchestration: parameters are
-the local shards owned by a rank, while feasibility is decided from globally
-gathered prefix rows by the caller.
+Most helpers operate on rank-local parameter shards.  RWWPO-2 additionally
+uses one explicit, versioned FSDP writeback primitive because mutating a visible
+``FlatParameter`` shard is not by itself a certificate that FSDP's derived
+mixed-precision forward state has been rematerialized.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import io
+import json
 import math
 import random
 from dataclasses import dataclass
@@ -21,6 +23,9 @@ ALPHA_GRID = (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)
 RWWPO2_INNER_TRANSACTIONS = 2
 RWWPO2_SCHEDULE_KIND = "constant_with_linear_warmup"
 RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
+RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE = \
+    "fsdp_unitwise_allgather_summon_writeback_v1"
+RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS = 120.0
 
 
 def local_gradient_sketch_sufficient_statistics(
@@ -86,6 +91,19 @@ def digest(value) -> str:
     return hashlib.sha256(buffer.getvalue()).hexdigest()
 
 
+def tensor_content_digest(value: torch.Tensor) -> str:
+    """Hash exact tensor metadata and bytes without pickle/storage identity."""
+    if not torch.is_tensor(value):
+        raise TypeError("tensor content digest requires a tensor")
+    tensor = value.detach().cpu().contiguous()
+    metadata = json.dumps({
+        "dtype": str(tensor.dtype),
+        "shape": list(tensor.shape),
+    }, sort_keys=True, separators=(",", ":")).encode()
+    payload = tensor.view(torch.uint8).numpy().tobytes()
+    return hashlib.sha256(metadata + b"\0" + payload).hexdigest()
+
+
 def parameter_snapshot(module):
     return [parameter.detach().cpu().clone() for parameter in module.parameters()]
 
@@ -123,13 +141,118 @@ def module_state_digest(parameters, buffers):
     return digest({"parameters": parameters, "named_buffers": buffers})
 
 
-def set_interpolated_parameters(module, old, full, alpha: float):
+def _fsdp_managed_flat_parameters(module):
+    """Return FSDP units/flat parameters in the visible optimizer order."""
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+    if not isinstance(module, FSDP):
+        raise RuntimeError("RWWPO2_FSDP_WRITEBACK_REQUIRES_FSDP_ROOT")
+    fsdp_units = FSDP.fsdp_modules(module)
+    if not fsdp_units:
+        raise RuntimeError("RWWPO2_FSDP_WRITEBACK_MISSING_FSDP_UNITS")
+    if any(getattr(unit, "_use_orig_params", None) is not False
+           for unit in fsdp_units):
+        raise RuntimeError("RWWPO2_FSDP_WRITEBACK_USE_ORIG_PARAMS_DRIFT")
+    managed = [
+        (unit, getattr(unit, "_flat_param", None))
+        for unit in fsdp_units
+        if getattr(unit, "_flat_param", None) is not None
+    ]
+    visible = list(module.parameters())
+    if [id(parameter) for parameter in visible] != [
+            id(parameter) for _, parameter in managed]:
+        raise RuntimeError("RWWPO2_FSDP_FLAT_PARAMETER_ORDER_DRIFT")
+    return managed
+
+
+def _set_fsdp_interpolated_parameters(module, old, full, alpha: float) -> int:
+    """Commit rank-local snapshots through unit-wise public FSDP writeback.
+
+    Each rank independently constructs its target local FP32 shard, all-gathers
+    those target shards for one FSDP unit, and overwrites the unsharded flat
+    parameter *inside* ``summon_full_params(writeback=True)``.  This avoids
+    trusting any pre-existing ``_mp_shard``/full-buffer cache and bounds peak
+    memory by one FSDP unit rather than the full 7B model.  Private attributes
+    are read only to bind the flat-parameter identity; no private cache is
+    cleared or mutated.
+    """
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+    managed = _fsdp_managed_flat_parameters(module)
+    if len(old) != len(managed) or len(full) != len(managed):
+        raise RuntimeError("RWWPO2_FSDP_SNAPSHOT_INVENTORY_DRIFT")
+    local_inventory = []
+    for (unit, target), before, proposed in zip(managed, old, full):
+        if before.shape != proposed.shape or before.numel() != target.numel() \
+                or before.device.type != "cpu" \
+                or proposed.device.type != "cpu" \
+                or before.dtype != proposed.dtype \
+                or before.dtype != target.dtype:
+            raise RuntimeError("RWWPO2_FSDP_LOCAL_SHARD_METADATA_DRIFT")
+        local_inventory.append({
+            "shape": list(target.shape), "numel": int(target.numel()),
+            "dtype": str(target.dtype),
+            "process_group_world_size": int(torch.distributed.get_world_size(
+                unit.process_group)),
+        })
+    # Validate the complete small metadata vector before entering any
+    # size-sensitive tensor collective.  A per-rank wrapping/order drift must
+    # fail explicitly instead of hanging one rank in a mismatched NCCL gather.
+    root_group = module.process_group
+    distributed_inventory = [None] * torch.distributed.get_world_size(
+        root_group)
+    torch.distributed.all_gather_object(
+        distributed_inventory, local_inventory, group=root_group)
+    if any(inventory != local_inventory
+           for inventory in distributed_inventory):
+        raise RuntimeError("RWWPO2_FSDP_DISTRIBUTED_INVENTORY_DRIFT")
+    for (unit, target), before, proposed in zip(managed, old, full):
+        if alpha == 0.0:
+            local_cpu = before
+        elif alpha == 1.0:
+            local_cpu = proposed
+        else:
+            local_cpu = before + (proposed - before) * alpha
+        local_trial = local_cpu.to(
+            device=target.device, dtype=target.dtype).contiguous()
+        process_group = unit.process_group
+        world_size = torch.distributed.get_world_size(process_group)
+        gathered_trial = torch.empty(
+            world_size * local_trial.numel(), device=target.device,
+            dtype=target.dtype)
+        torch.distributed.all_gather_into_tensor(
+            gathered_trial, local_trial, group=process_group)
+        with FSDP.summon_full_params(
+                unit, recurse=False, writeback=True, rank0_only=False,
+                offload_to_cpu=False, with_grads=False):
+            unsharded = getattr(unit, "_flat_param", None)
+            if unsharded is None or unsharded.numel() > gathered_trial.numel():
+                raise RuntimeError(
+                    "RWWPO2_FSDP_UNSHARDED_PARAMETER_METADATA_DRIFT")
+            with torch.no_grad():
+                unsharded.copy_(gathered_trial[:unsharded.numel()].view_as(
+                    unsharded))
+        if target.numel() != local_trial.numel() or not torch.equal(
+                target.detach(), local_trial):
+            raise RuntimeError("RWWPO2_FSDP_WRITEBACK_LOCAL_SHARD_MISMATCH")
+        del local_trial, gathered_trial
+        if alpha not in (0.0, 1.0):
+            del local_cpu
+    return len(managed)
+
+
+def set_interpolated_parameters(module, old, full, alpha: float, *,
+                                synchronize_fsdp: bool = False):
     if not 0.0 <= alpha <= 1.0:
         raise ValueError("trial alpha is outside [0,1]")
+    if synchronize_fsdp:
+        return _set_fsdp_interpolated_parameters(
+            module, old, full, float(alpha))
     with torch.no_grad():
         for target, before, proposed in zip(module.parameters(), old, full):
             trial = before + (proposed - before) * alpha
             target.copy_(trial.to(device=target.device, dtype=target.dtype))
+    return None
 
 
 def displacement_norm(old, new) -> float:

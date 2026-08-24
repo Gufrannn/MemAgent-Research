@@ -11,6 +11,7 @@ from recurrent.research.rwwpo_ledger import (
 )
 from recurrent.research.rwwpo_transaction import (
     digest, logical_transaction_seed, prefix_distribution_stats, proposal_clock,
+    tensor_content_digest,
 )
 from tools.h20.audit_rwwpo_actual_loss import (
     audit, canonical_sha, hydrate_authenticated_v3_receipt,
@@ -106,6 +107,15 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
                                "post_commit_forward_verification_max_abs":abs(
                                    float(verified_delta)),
                                "post_commit_forward_verification_tolerance":1e-6,
+                               "behavior_current_logprob_digest":
+                                   tensor_content_digest(current),
+                               "behavior_current_logprob_integrity_max_abs":0.0,
+                               "behavior_current_logprob_integrity_verified":True,
+                               "fsdp_parameter_commit_primitive":
+                                   "fsdp_unitwise_allgather_summon_writeback_v1",
+                               "fsdp_parameter_writeback_max_wall_seconds":120.0,
+                               "fsdp_parameter_writeback_wall_seconds":[1.25],
+                               "max_trial_forward_wall_seconds":600.0,
                                "transaction_entry_buffer_digest":"7"*64,
                                "terminal_buffer_digest":"7"*64,
                                "optimizer_step_calls":1,
@@ -275,6 +285,64 @@ def test_v3_post_commit_buffer_digest_drift_is_rejected(tmp_path):
     _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
         terminal_buffer_digest="8"*64))
     with pytest.raises(ValueError,match="loss/optimizer-step evidence"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_behavior_reference_digest_tamper_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        behavior_current_logprob_digest="e"*64))
+    with pytest.raises(ValueError,match="immutable behavior logprob digest"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_fsdp_commit_primitive_drift_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        fsdp_parameter_commit_primitive="legacy_raw_shard_copy"))
+    with pytest.raises(ValueError,match=(
+            "receipt schema failure|FSDP/behavior-reference closure")):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_fsdp_writeback_over_budget_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        fsdp_parameter_writeback_wall_seconds=[120.0001]))
+    with pytest.raises(ValueError,match=(
+            "receipt schema failure|FSDP/trial wall-time closure")):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_trial_wall_time_over_budget_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row.__setitem__(
+        "trial_forward_wall_seconds",600.0001))
+    with pytest.raises(ValueError,match=(
+            "receipt schema failure|FSDP/trial wall-time closure")):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_cross_rank_writeback_time_drift_is_rejected(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        fsdp_parameter_writeback_wall_seconds=[2.0]))
+    with pytest.raises(ValueError,match="distributed FSDP/trial wall-time drift"):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
 
 

@@ -17,7 +17,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.h20.verify_rwwpo2_release_tests import verify_release_test_receipt
+from tools.h20.audit_rwwpo2_numeric_oracle import (
+    validate_fsdp_transaction_closure,
+)
 from recurrent.research.rwwpo_transaction import (
+    RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE,
     RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS,
 )
 
@@ -205,6 +209,29 @@ def main() -> None:
     if int(resolved.get("gradient_sketch_chunk_elements", -1)) != \
             RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:gradient sketch chunk binding")
+    if resolved.get("fsdp_parameter_commit_primitive") != \
+            RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE \
+            or manifest["method"].get("fsdp_parameter_commit_primitive") != \
+                RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE \
+            or float(resolved.get(
+                "fsdp_parameter_writeback_max_wall_seconds", -1)) != 120.0 \
+            or float(manifest["method"].get(
+                "fsdp_parameter_writeback_max_wall_seconds", -1)) != 120.0 \
+            or float(resolved.get(
+                "max_trial_forward_wall_seconds_per_transaction", -1)) != 600.0 \
+            or float(manifest["method"].get(
+                "max_trial_forward_wall_seconds_per_transaction", -1)) != 600.0 \
+            or not isinstance(resolved.get("fsdp_transaction_closure"), list) \
+            or len(resolved["fsdp_transaction_closure"]) != 2:
+        raise SystemExit(
+            "RWWPO2_PREFLIGHT_NO_GO:FSDP transaction closure binding")
+    try:
+        validate_fsdp_transaction_closure(
+            resolved["fsdp_transaction_closure"],
+            tau_logprob=float(resolved["numeric_thresholds"]["tau_logprob"]))
+    except (TypeError, ValueError) as error:
+        raise SystemExit(
+            "RWWPO2_PREFLIGHT_NO_GO:FSDP transaction closure semantics") from error
     if resolved.get("streamed_replay_calibration") != {
             "microbatches": 7, "sequence_length": 8191,
             "active_response_tokens": 1024, "synthetic_label_free": True,
@@ -216,12 +243,26 @@ def main() -> None:
             "fsdp_use_orig_params": False,
             "fsdp_sync_module_states": True,
             "fsdp_forward_prefetch": False,
+            "model_load_dtype": "float32",
+            "fsdp_sharded_parameter_dtype": "float32",
             "fsdp_param_dtype": "bfloat16",
             "fsdp_reduce_dtype": "float32",
             "fsdp_buffer_dtype": "float32",
             "cuda_autocast_dtype": "bfloat16",
             "selective_logprob_kernel":
                 "verl.utils.torch_functional.logprobs_from_logits",
+            "transaction_closure_probe":
+                "unitwise_fp32_shard_to_bf16_forward_v1",
+            "transaction_optimizer_probe": "adamw_fp32_shard_step_v1",
+            "transaction_optimizer_lr": 1e-6,
+            "transaction_optimizer_betas": [0.9, 0.999],
+            "transaction_optimizer_weight_decay": 0.01,
+            "transaction_optimizer_grad_clip": 1.0,
+            "transaction_closure_sequence_length": 8191,
+            "transaction_closure_active_tokens": 1024,
+            "transaction_writeback_max_wall_seconds": 120.0,
+            "fsdp_parameter_commit_primitive":
+                RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE,
     }:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:streamed replay calibration binding")
 
@@ -364,6 +405,13 @@ def main() -> None:
         "gradient_sketch_chunk_elements":
             resolved["gradient_sketch_chunk_elements"],
         "streamed_replay_calibration": resolved["streamed_replay_calibration"],
+        "fsdp_parameter_commit_primitive":
+            resolved["fsdp_parameter_commit_primitive"],
+        "fsdp_parameter_writeback_max_wall_seconds":
+            resolved["fsdp_parameter_writeback_max_wall_seconds"],
+        "max_trial_forward_wall_seconds_per_transaction":
+            resolved["max_trial_forward_wall_seconds_per_transaction"],
+        "fsdp_transaction_closure": resolved["fsdp_transaction_closure"],
         "resolved_contract_file_sha256": args.resolved_contract_sha256,
         "resolved_contract_report_sha256": resolved["report_sha256"],
         "source_manifest_sha256": resolved["source_manifest_sha256"],

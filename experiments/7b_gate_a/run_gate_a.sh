@@ -211,6 +211,8 @@ if [[ ${RWWPO_ENABLE:-0} == 1 || ${RWWPO_COLLECT_ORIGINAL:-0} == 1 ]]; then
     "actor_rollout_ref.actor.rwwpo.behavior_gradient_tolerance=${RWWPO_BEHAVIOR_GRADIENT_TOLERANCE:-1e-7}"
     "actor_rollout_ref.actor.rwwpo.behavior_coefficient_tolerance=${RWWPO_BEHAVIOR_COEFFICIENT_TOLERANCE:-1e-9}"
     "actor_rollout_ref.actor.rwwpo.gradient_sketch_chunk_elements=${RWWPO_GRADIENT_SKETCH_CHUNK_ELEMENTS:-8388608}"
+    "actor_rollout_ref.actor.rwwpo.fsdp_parameter_commit_primitive=${RWWPO_FSDP_PARAMETER_COMMIT_PRIMITIVE:-legacy_raw_shard_copy}"
+    "actor_rollout_ref.actor.rwwpo.fsdp_parameter_writeback_max_wall_seconds=${RWWPO_FSDP_WRITEBACK_MAX_WALL_SECONDS:-120}"
     "actor_rollout_ref.actor.rwwpo.tau_theta=${RWWPO_TAU_THETA:-null}"
     "actor_rollout_ref.actor.rwwpo.tau_logprob=${RWWPO_TAU_LOGPROB:-null}"
     "actor_rollout_ref.actor.rwwpo.tau_gradient=${RWWPO_TAU_GRADIENT:-null}"

@@ -14,8 +14,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MULTIPLIER = 16.0
 GRADIENT_SKETCH_CHUNK_ELEMENTS = 8_388_608
+FSDP_PARAMETER_COMMIT_PRIMITIVE = \
+    "fsdp_unitwise_allgather_summon_writeback_v1"
 STREAMED_ORACLE_MICROBATCHES = 7
 STREAMED_ORACLE_SEQUENCE_LENGTH = 8191
+TRANSACTION_CLOSURE_SEQUENCE_LENGTH = 8191
+TRANSACTION_CLOSURE_ACTIVE_TOKENS = 1024
+TRANSACTION_WRITEBACK_MAX_WALL_SECONDS = 120.0
 STREAMED_REPLAY_CALIBRATION = {
     "microbatches": STREAMED_ORACLE_MICROBATCHES,
     "sequence_length": STREAMED_ORACLE_SEQUENCE_LENGTH,
@@ -29,12 +34,26 @@ STREAMED_REPLAY_CALIBRATION = {
     "fsdp_use_orig_params": False,
     "fsdp_sync_module_states": True,
     "fsdp_forward_prefetch": False,
+    "model_load_dtype": "float32",
+    "fsdp_sharded_parameter_dtype": "float32",
     "fsdp_param_dtype": "bfloat16",
     "fsdp_reduce_dtype": "float32",
     "fsdp_buffer_dtype": "float32",
     "cuda_autocast_dtype": "bfloat16",
     "selective_logprob_kernel":
         "verl.utils.torch_functional.logprobs_from_logits",
+    "transaction_closure_probe": "unitwise_fp32_shard_to_bf16_forward_v1",
+    "transaction_optimizer_probe": "adamw_fp32_shard_step_v1",
+    "transaction_optimizer_lr": 1e-6,
+    "transaction_optimizer_betas": [0.9, 0.999],
+    "transaction_optimizer_weight_decay": 0.01,
+    "transaction_optimizer_grad_clip": 1.0,
+    "transaction_closure_sequence_length":
+        TRANSACTION_CLOSURE_SEQUENCE_LENGTH,
+    "transaction_closure_active_tokens": TRANSACTION_CLOSURE_ACTIVE_TOKENS,
+    "transaction_writeback_max_wall_seconds":
+        TRANSACTION_WRITEBACK_MAX_WALL_SECONDS,
+    "fsdp_parameter_commit_primitive": FSDP_PARAMETER_COMMIT_PRIMITIVE,
 }
 FLOORS = {
     "tau_theta": 1e-12,
@@ -50,6 +69,156 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_fsdp_transaction_closure(closure, *, tau_logprob: float):
+    """Independently validate the complete two-rank transaction probe."""
+    if not isinstance(closure, list) \
+            or sorted(int(item.get("rank", -1)) for item in closure) != [0, 1]:
+        raise ValueError("transaction closure identity")
+    phase_names = [
+        "T0_behavior", "T1_after_backward", "T2_after_real_optimizer_step",
+        "T3_legacy_raw_restore_diagnostic",
+        "T4_safe_behavior_writeback", "T5_safe_candidate_recommit",
+        "T6_safe_restore_fresh",
+    ]
+    safe_error_names = {
+        "after_backward_max_abs", "safe_noop_writeback_max_abs",
+        "safe_candidate_recommit_max_abs", "safe_restore_max_abs",
+        "safe_second_forward_max_abs",
+    }
+    for item in closure:
+        safe_errors = item.get("safe_errors")
+        raw = item.get("legacy_raw_copy_diagnostic")
+        optimizer = item.get("optimizer_probe")
+        phases = item.get("phases")
+        writeback = item.get("writeback_wall_seconds")
+        if item.get("status") != "PASS" \
+                or item.get("decision") != \
+                    "RWWPO2_FSDP_TRANSACTION_CLOSURE_PASS" \
+                or item.get("primitive") != FSDP_PARAMETER_COMMIT_PRIMITIVE \
+                or int(item.get("sequence_length", 0)) != \
+                    TRANSACTION_CLOSURE_SEQUENCE_LENGTH \
+                or int(item.get("active_tokens", 0)) != \
+                    TRANSACTION_CLOSURE_ACTIVE_TOKENS \
+                or float(item.get("writeback_max_wall_seconds", -1)) != \
+                    TRANSACTION_WRITEBACK_MAX_WALL_SECONDS \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(
+                    item.get("behavior_logprob_digest", ""))) \
+                or float(item.get("tau_logprob", -1)) != float(tau_logprob) \
+                or not isinstance(safe_errors, dict) \
+                or set(safe_errors) != safe_error_names \
+                or any(not math.isfinite(float(value)) or float(value) < 0
+                       or float(value) > float(tau_logprob)
+                       for value in safe_errors.values()) \
+                or not math.isfinite(float(item.get(
+                    "safe_candidate_activation_max_abs", -1))) \
+                or float(item["safe_candidate_activation_max_abs"]) <= \
+                    float(tau_logprob) \
+                or not isinstance(raw, dict) \
+                or set(raw) != {"candidate_activation_max_abs", "restore_max_abs"} \
+                or any(not math.isfinite(float(value)) or float(value) < 0
+                       for value in raw.values()) \
+                or not isinstance(optimizer, dict) \
+                or set(optimizer) != {
+                    "kind", "lr", "betas", "weight_decay", "grad_clip",
+                    "step_calls", "grad_norm", "proposal_max_abs",
+                    "state_entry_counts",
+                } \
+                or optimizer.get("kind") != "AdamW" \
+                or float(optimizer.get("lr", -1)) != 1e-6 \
+                or optimizer.get("betas") != [0.9, 0.999] \
+                or float(optimizer.get("weight_decay", -1)) != 0.01 \
+                or float(optimizer.get("grad_clip", -1)) != 1.0 \
+                or int(optimizer.get("step_calls", -1)) != 1 \
+                or not math.isfinite(float(optimizer.get(
+                    "grad_norm", float("nan")))) \
+                or float(optimizer.get("grad_norm", -1)) <= 0 \
+                or not math.isfinite(float(optimizer.get(
+                    "proposal_max_abs", float("nan")))) \
+                or float(optimizer.get("proposal_max_abs", -1)) <= 0 \
+                or not isinstance(optimizer.get("state_entry_counts"), list) \
+                or len(optimizer["state_entry_counts"]) != 2 \
+                or any(not isinstance(value, int) or value <= 0
+                       for value in optimizer["state_entry_counts"]) \
+                or len(set(optimizer["state_entry_counts"])) != 1 \
+                or not isinstance(writeback, dict) \
+                or set(writeback) != {
+                    "safe_behavior", "safe_candidate",
+                    "safe_candidate_recommit", "safe_restore"} \
+                or any(not math.isfinite(float(value)) or float(value) < 0
+                       or float(value) >
+                       TRANSACTION_WRITEBACK_MAX_WALL_SECONDS
+                       for value in writeback.values()) \
+                or not isinstance(phases, list) \
+                or [phase.get("phase") for phase in phases] != phase_names:
+            raise ValueError("transaction closure semantics")
+        for phase in phases:
+            inventory = phase.get("execution_inventory")
+            if not isinstance(inventory, dict) \
+                    or int(inventory.get("unit_count", 0)) < 1 \
+                    or int(inventory.get("managed_unit_count", 0)) != \
+                        int(inventory.get("unit_count", -1)) \
+                    or inventory.get("training_states") != {
+                        "TrainingState.IDLE": int(inventory["unit_count"])} \
+                    or not isinstance(inventory.get("storage"), dict) \
+                    or not any(
+                        key.startswith("flat_param_data:torch.float32:cuda")
+                        and int(value.get("tensor_count", -1)) ==
+                            int(inventory["managed_unit_count"])
+                        and int(value.get("numel", 0)) > 0
+                        and int(value.get("allocated_bytes", 0)) > 0
+                        and int(value.get("nonzero_data_ptr_count", -1)) ==
+                            int(inventory["managed_unit_count"])
+                        for key, value in inventory["storage"].items()
+                        if isinstance(value, dict)):
+                raise ValueError("transaction closure execution inventory")
+        phase_by_name = {phase["phase"]: phase for phase in phases}
+        if phase_by_name["T0_behavior"].get("logprob_digest") != \
+                item["behavior_logprob_digest"] \
+                or float(phase_by_name["T1_after_backward"].get(
+                    "max_abs", -1)) != float(
+                        safe_errors["after_backward_max_abs"]) \
+                or float(phase_by_name["T2_after_real_optimizer_step"].get(
+                    "optimizer_proposal_max_abs", -1)) != float(
+                        optimizer["proposal_max_abs"]) \
+                or float(phase_by_name[
+                    "T3_legacy_raw_restore_diagnostic"].get(
+                        "candidate_activation_max_abs", -1)) != float(
+                            raw["candidate_activation_max_abs"]) \
+                or float(phase_by_name[
+                    "T3_legacy_raw_restore_diagnostic"].get(
+                        "restore_max_abs", -1)) != float(
+                            raw["restore_max_abs"]) \
+                or float(phase_by_name["T4_safe_behavior_writeback"].get(
+                    "max_abs", -1)) != float(
+                        safe_errors["safe_noop_writeback_max_abs"]) \
+                or float(phase_by_name["T5_safe_candidate_recommit"].get(
+                    "candidate_activation_max_abs", -1)) != float(
+                        item["safe_candidate_activation_max_abs"]) \
+                or float(phase_by_name["T5_safe_candidate_recommit"].get(
+                    "recommit_max_abs", -1)) != float(
+                        safe_errors["safe_candidate_recommit_max_abs"]) \
+                or float(phase_by_name["T6_safe_restore_fresh"].get(
+                    "max_abs", -1)) != float(
+                        safe_errors["safe_restore_max_abs"]) \
+                or float(phase_by_name["T6_safe_restore_fresh"].get(
+                    "second_forward_max_abs", -1)) != float(
+                        safe_errors["safe_second_forward_max_abs"]) \
+                or optimizer["state_entry_counts"][int(item["rank"])] != int(
+                    phase_by_name["T2_after_real_optimizer_step"]
+                    ["execution_inventory"]["managed_unit_count"]):
+            raise ValueError("transaction closure phase binding")
+    distributed_fields = (
+        "sequence_length", "active_tokens", "tau_logprob",
+        "writeback_max_wall_seconds", "writeback_wall_seconds",
+        "safe_errors", "safe_candidate_activation_max_abs",
+        "legacy_raw_copy_diagnostic", "optimizer_probe",
+    )
+    if any(closure[0].get(field) != closure[1].get(field)
+           for field in distributed_fields):
+        raise ValueError("transaction closure distributed binding")
+    return closure
 
 
 def main() -> None:
@@ -120,6 +289,16 @@ def main() -> None:
     if row.get("thresholds") != expected_thresholds \
             or float(observed["allreduce_max_abs"]) != 0.0:
         raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:threshold reconstruction")
+    if row.get("fsdp_parameter_commit_primitive") != \
+            FSDP_PARAMETER_COMMIT_PRIMITIVE:
+        raise SystemExit("RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:transaction closure identity")
+    try:
+        closure = validate_fsdp_transaction_closure(
+            row.get("fsdp_transaction_closure"),
+            tau_logprob=float(expected_thresholds["tau_logprob"]))
+    except (TypeError, ValueError) as error:
+        raise SystemExit(
+            "RWWPO2_NUMERIC_ORACLE_AUDIT_NO_GO:" + str(error)) from error
     gpu_pair = row.get("gpu_pair")
     binding = row.get("gpu_binding")
     if not isinstance(gpu_pair, list) or len(gpu_pair) != 2 \
@@ -157,6 +336,8 @@ def main() -> None:
         "oracle_report_sha256": declared, "thresholds": expected_thresholds,
         "gradient_sketch_chunk_elements": GRADIENT_SKETCH_CHUNK_ELEMENTS,
         "streamed_replay_calibration": row["streamed_replay_calibration"],
+        "fsdp_parameter_commit_primitive": FSDP_PARAMETER_COMMIT_PRIMITIVE,
+        "fsdp_transaction_closure": closure,
         "gpu_pair": gpu_pair, "gpu_binding": binding,
         "rank_state_inventory": state_inventory,
     }

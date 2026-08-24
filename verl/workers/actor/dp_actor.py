@@ -38,7 +38,9 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 from recurrent.research.rwwpo_transaction import (
-    ALPHA_GRID, RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS, digest,
+    ALPHA_GRID, RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE,
+    RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS,
+    RWWPO2_GRADIENT_SKETCH_CHUNK_ELEMENTS, digest,
     displacement_norm, largest_tested_feasible,
     local_gradient_sketch_sufficient_statistics,
     logical_transaction_seed, module_state_digest, named_buffer_snapshot,
@@ -47,6 +49,7 @@ from recurrent.research.rwwpo_transaction import (
     replay_with_rng_snapshots, restore_named_buffers, seed_transaction_rng,
     set_interpolated_parameters,
     set_stateless_proposal_lr, writer_logprob_rms_sufficient_statistics,
+    tensor_content_digest,
 )
 
 __all__ = ["DataParallelPPOActor"]
@@ -101,16 +104,49 @@ class DataParallelPPOActor(BasePPOActor):
             "rng": digest(rng_state),
         }
 
-    def _restore_local_optimizer_step(self, snapshot):
+    def _global_max_wall_seconds(self, started: float) -> float:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - started
+        if torch.distributed.is_initialized():
+            value = torch.tensor(
+                elapsed, dtype=torch.float64,
+                device=torch.cuda.current_device())
+            torch.distributed.all_reduce(
+                value, op=torch.distributed.ReduceOp.MAX)
+            elapsed = float(value.item())
+        return float(elapsed)
+
+    def _timed_set_interpolated_parameters(
+            self, before, proposed, alpha: float, *,
+            synchronize_fsdp: bool) -> float:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        started = time.perf_counter()
+        set_interpolated_parameters(
+            self.actor_module, before, proposed, alpha,
+            synchronize_fsdp=synchronize_fsdp)
+        return self._global_max_wall_seconds(started)
+
+    def _restore_local_optimizer_step(
+            self, snapshot, *, synchronize_fsdp=False):
         params, optimizer, scheduler, buffers = snapshot
-        with torch.no_grad():
-            for target, source in zip(self.actor_module.parameters(), params):
-                target.copy_(source.to(device=target.device, dtype=target.dtype))
+        if synchronize_fsdp:
+            writeback_wall_seconds = self._timed_set_interpolated_parameters(
+                params, params, 0.0, synchronize_fsdp=True)
+        else:
+            with torch.no_grad():
+                for target, source in zip(
+                        self.actor_module.parameters(), params):
+                    target.copy_(source.to(
+                        device=target.device, dtype=target.dtype))
+            writeback_wall_seconds = 0.0
         if buffers is not None:
             restore_named_buffers(self.actor_module, buffers)
         self.actor_optimizer.load_state_dict(optimizer)
         if scheduler is not None:
             self.actor_lr_scheduler.load_state_dict(scheduler)
+        return writeback_wall_seconds
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -342,6 +378,20 @@ class DataParallelPPOActor(BasePPOActor):
                     value = rwwpo_config.get(threshold)
                     if value is None or float(value) < 0:
                         raise ValueError(f"RWWPO-2 requires calibrated {threshold}")
+                if str(rwwpo_config.get(
+                        "fsdp_parameter_commit_primitive", "")) != \
+                        RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE:
+                    raise ValueError(
+                        "RWWPO-2 FSDP parameter commit primitive drift")
+                if float(rwwpo_config.get(
+                        "fsdp_parameter_writeback_max_wall_seconds", -1)) != \
+                        RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS:
+                    raise ValueError(
+                        "RWWPO-2 FSDP writeback wall-time contract drift")
+                if float(rwwpo_config.get(
+                        "max_trial_forward_wall_seconds", -1)) != 600.0:
+                    raise ValueError(
+                        "RWWPO-2 trial wall-time contract drift")
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
 
@@ -562,7 +612,17 @@ class DataParallelPPOActor(BasePPOActor):
                         finally:
                             restore_named_buffers(
                                 self.actor_module, transaction_entry_buffers)
-                    current_log_prob = torch.cat([item[1] for item in forwarded], dim=0).requires_grad_(True)
+                    current_log_prob = torch.cat(
+                        [item[1] for item in forwarded], dim=0
+                    ).requires_grad_(True)
+                    # Preserve an immutable behavior reference.  The live leaf
+                    # participates in multiple shadow/backward passes before the
+                    # commit certificate; this clone proves that no in-place
+                    # kernel or allocator alias silently rewrote the reference.
+                    behavior_current_logprob_cpu = \
+                        current_log_prob.detach().cpu().clone()
+                    behavior_current_logprob_digest = tensor_content_digest(
+                        behavior_current_logprob_cpu)
                     old_log_prob = joined("old_log_probs")
                     response_mask = joined("response_mask").bool()
                     final_mask = joined("final_mask").bool()
@@ -895,9 +955,31 @@ class DataParallelPPOActor(BasePPOActor):
                         chosen_payload = None
                         full_log_prob = None
                         candidates = alpha_grid if rwwpo_controller == "feasible_backtracking" else (1.0,)
+                        fsdp_writeback_wall_seconds = []
+                        fsdp_writeback_max_wall_seconds = float(
+                            rwwpo_config.get(
+                                "fsdp_parameter_writeback_max_wall_seconds",
+                                RWWPO2_FSDP_WRITEBACK_MAX_WALL_SECONDS))
                         trial_started = time.perf_counter()
                         for alpha in candidates:
-                            set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha)
+                            if rwwpo2_enabled:
+                                writeback_seconds = \
+                                    self._timed_set_interpolated_parameters(
+                                        snapshot[0], full_params, alpha,
+                                        synchronize_fsdp=True)
+                                fsdp_writeback_wall_seconds.append(
+                                    writeback_seconds)
+                                if writeback_seconds > \
+                                        fsdp_writeback_max_wall_seconds:
+                                    self._restore_local_optimizer_step(
+                                        snapshot, synchronize_fsdp=True)
+                                    restore_rng(transaction_entry_rng)
+                                    raise RuntimeError(
+                                        "RWWPO2_FSDP_WRITEBACK_BUDGET_EXCEEDED")
+                            else:
+                                set_interpolated_parameters(
+                                    self.actor_module, snapshot[0], full_params,
+                                    alpha, synchronize_fsdp=False)
                             if rwwpo2_enabled:
                                 with torch.no_grad():
                                     trial_log_prob = replay_behavior_log_probs()
@@ -934,10 +1016,14 @@ class DataParallelPPOActor(BasePPOActor):
                             if rwwpo_controller == "feasible_backtracking" and feasible:
                                 # Descending fixed grid: this is the largest tested feasible point.
                                 break
-                        trial_forward_wall_seconds = time.perf_counter() - trial_started
+                        trial_forward_wall_seconds = (
+                            self._global_max_wall_seconds(trial_started)
+                            if rwwpo2_enabled else
+                            time.perf_counter() - trial_started)
                         max_trial_seconds = float(rwwpo_config.get("max_trial_forward_wall_seconds", 600.0))
                         if trial_forward_wall_seconds > max_trial_seconds:
-                            self._restore_local_optimizer_step(snapshot)
+                            self._restore_local_optimizer_step(
+                                snapshot, synchronize_fsdp=rwwpo2_enabled)
                             restore_rng(transaction_entry_rng)
                             raise RuntimeError("RWWPO_TRIAL_FORWARD_BUDGET_EXCEEDED")
                         if rwwpo_controller == "feasible_backtracking":
@@ -952,17 +1038,30 @@ class DataParallelPPOActor(BasePPOActor):
                         else:
                             accepted = not proposal_zero
                             alpha_committed = 1.0 if accepted else 0.0
-                        if accepted:
-                            set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha_committed)
-                        else:
-                            self._restore_local_optimizer_step(snapshot)
+                        if not accepted:
+                            restore_seconds = self._restore_local_optimizer_step(
+                                snapshot, synchronize_fsdp=rwwpo2_enabled)
+                            if rwwpo2_enabled:
+                                fsdp_writeback_wall_seconds.append(
+                                    restore_seconds)
                             restore_rng(transaction_entry_rng)
+                            if rwwpo2_enabled and restore_seconds > \
+                                    fsdp_writeback_max_wall_seconds:
+                                raise RuntimeError(
+                                    "RWWPO2_FSDP_WRITEBACK_BUDGET_EXCEEDED")
+                        # On acceptance the final tested feasible alpha is
+                        # already the exact committed parameter state.  Do not
+                        # pay for a redundant second full-model writeback; the
+                        # independent fresh forward below is the commit
+                        # certificate, while the pre-R50 oracle separately
+                        # proves repeated writeback idempotence.
                         # All ranks must make the same transactional decision.
                         if torch.distributed.is_initialized():
                             decisions = [None] * torch.distributed.get_world_size()
                             torch.distributed.all_gather_object(decisions, alpha_committed)
                             if len(set(decisions)) != 1:
-                                self._restore_local_optimizer_step(snapshot)
+                                self._restore_local_optimizer_step(
+                                    snapshot, synchronize_fsdp=rwwpo2_enabled)
                                 restore_rng(transaction_entry_rng)
                                 raise RuntimeError("RWWPO_RANK_DECISION_DRIFT")
                         if rwwpo2_enabled:
@@ -973,6 +1072,29 @@ class DataParallelPPOActor(BasePPOActor):
                             # This is especially important for alpha=0: a stale
                             # cached behavior tensor can otherwise conceal
                             # forward-mutated state until the next inner update.
+                            behavior_reference_log_prob = \
+                                behavior_current_logprob_cpu.to(
+                                    device=current_log_prob.device,
+                                    dtype=current_log_prob.dtype)
+                            behavior_current_logprob_integrity_max_abs = float((
+                                current_log_prob.detach()
+                                - behavior_reference_log_prob
+                            )[response_mask].abs().max().item())
+                            if torch.distributed.is_initialized():
+                                behavior_integrity_delta = torch.tensor(
+                                    behavior_current_logprob_integrity_max_abs,
+                                    dtype=torch.float64,
+                                    device=torch.cuda.current_device())
+                                torch.distributed.all_reduce(
+                                    behavior_integrity_delta,
+                                    op=torch.distributed.ReduceOp.MAX)
+                                behavior_current_logprob_integrity_max_abs = \
+                                    float(behavior_integrity_delta.item())
+                            behavior_current_logprob_integrity_verified = (
+                                behavior_current_logprob_integrity_max_abs == 0.0
+                                and tensor_content_digest(
+                                    current_log_prob.detach()) ==
+                                behavior_current_logprob_digest)
                             with torch.no_grad():
                                 verified_post_log_prob = \
                                     replay_behavior_log_probs()
@@ -999,7 +1121,7 @@ class DataParallelPPOActor(BasePPOActor):
                             post_prefix_stats = build_global_stats(post_prefix_rows)
                             reference_post_log_prob = (
                                 chosen_payload[0] if accepted
-                                else current_log_prob.detach())
+                                else behavior_reference_log_prob)
                             post_verification_max_abs = float((
                                 verified_post_log_prob - reference_post_log_prob
                             )[response_mask].detach().abs().max().item())
@@ -1017,6 +1139,7 @@ class DataParallelPPOActor(BasePPOActor):
                                        for row in post_prefix_stats))
                             post_verification_pass = (
                                 post_constraint_valid
+                                and behavior_current_logprob_integrity_verified
                                 and post_verification_max_abs <= float(
                                     rwwpo_config["tau_logprob"]))
                             if not post_verification_pass:
@@ -1036,6 +1159,22 @@ class DataParallelPPOActor(BasePPOActor):
                                         behavior_forward_rng_aggregate_digest,
                                     "replay_microbatch_count": len(forwarded),
                                     "replay_rng_bound": True,
+                                    "behavior_current_logprob_digest":
+                                        behavior_current_logprob_digest,
+                                    "behavior_current_logprob_integrity_max_abs":
+                                        behavior_current_logprob_integrity_max_abs,
+                                    "behavior_current_logprob_integrity_verified":
+                                        behavior_current_logprob_integrity_verified,
+                                    "fsdp_parameter_commit_primitive":
+                                        RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE,
+                                    "fsdp_parameter_writeback_max_wall_seconds":
+                                        fsdp_writeback_max_wall_seconds,
+                                    "fsdp_parameter_writeback_wall_seconds":
+                                        fsdp_writeback_wall_seconds,
+                                    "trial_forward_wall_seconds":
+                                        trial_forward_wall_seconds,
+                                    "max_trial_forward_wall_seconds":
+                                        max_trial_seconds,
                                     "verified_post_prefix_stats":
                                         post_prefix_stats,
                                 }
@@ -1063,7 +1202,8 @@ class DataParallelPPOActor(BasePPOActor):
                                     transaction_entry_buffer_digest=
                                         transaction_entry_buffer_digest,
                                     diagnostics=diagnostic)
-                                self._restore_local_optimizer_step(snapshot)
+                                self._restore_local_optimizer_step(
+                                    snapshot, synchronize_fsdp=True)
                                 restore_rng(transaction_entry_rng)
                                 raise RuntimeError(
                                     "RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE")
@@ -1146,7 +1286,10 @@ class DataParallelPPOActor(BasePPOActor):
                             max(displacement_values[1].sqrt().item(),1e-30))
                     local_writer_mse_sum, local_writer_trajectory_count = (
                         writer_logprob_rms_sufficient_statistics(
-                            post_log_prob, current_log_prob, writer_mask,
+                            post_log_prob, (
+                                behavior_reference_log_prob
+                                if rwwpo2_enabled else current_log_prob),
+                            writer_mask,
                             joined("sample_index")))
                     writer_sums=torch.tensor([
                         local_writer_mse_sum, float(local_writer_trajectory_count),
@@ -1166,7 +1309,12 @@ class DataParallelPPOActor(BasePPOActor):
                             ),
                         }
                     from recurrent.research.rwwpo_ledger import append_actual_loss_record
-                    behavior_point_max_delta=float((current_log_prob-old_log_prob)[response_mask].abs().max().item())
+                    behavior_point_log_prob = (
+                        behavior_reference_log_prob
+                        if rwwpo2_enabled else current_log_prob)
+                    behavior_point_max_delta=float((
+                        behavior_point_log_prob-old_log_prob
+                    )[response_mask].abs().max().item())
                     if torch.distributed.is_initialized():
                         worst=torch.tensor(behavior_point_max_delta,dtype=torch.float64,
                                            device=torch.cuda.current_device())
@@ -1176,7 +1324,10 @@ class DataParallelPPOActor(BasePPOActor):
                         ledger_dir=rwwpo_config.get("ledger_dir"), attempt_id=rwwpo_config.get("attempt_id"),
                         mode="original_collection" if rwwpo_collect_original else "rwwpo_method", rank=rank,
                         global_step=int(joined("rwwpo_global_step")[0].item()), epoch=epoch,
-                        minibatch=batch_idx, old_log_prob=old_log_prob, current_log_prob=current_log_prob,
+                        minibatch=batch_idx, old_log_prob=old_log_prob,
+                        current_log_prob=(
+                            behavior_reference_log_prob
+                            if rwwpo2_enabled else current_log_prob),
                         ref_log_prob=(joined("ref_log_prob") if rwwpo2_enabled else None),
                         proposed_post_log_prob=full_log_prob if rwwpo_enabled else post_log_prob,
                         committed_log_prob=post_log_prob, response_mask=response_mask,
@@ -1264,6 +1415,25 @@ class DataParallelPPOActor(BasePPOActor):
                                 behavior_forward_rng_aggregate_digest,
                             "replay_microbatch_count": len(forwarded),
                             "replay_rng_bound": True,
+                            "behavior_current_logprob_digest":
+                                behavior_current_logprob_digest,
+                            "behavior_current_logprob_integrity_max_abs": float(
+                                behavior_current_logprob_integrity_max_abs
+                                if rwwpo2_enabled else 0.0),
+                            "behavior_current_logprob_integrity_verified": bool(
+                                behavior_current_logprob_integrity_verified
+                                if rwwpo2_enabled else True),
+                            "fsdp_parameter_commit_primitive": (
+                                RWWPO2_FSDP_PARAMETER_COMMIT_PRIMITIVE
+                                if rwwpo2_enabled else "legacy_raw_shard_copy"),
+                            "fsdp_parameter_writeback_max_wall_seconds": (
+                                fsdp_writeback_max_wall_seconds
+                                if rwwpo2_enabled else 0.0),
+                            "fsdp_parameter_writeback_wall_seconds": (
+                                fsdp_writeback_wall_seconds
+                                if rwwpo2_enabled else []),
+                            "max_trial_forward_wall_seconds": (
+                                max_trial_seconds if rwwpo2_enabled else 0.0),
                             "terminal_rng_digest": commit_digests["rng"],
                             "inner1_exposure": rwwpo2_inner1_exposure,
                         }, gradient_norm=float(grad_norm.detach().item()),

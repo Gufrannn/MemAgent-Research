@@ -68,6 +68,8 @@ actor_rollout_ref:
       behavior_gradient_tolerance: 1.0e-7
       behavior_coefficient_tolerance: 1.0e-9
       gradient_sketch_chunk_elements: 8388608
+      fsdp_parameter_commit_primitive: legacy_raw_shard_copy
+      fsdp_parameter_writeback_max_wall_seconds: 120.0
       tau_theta: null
       tau_logprob: null
       tau_gradient: null
