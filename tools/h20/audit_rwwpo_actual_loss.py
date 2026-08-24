@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 import torch
 
 from recurrent.research.rwwpo_transaction import (
-    largest_tested_feasible, logical_transaction_seed,
+    digest, largest_tested_feasible, logical_transaction_seed,
     prefix_distribution_stats, proposal_clock,
 )
 
@@ -158,6 +158,18 @@ def validate_rwwpo2_rng_phase_digests(row):
             and diagnostics["terminal_rng_digest"] != \
                 diagnostics["transaction_entry_rng_digest"]:
         raise ValueError("RWWPO-2 rejected transaction RNG rollback")
+    replay_digests = diagnostics.get("behavior_forward_rng_digests")
+    replay_aggregate = diagnostics.get(
+        "behavior_forward_rng_aggregate_digest")
+    if diagnostics.get("replay_rng_bound") is not True \
+            or not isinstance(replay_digests, list) or not replay_digests \
+            or any(not isinstance(value, str) or re.fullmatch(
+                r"[0-9a-f]{64}", value) is None for value in replay_digests) \
+            or diagnostics.get("replay_microbatch_count") != len(replay_digests) \
+            or not isinstance(replay_aggregate, str) \
+            or re.fullmatch(r"[0-9a-f]{64}", replay_aggregate) is None \
+            or replay_aggregate != digest(replay_digests):
+        raise ValueError("RWWPO-2 behavior replay RNG binding")
 
 
 def hydrate_authenticated_v3_receipt(receipt, ledger_path):

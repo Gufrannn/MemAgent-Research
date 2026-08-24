@@ -8,9 +8,10 @@ import torch
 from recurrent.research.rwwpo_transaction import (
     ALPHA_GRID, digest, displacement_norm, largest_tested_feasible,
     logical_transaction_seed, module_state_digest, named_buffer_snapshot,
-    off_behavior_exposed, parameter_snapshot,
+    off_behavior_exposed, ordered_rng_state_digests, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, set_interpolated_parameters,
-    restore_named_buffers, restore_rng, rng_snapshot, seed_transaction_rng,
+    replay_with_rng_snapshots, restore_named_buffers, restore_rng, rng_snapshot,
+    seed_transaction_rng,
     stateless_proposal_lr,
     writer_logprob_rms,
 )
@@ -156,6 +157,69 @@ def test_reject_restores_complete_pre_reseed_transaction_rng_state():
     restore_rng(entry)
     assert draw_all() == expected
     assert "numpy" in entry and "torch_cpu" in entry and "python" in entry
+
+
+def test_seven_segment_stochastic_replay_uses_each_behavior_rng_and_is_neutral():
+    random.seed(101)
+    np.random.seed(103)
+    torch.manual_seed(107)
+    dropout = torch.nn.Dropout(p=0.4).train()
+
+    def stochastic_forward(payload):
+        return (
+            payload,
+            random.random(),
+            float(np.random.random()),
+            dropout(torch.full((16,), float(payload + 1))),
+        )
+
+    behavior = []
+    schedule = []
+    for payload in range(7):
+        state = rng_snapshot()
+        schedule.append(state)
+        behavior.append(stochastic_forward(payload))
+
+    # The diagnostic replay starts from, and must return to, an unrelated
+    # algorithmic terminal RNG state.
+    stochastic_forward(991)
+    terminal_digest = digest(rng_snapshot())
+    replayed = replay_with_rng_snapshots(
+        list(zip(range(7), schedule)), stochastic_forward)
+    assert digest(rng_snapshot()) == terminal_digest
+    for expected, actual in zip(behavior, replayed):
+        assert expected[:3] == actual[:3]
+        torch.testing.assert_close(expected[3], actual[3], rtol=0, atol=0)
+
+    # One whole-sequence restore cannot substitute for the ordered snapshots.
+    wrong = replay_with_rng_snapshots(
+        [(payload, schedule[0]) for payload in range(7)], stochastic_forward)
+    assert any(not torch.equal(expected[3], actual[3])
+               for expected, actual in zip(behavior[1:], wrong[1:]))
+
+    digests = ordered_rng_state_digests(schedule)
+    assert len(digests) == 7
+    assert digest(digests) != digest(list(reversed(digests)))
+
+
+def test_stochastic_replay_restores_terminal_rng_when_forward_raises():
+    torch.manual_seed(211)
+    schedule = []
+    for _ in range(3):
+        schedule.append(rng_snapshot())
+        torch.rand(4)
+    terminal_digest = digest(rng_snapshot())
+
+    def failing_forward(payload):
+        torch.rand(4)
+        if payload == 1:
+            raise RuntimeError("synthetic replay failure")
+        return payload
+
+    with pytest.raises(RuntimeError, match="synthetic replay failure"):
+        replay_with_rng_snapshots(
+            list(zip(range(3), schedule)), failing_forward)
+    assert digest(rng_snapshot()) == terminal_digest
 
 
 def test_exposure_requires_parameter_and_writer_movement():

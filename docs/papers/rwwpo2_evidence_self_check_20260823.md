@@ -16,20 +16,28 @@ root stopped before GPU work at 139/140 PASS: one synthetic fixture reused the
 fresh committed-forward prefix rows as the cached trial prefix rows even though
 their tensors intentionally differed by `5e-7`. The formal auditor correctly
 rejected that contradiction. The fixture correction separates trial and
-committed certificates; it still requires a new exact-commit authenticated
-suite. There is one completed round in the failed `a512741...` training attempt,
-but no valid R50 mechanism endpoint and no R400 performance result currently
-exist.
+committed certificates. Commit
+`eab35b9d390a30f9c8b2e4696dfaf94988e6ffe4` passed its authenticated pre-R50
+gates and began a fresh B/seed-2026 R50 attempt. That attempt completed six full
+rounds, then failed closed during round-7 inner-2 with
+`RWWPO2_POST_COMMIT_FORWARD_CLOSURE_FAILURE`. The alpha-zero committed-state
+forward differed from its behavior reference by `1.0065193176269531`, far above
+the frozen `tau_logprob=1e-6`. The failed root is `NO_GO` and cannot be resumed
+or reused. No valid R50 mechanism endpoint and no R400 performance result
+currently exist.
 
 The latest failed training attempt is preserved at
-`/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_a512741_r1`;
-its operator log is
-`/data/cw/memagent_work/logs/rwwpo2_B_2026_a512741.screen.log`. The read-only
-ledger reconstruction found exactly three actual-loss receipts and six
-intent/complete markers per rank: round-1 inner-1 committed alpha 1, round-1
-inner-2 committed alpha 0.25, and round-2 inner-1 committed alpha 0 before
-round-2 inner-2 failed its behavior precondition. These counts diagnose the
-implementation failure; they are not a completed R50 result.
+`/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
+its operator pipeline log is
+`/data/cw/memagent_work/logs/rwwpo2_b540521_B_2026_pipeline.log` (the stale
+`b540521` substring is an operator-facing screen/log label, not the authenticated
+experiment commit). Read-only failure output localizes the defect to replay RNG:
+behavior materialization saved a distinct RNG snapshot for each microbatch, but
+alpha trials and the fresh committed-state certificate restored only the single
+post-gradient RNG before replaying the entire sequence. The alpha-zero check
+therefore did not use the same stochastic transition as the behavior forward.
+These partial rounds diagnose an implementation failure; they are not a
+completed R50 result.
 
 ## 1. Training-budget interpretation
 
@@ -81,7 +89,7 @@ by the frozen S128 resolved manifest. It emits counts and hashes only—never ra
 questions, contexts, or outcomes.
 
 The most recent authenticated H20 data-boundary report is
-`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_a512741_r1/data_boundary.json`.
+`/data/cw/memagent_work/logs/rwwpo2_evidence/rwwpo2_evidence_eab35b9_r1/data_boundary.json`.
 It reports the same frozen intersection counts below, but remains historical
 commit-bound evidence and must be regenerated after any source commit:
 
@@ -116,7 +124,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Two later R50 attempts are implementation-failure evidence only: the first stopped before any commit; the `a512741...` attempt completed round 1 but has no valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The latest failure localized a complete-state defect: alpha-zero restored parameter/optimizer/RNG state but did not bind all model buffers, and its post certificate reused a cached tensor. The correction must pass new exact-commit tests, numeric oracle and independent review before a fresh-base B/seed2026 R50 restart. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; `eab35b9...` completed six full rounds but has no valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The latest failure localized an ordered replay defect: trial/fresh forwards ignored the distinct behavior RNG snapshot saved for each microbatch. The correction must pass new exact-commit tests, numeric oracle and independent review before a fresh-base B/seed2026 R50 restart. |
 
 ## 5. Reproducible read-only H20 entry
 
@@ -146,6 +154,6 @@ mkdir "$RWWPO2_AUDIT_ROOT"
 Required report location is the absolute path printed by the command. Its
 `git_commit`, file SHA, signed `report_sha256`, intersection counts, and PASS or
 NO-GO decision must be copied into the run's P0. The command is retained as a
-reproducibility entry. The `a512741...` report is historical authenticated
+reproducibility entry. The `eab35b9...` report is historical authenticated
 pre-R50 evidence only; a source change requires a new commit-bound report and
 may not inherit its PASS.

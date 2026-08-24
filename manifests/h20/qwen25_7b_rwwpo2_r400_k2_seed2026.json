@@ -2,7 +2,7 @@
   "schema_version": 3,
   "program": "RWWPO-2",
   "branch": "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822",
-  "status": "IMPLEMENTED_STATIC_RELEASE_GO_NO_H20",
+  "status": "H20_ATTEMPTS_NO_GO_NO_SCIENTIFIC_RESULT",
   "method_cells": {
     "D": {"objective_variant": "original_tokenwise", "controller_variant": "none"},
     "C": {"objective_variant": "original_tokenwise", "controller_variant": "feasible_backtracking"},

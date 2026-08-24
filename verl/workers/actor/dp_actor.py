@@ -42,9 +42,10 @@ from recurrent.research.rwwpo_transaction import (
     displacement_norm, largest_tested_feasible,
     local_gradient_sketch_sufficient_statistics,
     logical_transaction_seed, module_state_digest, named_buffer_snapshot,
-    off_behavior_exposed, parameter_snapshot,
+    off_behavior_exposed, ordered_rng_state_digests, parameter_snapshot,
     prefix_distribution_stats, proposal_clock, relative_displacement_norm, restore_rng, rng_snapshot,
-    restore_named_buffers, seed_transaction_rng, set_interpolated_parameters,
+    replay_with_rng_snapshots, restore_named_buffers, seed_transaction_rng,
+    set_interpolated_parameters,
     set_stateless_proposal_lr, writer_logprob_rms_sufficient_statistics,
 )
 
@@ -531,8 +532,36 @@ class DataParallelPPOActor(BasePPOActor):
                                 micro_batch=micro_data, temperature=temperature,
                                 calculate_entropy=False)
                         forwarded.append((micro_data, current.detach(), forward_rng))
+                    behavior_forward_rng_digests = ordered_rng_state_digests(
+                        item[2] for item in forwarded)
+                    behavior_forward_rng_aggregate_digest = digest(
+                        behavior_forward_rng_digests)
                     def joined(key):
                         return torch.cat([item[0][key] for item in forwarded], dim=0)
+                    def replay_behavior_log_probs():
+                        """Replay the frozen behavior microbatch RNG schedule.
+
+                        RWWPO-2 restores entry buffers once, then replays the
+                        ordered microbatches under the exact RNG snapshot that
+                        preceded each behavior forward.  The transaction helper
+                        restores the algorithmic terminal RNG in ``finally``.
+                        """
+                        if not rwwpo2_enabled:
+                            raise RuntimeError(
+                                "RWWPO2_REPLAY_USED_OUTSIDE_RWWPO2")
+                        restore_named_buffers(
+                            self.actor_module, transaction_entry_buffers)
+                        try:
+                            return torch.cat(replay_with_rng_snapshots(
+                                [(item[0], item[2]) for item in forwarded],
+                                lambda micro_data: self._forward_micro_batch(
+                                    micro_batch=micro_data,
+                                    temperature=temperature,
+                                    calculate_entropy=False)[1],
+                            ), dim=0)
+                        finally:
+                            restore_named_buffers(
+                                self.actor_module, transaction_entry_buffers)
                     current_log_prob = torch.cat([item[1] for item in forwarded], dim=0).requires_grad_(True)
                     old_log_prob = joined("old_log_probs")
                     response_mask = joined("response_mask").bool()
@@ -713,8 +742,16 @@ class DataParallelPPOActor(BasePPOActor):
                                     "q_min": q_min,
                                     "root_q_min": root_q_min,
                                     "writer_log_ratio_cap": ratio_cap,
+                                    "behavior_forward_rng_digests":
+                                        behavior_forward_rng_digests,
+                                    "behavior_forward_rng_aggregate_digest":
+                                        behavior_forward_rng_aggregate_digest,
+                                    "replay_microbatch_count": len(forwarded),
                                 })
                         self.actor_optimizer.zero_grad()
+                        if rwwpo2_enabled:
+                            restore_named_buffers(
+                                self.actor_module, transaction_entry_buffers)
                         restore_rng(transaction_entry_rng)
                         raise RuntimeError("RWWPO_PREFIX_TRUST_REGION_VIOLATION: update refused before optimizer step")
                     def stream_parameter_gradient(coefficient):
@@ -862,14 +899,17 @@ class DataParallelPPOActor(BasePPOActor):
                         for alpha in candidates:
                             set_interpolated_parameters(self.actor_module, snapshot[0], full_params, alpha)
                             if rwwpo2_enabled:
-                                restore_named_buffers(
-                                    self.actor_module, transaction_entry_buffers)
-                            restore_rng(proposal_gradient_rng)
+                                with torch.no_grad():
+                                    trial_log_prob = replay_behavior_log_probs()
+                            else:
+                                restore_rng(proposal_gradient_rng)
+                                with torch.no_grad():
+                                    trial_log_prob = torch.cat([
+                                        self._forward_micro_batch(
+                                            item[0], temperature=temperature,
+                                            calculate_entropy=False)[1]
+                                        for item in forwarded], dim=0)
                             with torch.no_grad():
-                                trial_log_prob = torch.cat([
-                                    self._forward_micro_batch(item[0], temperature=temperature,
-                                                              calculate_entropy=False)[1]
-                                    for item in forwarded], dim=0)
                                 _, trial_metrics = compute_rwwpo_policy_loss(
                                     old_log_prob, trial_log_prob, joined("advantages"), response_mask,
                                     writer_mask, final_mask, joined("sample_index"), joined("trajectory_turn"),
@@ -933,17 +973,9 @@ class DataParallelPPOActor(BasePPOActor):
                             # This is especially important for alpha=0: a stale
                             # cached behavior tensor can otherwise conceal
                             # forward-mutated state until the next inner update.
-                            restore_named_buffers(
-                                self.actor_module, transaction_entry_buffers)
-                            post_verification_terminal_rng = rng_snapshot()
-                            restore_rng(proposal_gradient_rng)
                             with torch.no_grad():
-                                verified_post_log_prob = torch.cat([
-                                    self._forward_micro_batch(
-                                        item[0], temperature=temperature,
-                                        calculate_entropy=False)[1]
-                                    for item in forwarded
-                                ], dim=0)
+                                verified_post_log_prob = \
+                                    replay_behavior_log_probs()
                                 _, verified_post_metrics = compute_rwwpo_policy_loss(
                                     old_log_prob, verified_post_log_prob,
                                     joined("advantages"), response_mask,
@@ -960,7 +992,6 @@ class DataParallelPPOActor(BasePPOActor):
                                         if rwwpo_objective != "original_tokenwise"
                                         else "whole_prefix"),
                                 )
-                            restore_rng(post_verification_terminal_rng)
                             restore_named_buffers(
                                 self.actor_module, transaction_entry_buffers)
                             post_prefix_rows = with_root_identities(
@@ -999,6 +1030,12 @@ class DataParallelPPOActor(BasePPOActor):
                                         post_verification_max_abs,
                                     "tau_logprob": float(
                                         rwwpo_config["tau_logprob"]),
+                                    "behavior_forward_rng_digests":
+                                        behavior_forward_rng_digests,
+                                    "behavior_forward_rng_aggregate_digest":
+                                        behavior_forward_rng_aggregate_digest,
+                                    "replay_microbatch_count": len(forwarded),
+                                    "replay_rng_bound": True,
                                     "verified_post_prefix_stats":
                                         post_prefix_stats,
                                 }
@@ -1221,6 +1258,12 @@ class DataParallelPPOActor(BasePPOActor):
                             "logical_seeded_rng_digest": digest(logical_seeded_rng),
                             "proposal_gradient_rng_digest": digest(
                                 proposal_gradient_rng),
+                            "behavior_forward_rng_digests":
+                                behavior_forward_rng_digests,
+                            "behavior_forward_rng_aggregate_digest":
+                                behavior_forward_rng_aggregate_digest,
+                            "replay_microbatch_count": len(forwarded),
+                            "replay_rng_bound": True,
                             "terminal_rng_digest": commit_digests["rng"],
                             "inner1_exposure": rwwpo2_inner1_exposure,
                         }, gradient_norm=float(grad_norm.detach().item()),

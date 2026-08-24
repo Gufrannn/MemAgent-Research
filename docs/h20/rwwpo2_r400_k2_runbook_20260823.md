@@ -250,7 +250,12 @@ recovery checkpoints at 10/20/30/40/50 with only 40 and 50 retained, and
 immutable actor anchors at 5/10/15/20/25/50. Training never invokes validation.
 Every transaction receipt must bind a fresh post-commit/post-rollback forward
 certificate to the resolved `tau_logprob`; cached trial or pre-update tensors
-are not admissible post-state evidence.
+are not admissible post-state evidence. Behavior materialization records an RNG
+snapshot before each ordered microbatch. Every alpha trial and fresh certificate
+must replay that exact ordered RNG schedule from the entry buffer snapshot while
+preserving the algorithmic terminal RNG. Receipts bind the ordered snapshot
+digest vector, aggregate digest, count, and replay declaration; omission,
+reordering, count drift, or aggregate drift is `NO_GO`.
 
 ## 6. Attempt audit and failure recovery
 

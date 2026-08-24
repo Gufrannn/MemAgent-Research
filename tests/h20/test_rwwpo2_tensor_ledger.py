@@ -10,7 +10,7 @@ from recurrent.research.rwwpo_ledger import (
     tensor_shard_inventory,
 )
 from recurrent.research.rwwpo_transaction import (
-    logical_transaction_seed, prefix_distribution_stats, proposal_clock,
+    digest, logical_transaction_seed, prefix_distribution_stats, proposal_clock,
 )
 from tools.h20.audit_rwwpo_actual_loss import (
     audit, canonical_sha, hydrate_authenticated_v3_receipt,
@@ -69,6 +69,7 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
         policy_loss=float(expected_policy_loss.item())
     pre_digests=_digest_state("a")
     commit_digests=_digest_state("b") if active else dict(pre_digests)
+    behavior_forward_rng_digests = ["8"*64, "9"*64]
     append_actual_loss_record(
         ledger_dir=root,attempt_id="rwwpo2_test",mode="rwwpo_method",rank=rank,
         global_step=1,epoch=inner-1,minibatch=0,old_log_prob=old,
@@ -113,6 +114,13 @@ def _append_round(root, rank, inner, *, active=True, policy_loss=None,
                                "transaction_entry_rng_digest":pre_digests["rng"],
                                "logical_seeded_rng_digest":"c"*64,
                                "proposal_gradient_rng_digest":"d"*64,
+                               "behavior_forward_rng_digests":
+                                   behavior_forward_rng_digests,
+                               "behavior_forward_rng_aggregate_digest":digest(
+                                   behavior_forward_rng_digests),
+                               "replay_microbatch_count":len(
+                                   behavior_forward_rng_digests),
+                               "replay_rng_bound":True,
                                "terminal_rng_digest":commit_digests["rng"],
                                "shadow_coefficients":{},
                                "inner1_exposure":{
@@ -382,6 +390,39 @@ def test_v3_missing_rng_phase_digest_is_rejected_after_receipt_rehash(tmp_path):
     _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].pop(
         "transaction_entry_rng_digest"))
     with pytest.raises(ValueError,match="receipt schema failure"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_missing_behavior_replay_rng_binding_is_rejected_after_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].pop(
+        "behavior_forward_rng_digests"))
+    with pytest.raises(ValueError,match="receipt schema failure"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_reordered_behavior_replay_rng_schedule_is_rejected_after_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"]
+        ["behavior_forward_rng_digests"].reverse())
+    with pytest.raises(ValueError,match="behavior replay RNG binding"):
+        audit([tmp_path/"actual_loss_rank0.jsonl",path])
+
+
+def test_v3_behavior_replay_rng_count_is_rejected_after_rehash(tmp_path):
+    for inner in (1,2):
+        for rank in (0,1):
+            _append_round(tmp_path,rank,inner)
+    path=tmp_path/"actual_loss_rank1.jsonl"
+    _tamper_last_receipt(path,lambda row: row["mechanism_diagnostics"].update(
+        replay_microbatch_count=1))
+    with pytest.raises(ValueError,match="behavior replay RNG binding"):
         audit([tmp_path/"actual_loss_rank0.jsonl",path])
 
 

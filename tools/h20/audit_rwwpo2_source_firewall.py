@@ -105,6 +105,10 @@ def main():
         "named_buffer_snapshot(self.actor_module)",
         "if rwwpo2_enabled else None",
         "restore_named_buffers(",
+        "behavior_forward_rng_digests = ordered_rng_state_digests(",
+        "def replay_behavior_log_probs():",
+        "replay_with_rng_snapshots(",
+        '"replay_rng_bound": True',
         "post_commit_forward_verified = True",
         'rwwpo_controller == "none"',
         "post_constraint_valid",
@@ -144,16 +148,27 @@ def main():
                   "invalid canonical backtracking evidence",
                   "validate_rwwpo2_rng_phase_digests",
                   "RWWPO-2 RNG phase digest closure",
-                  "RWWPO-2 rejected transaction RNG rollback"):
+                  "RWWPO-2 rejected transaction RNG rollback",
+                  "RWWPO-2 behavior replay RNG binding"):
         if token not in actual_auditor:
             violations.append("actual-loss independent audit:"+token)
     if '"actual_loss_contract"' not in actor_source:
         violations.append("actual-loss producer:actual_loss_contract")
+    receipt_schema=(ROOT/"rwwpo2_actual_loss_receipt.schema.json").read_text(
+        encoding="utf-8")
+    for token in ('"behavior_forward_rng_digests"',
+                  '"behavior_forward_rng_aggregate_digest"',
+                  '"replay_microbatch_count"', '"replay_rng_bound"'):
+        if token not in receipt_schema:
+            violations.append("actual-loss replay RNG schema:"+token)
     transaction_source=(ROOT/"recurrent/research/rwwpo_transaction.py").read_text(
         encoding="utf-8")
     for token in ("np.random.seed", "np.random.get_state", "np.random.set_state",
                   '"torch_cuda"', "def named_buffer_snapshot(",
-                  "def restore_named_buffers(", "def module_state_digest("):
+                  "def restore_named_buffers(", "def module_state_digest(",
+                  "def ordered_rng_state_digests(",
+                  "def replay_with_rng_snapshots(",
+                  "finally:\n        restore_rng(terminal)"):
         if token not in transaction_source:
             violations.append("complete transaction RNG:"+token)
     seed_signature=transaction_source.split("def logical_transaction_seed",1)

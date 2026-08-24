@@ -117,6 +117,10 @@ def test_actor_source_has_one_counted_step_per_inner_and_frozen_batch():
     assert "named_buffer_snapshot(self.actor_module)" in source
     assert "if rwwpo2_enabled else None" in source
     assert "restore_named_buffers(" in source
+    assert "behavior_forward_rng_digests = ordered_rng_state_digests(" in source
+    assert "def replay_behavior_log_probs():" in source
+    assert "replay_with_rng_snapshots(" in source
+    assert '"replay_rng_bound": True' in source
     assert "post_commit_forward_verified = True" in source
     assert 'rwwpo_controller == "none"' in source
     assert "post_constraint_valid" in source
@@ -157,6 +161,34 @@ def test_attempt_id_cannot_enter_logical_seed_or_algorithmic_randomness():
     launcher = (ROOT / "scripts/h20/rwwpo2_common.sh").read_text()
     assert "RWWPO_ATTEMPT_ID=$RWWPO_RUN_ID" in launcher
     assert "RUN_SEED" not in launcher.split("rwwpo2_export_runtime", 1)[1]
+
+
+def test_trial_and_fresh_certificates_use_behavior_microbatch_rng_replay():
+    actor = (ROOT / "verl/workers/actor/dp_actor.py").read_text()
+    transaction = (ROOT / "recurrent/research/rwwpo_transaction.py").read_text()
+    schema = (ROOT / "rwwpo2_actual_loss_receipt.schema.json").read_text()
+    helper = actor.split("def replay_behavior_log_probs():", 1)[1].split(
+        "current_log_prob =", 1)[0]
+    trial = actor.split("for alpha in candidates:", 1)[1].split(
+        "trial_prefix_rows =", 1)[0]
+    trial_rwwpo2 = trial.split("if rwwpo2_enabled:", 1)[1].split(
+        "else:", 1)[0]
+    fresh = actor.split(
+        "# A trial tensor is not a commit certificate.", 1)[1].split(
+            "post_prefix_rows =", 1)[0]
+    assert "restore_named_buffers(" in helper
+    assert "replay_with_rng_snapshots(" in helper
+    assert "finally:" in helper
+    assert "replay_behavior_log_probs()" in trial_rwwpo2
+    assert "restore_rng(proposal_gradient_rng)" not in trial_rwwpo2
+    assert "replay_behavior_log_probs()" in fresh
+    assert "restore_rng(proposal_gradient_rng)" not in fresh
+    assert "def ordered_rng_state_digests(" in transaction
+    assert "finally:\n        restore_rng(terminal)" in transaction
+    for field in ("behavior_forward_rng_digests",
+                  "behavior_forward_rng_aggregate_digest",
+                  "replay_microbatch_count", "replay_rng_bound"):
+        assert field in schema
 
 
 def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():

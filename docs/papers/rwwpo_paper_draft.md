@@ -8,13 +8,14 @@
 > The old K1 run identifies controller behavior only: under the frozen
 > single-pass assumptions, tokenwise, per-write, and whole-path objectives are
 > algorithmically degenerate. The active proposal is R400-K2 with tokenwise,
-> per-write, whole-path, controller, and no-controller cells. No RWWPO-2 result
-> exists yet.
+> per-write, whole-path, controller, and no-controller cells. H20 RWWPO-2
+> attempts have exposed implementation defects and are all NO-GO; no valid R50
+> endpoint or RWWPO-2 scientific result exists yet.
 > Because those five S128 anchor results were inspected before the controller
 > revision, S128 is now a development benchmark for this method family, not a
 > blind final test.
 
-**Scientific status (2026-08-23): PAPER-FRAMING GO; RWWPO-2 is unrun and every empirical claim remains conditional.** Sequence-level and
+**Scientific status (2026-08-24): PAPER-FRAMING GO; all RWWPO-2 H20 attempts are runtime NO-GO and every empirical claim remains conditional.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
 GSsPO. “Use a joint ratio for a writer response” is therefore not a sufficient
 novelty claim. The viable residual is narrower and harder: a free-text writer

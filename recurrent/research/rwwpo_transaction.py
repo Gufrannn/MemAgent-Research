@@ -398,6 +398,36 @@ def restore_rng(state):
         torch.cuda.set_rng_state_all(state["torch_cuda"])
 
 
+def ordered_rng_state_digests(states):
+    """Return the ordered digest vector that identifies a replay RNG schedule."""
+    states = list(states)
+    if not states:
+        raise ValueError("RWWPO2 replay RNG schedule is empty")
+    return [digest(state) for state in states]
+
+
+def replay_with_rng_snapshots(items, forward):
+    """Replay ordered payloads under their behavior RNG without advancing RNG.
+
+    Each item is ``(payload, rng_snapshot)``.  The caller owns model-state
+    restoration; this helper closes the complete Python/NumPy/Torch RNG side of
+    a diagnostic forward and restores the algorithmic terminal RNG even when a
+    replay forward raises.
+    """
+    items = list(items)
+    if not items:
+        raise ValueError("RWWPO2 replay requires at least one microbatch")
+    terminal = rng_snapshot()
+    outputs = []
+    try:
+        for payload, state in items:
+            restore_rng(state)
+            outputs.append(forward(payload))
+    finally:
+        restore_rng(terminal)
+    return outputs
+
+
 @dataclass(frozen=True)
 class TrialDecision:
     alpha: float

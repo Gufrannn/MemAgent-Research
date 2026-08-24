@@ -36,8 +36,18 @@ GPU work at 139/140 PASS because one synthetic test fixture attached the fresh
 committed-forward prefix rows to a distinct cached trial tensor. The production
 auditor correctly rejected the inconsistent fixture. The fixture is now split
 into separate trial and committed certificates; the correction must pass a new
-exact-commit authenticated suite and numeric oracle before another fresh-base
-R50 attempt. No consumed failure root or old numeric receipt may be reused. The
+exact-commit authenticated suite and numeric oracle. Commit
+`eab35b9d390a30f9c8b2e4696dfaf94988e6ffe4` passed those pre-R50 gates and its
+fresh B/seed-2026 attempt completed six full rounds before round-7 inner-2 failed
+the post-commit forward closure. The alpha-zero fresh forward differed from its
+behavior reference by `1.0065193176269531` with frozen `tau_logprob=1e-6`.
+Inspection found that behavior materialization recorded one RNG snapshot per
+microbatch, while trial and fresh replay restored only one post-gradient RNG
+for the whole sequence. The correction makes every diagnostic replay consume
+the ordered behavior microbatch RNG schedule and binds its ordered digest vector
+and aggregate in each receipt. It must pass a new exact-commit authenticated
+suite and numeric oracle before another fresh-base R50 attempt. No consumed
+failure root or old numeric receipt may be reused. The
 previous K1 hard-rollback run remains diagnostic-only and is not a performance
 result for the method below.
 
@@ -155,8 +165,15 @@ scheduler is not advanced and is not part of a reject transaction. Immediately
 before the logical reseed, the runtime freezes Python, NumPy, Torch CPU, and all
 CUDA RNG states plus every persistent and non-persistent named model buffer. A
 reject restores that complete transaction-entry snapshot, along with model
-parameters and Adam moments, but does not change the logical `p`. Every replay
-and trial starts from the frozen buffer state. After either commit or rollback,
+parameters and Adam moments, but does not change the logical `p`. Behavior
+materialization records the complete RNG state immediately before every ordered
+microbatch forward. Every trial and committed-state certificate starts from the
+frozen entry buffer state and restores the corresponding saved behavior RNG
+before each microbatch. A replay preserves and restores the algorithmic terminal
+RNG and entry model buffers in `finally` paths, so diagnostic forwards cannot
+advance training randomness or retain forward-mutated cache state. Each receipt
+binds the ordered per-microbatch RNG digest vector,
+its aggregate digest, and its exact count. After either commit or rollback,
 the runtime performs a separate forward from the committed parameter/buffer
 state; only that forward may populate the post-prefix certificate. Its active
 log-probability difference from the corresponding trial/behavior reference
@@ -168,7 +185,8 @@ non-optimizable implementation/cache state: every trial begins from the entry
 snapshot and the terminal buffer digest must equal the entry digest for both
 accepted and rejected transactions. Otherwise an append-only failure receipt
 is written and the attempt is ineligible for PASS. The ledger separately binds
-entry, post-reseed, post-gradient/pre-trial, and terminal RNG digests, plus entry
+entry, post-reseed, post-gradient/pre-trial, ordered behavior-forward, and
+terminal RNG digests, plus entry
 and terminal buffer digests. An accepted transaction commits its deterministic
 post-trial RNG state; the next transaction is independently reset by its logical
 seed. The accepted optimizer clock `u` increments only after a
