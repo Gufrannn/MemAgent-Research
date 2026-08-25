@@ -1,0 +1,104 @@
+{
+  "schema": "memagent.mic.v2.reference-length-authority",
+  "status": "PASS",
+  "decision": "MIC_V2_REFERENCE_LENGTH_AUTHORITY_FROZEN",
+  "evidence_scope": "transcript-bound raw SHA evidence supplied by the H20 operator and accepted by independent review; no local re-hash of H20 files",
+  "producer": {
+    "git_commit": "141f6ea90e68de09f3650e8baae2976725869ebf",
+    "run_id": "mic-v2-lbar-20260825-r2",
+    "output_root_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2"
+  },
+  "artifacts": {
+    "p0": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/certificates/p0.json",
+      "file_sha256": "742299fd7d275a605240c2935f611684377fa7740742c4fe03d7b0e47133b2fc",
+      "canonical_field": "p0_sha256",
+      "canonical_sha256": "a6bcf43d5cad2873fd0f4f7b120de446da29f2c567421de8dc060f940038f05c"
+    },
+    "execution": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/certificates/execution.json",
+      "file_sha256": "2890f47b14c02da2516268dee98c8958b14621c5e08d2924914f77cb50380c6a",
+      "canonical_field": "execution_sha256",
+      "canonical_sha256": "59722c9a7030b3d92f33a8a5620aa0bb09d910da73f19437871bb94635b32c43"
+    },
+    "gpu_replay": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/certificates/gpu_replay.json",
+      "file_sha256": "78ddae3deb69c56b1eb366e9e51f6bd025717e2382d7959a334c18db2d93b4db",
+      "canonical_field": "gpu_replay_sha256",
+      "canonical_sha256": "6bd8d9d39bceacd863d83a4825ca6c82a6bb19e8004decf58877de57910db5c0"
+    },
+    "reference_length": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/certificates/reference_length.json",
+      "file_sha256": "c38114a36430270653f7752441de2083e2a5ab16144d8136e8f79909a768e366",
+      "canonical_field": "certificate_sha256",
+      "canonical_sha256": "370336740ac9ef27795b5ead5c1db3d38bd9433b78e97d9e107dadc47926e15e"
+    },
+    "label_blind_inputs": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/authorities/label_blind_inputs.json",
+      "file_sha256": "c05965f3b1e01514eda3d2d03ce8ee883b4c94a67b09617a667c0db6e6c40973",
+      "canonical_field": "inputs_sha256",
+      "canonical_sha256": "ee4a1b50bcde5d567739d1507631ad0ef64ac6c1552e9fb4399553812cdebd07"
+    },
+    "label_blind_source": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/authorities/label_blind_source.jsonl",
+      "file_sha256": "88052c972f13efecdf1015508dafd9909ffec4a14e77632f70988ce831f28d4d"
+    },
+    "trajectory_ledger": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/trajectories/length_receipts.jsonl",
+      "file_sha256": "79666a33a5ba554fc9e036b381193a6812eb91f290802167369ad83151f1b366"
+    },
+    "calibration_log": {
+      "path_relative_to_work_root": "logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2/calibration.log",
+      "file_sha256": "8804af73b3b3079db34d82e8ff4cf03e3cf98d0f6aaf3cd37991bfe382f79ec1"
+    }
+  },
+  "data_freeze_authority": {
+    "run_id": "mic-v2-data-freeze-20260825-r1",
+    "split": "reference_length_calibration",
+    "content_roots": 64,
+    "certificate_file_sha256": "d5aa9888be06d7cfe21a85f8605a540775fdd6cc0551e4bc737dc67190dcdff9",
+    "certificate_canonical_sha256": "97b1d8456ca148002b039e2c98f624d96fe7e0392aaf24d9ddd8a993a4c0c376",
+    "resolved_file_sha256": "bfafee33ebdd0abe8aa7f343818d66627785fb7196661c70247c1b7170c87c00",
+    "resolved_canonical_sha256": "28b84b36a2efd129f1cf188163fbd907d719b6c826b0aeeeb4d3a9c8753d79c5"
+  },
+  "generation_authority": {
+    "manifest_path": "manifests/h20/qwen25_7b_mic_v2_reference_length_calibration.json",
+    "manifest_sha256": "002ea871195fc82ac7452761d5f66cc3a61cf12f2c45946cf05d80940d83e679",
+    "vllm_version": "0.8.2",
+    "config_loader_environment": {"VLLM_USE_MODELSCOPE": "False"},
+    "gpu_pair": [0, 1],
+    "physical_gpu_identity": [
+      {"index": 0, "name": "NVIDIA H20", "uuid": "GPU-9794c7ff-6009-2590-f92a-932dc4cdd241"},
+      {"index": 1, "name": "NVIDIA H20", "uuid": "GPU-7aa34e5b-244d-e23b-84c6-72bad0d47e02"}
+    ]
+  },
+  "code_authority": {
+    "scientific_contract": {"path": "docs/papers/mic_v2_scientific_contract_20260825.md", "sha256": "6dc99a253c0f3a39230ba93688c6270cb80efdd097774d301f5522dde9c4b3e4"},
+    "statistic_and_finalizer": {"path": "tools/h20/mic_v2_reference_length_calibration.py", "sha256": "d75d324d09264a4821e7507e5d50bb5b48989a1781ecd9cff988d6fab03600ac"},
+    "gpu_producer_and_replay": {"path": "tools/h20/run_qwen25_7b_mic_v2_reference_length_calibration.py", "sha256": "cd41d4a28f076f61e983dde0833904dced704bbf59200ce924c4377904555c91"},
+    "mic_v2_core": {"path": "recurrent/research/mic_v2.py", "sha256": "61173b0b5a21e462887b88dc902c5306ccad4f5d5f47a5d9bc133c59fdbee02c"},
+    "memory_agent": {"path": "recurrent/impls/memory.py", "sha256": "869609d690acd6fe7b1af09f332dd8bcdbb1cd09687d8f82c9f571be953fb25b"},
+    "recurrent_utils": {"path": "recurrent/utils.py", "sha256": "2c2865c4d09b31919651f1044d3c17890cd3373cfb100d43ca263d34be996ab0"}
+  },
+  "seed_authority": {
+    "trajectory_count": 256,
+    "trajectory_schedule_sha256": "2f5d32b282c5a78ec70ce99da08bbefa4ef42acf17d734607e163e1c3a743c39",
+    "all_trajectory_seeds_unique": true,
+    "active_request_count": 1720,
+    "active_request_schedule_sha256": "3c1924deb515c726a320f951987f5c4fe5da987978081b127c699519c148cb1a",
+    "all_active_request_seeds_unique": true,
+    "trajectory_request_namespaces_disjoint": true
+  },
+  "result": {
+    "statistic": "arithmetic_mean_sampled_policy_tokens_over_scheduled_slots",
+    "lbar_ref": 78.57465277777777,
+    "trajectory_count": 256,
+    "scheduled_slot_count": 2304,
+    "active_writer_slot_count": 1464,
+    "writer_policy_tokens": 177951,
+    "answer_policy_tokens": 3085,
+    "total_policy_tokens": 181036,
+    "exact_token_match_count": 1720
+  },
+  "authority_sha256": "228ab3f64a3fdb2a55af0f5f3bd2e0e2b3582f275f6a5acc628fac19eed4f9f5"
+}
