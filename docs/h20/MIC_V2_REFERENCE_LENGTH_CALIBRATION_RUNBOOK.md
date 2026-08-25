@@ -98,3 +98,20 @@ sha256sum \
 Proceed to E1-dev implementation/execution only after the certificate reports
 `MIC_V2_REFERENCE_LENGTH_CALIBRATION_PASS` and independent review accepts the
 exact evidence SHA.
+
+The accepted r2 raw/canonical SHA bundle and `Lbar_ref` are frozen in
+`manifests/h20/qwen25_7b_mic_v2_reference_length_authority.json` at immutable
+Git commit `ecd9c5e7829245da9fc158e1da0cc1953054faf7`; the raw authority-file SHA is
+`c8b4f3d3e93099cffc65e2d4ad2465b42598cca381b2e9b70d81a45adf162096`.
+The verifier reads the authority and all producer code from their historical
+Git objects, requires both producer and authority commits to be ancestors of
+the current checkout, and reconstructs the 64 label-blind inputs from the
+frozen data split. A later E1 checkout may change implementation files but may
+not alter or self-resign this authority.
+
+Every E1-dev preregistration and P0 must independently pin those two authority
+constants and run the read-only authority entry before opening E1 data:
+
+```bash
+bash scripts/h20/verify_qwen25_7b_mic_v2_reference_length_authority.sh
+```
