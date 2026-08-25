@@ -1,0 +1,69 @@
+{
+  "schema": "memagent.mic.v2.preregistration",
+  "status": "FROZEN_SCIENCE_IMPLEMENTATION_E0_ONLY",
+  "branch": "h20/qwen25-7b-mic-t25-frozen-20260822",
+  "contract": {
+    "path": "docs/papers/mic_v2_scientific_contract_20260825.md",
+    "sha256": "6dc99a253c0f3a39230ba93688c6270cb80efdd097774d301f5522dde9c4b3e4",
+    "git_commit": "050c2e660e144f3b8194e327dc60544dcb99d06e",
+    "independent_science_review": "GO"
+  },
+  "method": {
+    "name": "action_boundary_materialized_memory_innovation_credit",
+    "version": 2,
+    "historical_mic_v1_evidence_reusable": false,
+    "writer_action": "complete_sampled_writer_token_sequence",
+    "pre_state": "post_observation_pre_write",
+    "post_state": "post_write_materialized_afterstate",
+    "critic": "history_privileged_time_safe_shared_representation_symmetric_heads",
+    "writer_credit": "stopgrad(V_post_write-V_pre_write)",
+    "answer_credit": "unstandardized_group_centered_terminal_broadcast",
+    "group_size": 4,
+    "max_writer_slots": 8,
+    "fold_rule": "sha256_content_root_namespace_modulo_v2",
+    "outer_folds": 4,
+    "inner_folds": 3,
+    "policy_gradient_normalization": "globally_fixed_scheduled_action_slots",
+    "ppo_boundary": "behavior_point_sequence_score_consistent_token_factorized"
+  },
+  "released_commands": [
+    "cpu_e0"
+  ],
+  "blocked_commands": {
+    "e1_dev": "BLOCKED_UNTIL_E0_CERTIFICATE_AND_E1_IMPLEMENTATION_REVIEW",
+    "e1_holdout": "BLOCKED_UNTIL_E1_DEV_SPEC_IS_SEALED",
+    "formal_branching_oracle": "BLOCKED_UNTIL_E0_CERTIFICATE_AND_ORACLE_IMPLEMENTATION_REVIEW",
+    "actor_training": "BLOCKED_UNTIL_E0_AND_E1_HOLDOUT_AND_FORMAL_ORACLE_PASS"
+  },
+  "e0": {
+    "required_tests": [
+      "E0-1",
+      "E0-2",
+      "E0-3",
+      "E0-4",
+      "E0-5",
+      "E0-6",
+      "E0-7",
+      "E0-8",
+      "E0-9",
+      "E0-10",
+      "E0-11",
+      "E0-12",
+      "E0-13"
+    ],
+    "closure_tolerance": 1e-12,
+    "gpu_required": false,
+    "output_policy": "write_new_append_only_attempt"
+  },
+  "runtime": {
+    "python": "${MEMAGENT_MIC_V2_WORK_ROOT}/.venv/bin/python",
+    "required_environment": [
+      "MEMAGENT_MIC_V2_WORK_ROOT",
+      "MEMAGENT_MIC_V2_REPO_DIR",
+      "MEMAGENT_MIC_V2_EXPECTED_COMMIT",
+      "MEMAGENT_MIC_V2_RUN_ID"
+    ],
+    "git_identity": "exact_head_and_clean_worktree",
+    "gpu_pair_for_e0": null
+  }
+}
