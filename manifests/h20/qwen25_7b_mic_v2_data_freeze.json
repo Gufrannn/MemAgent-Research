@@ -1,0 +1,76 @@
+{
+  "schema": "memagent.mic.v2.data-freeze-preregistration",
+  "status": "FROZEN_BEFORE_E1_OUTCOMES",
+  "branch": "h20/qwen25-7b-mic-t25-frozen-20260822",
+  "implementation_parent_commit": "0ff8fad73da2616244614065f5eca4c1cfc199aa",
+  "scientific_contract_sha256": "6dc99a253c0f3a39230ba93688c6270cb80efdd097774d301f5522dde9c4b3e4",
+  "e0_authority": {
+    "certificate_path": "/data/cw/memagent_work/logs/mic_v2/mic-v2-e0-20260825-r1/certificates/e0.json",
+    "certificate_file_sha256": "161520ddd39b9e668e2f1695b3028340bb60f49b074e9404b875f62ac6780a13",
+    "certificate_canonical_sha256": "fb68d17967592e2086da3fd6e7ea6e1b191192ab490fc307f78e1a92f528c99f",
+    "e0_git_commit": "0ff8fad73da2616244614065f5eca4c1cfc199aa",
+    "run_id": "mic-v2-e0-20260825-r1",
+    "preregistration_manifest_path": "manifests/h20/qwen25_7b_mic_v2_preregistration.json",
+    "preregistration_manifest_sha256": "7c2c192d2d386d9519293873dfebe520d8a91b03ae9972166284d4ecb3785929",
+    "required_tests": [
+      "E0-1", "E0-2", "E0-3", "E0-4", "E0-5", "E0-6", "E0-7",
+      "E0-8", "E0-9", "E0-10", "E0-11", "E0-12", "E0-13"
+    ]
+  },
+  "sources": {
+    "training_pool": {
+      "path": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet",
+      "sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
+      "rows": 32768
+    },
+    "exposed_s128": {
+      "path": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_dev.parquet",
+      "sha256": "54c71348875c8d535d1eebd3bb0ebdb7264297d01b3ec5d225cf8be0e9e77ff6",
+      "rows": 128,
+      "authority_path": "manifests/h20/qwen25_7b_paired_effect_s128_authority.json",
+      "authority_file_sha256": "8c7c34cf884972325f5f42c0541f2f8b12ff2c60eb81aeb71b5b59555c899396",
+      "eval_manifest_hash": "351d7e58d6e67a1dc91bc3275f2c9407fd329a470b4a92ed37cf65945d12d84a"
+    }
+  },
+  "identity": {
+    "namespace": "memagent-mic-v2-content-split-v1",
+    "question": "exact UTF-8 prompt[0].content from one user message; optional extra_info.question must match exactly",
+    "context": "exact UTF-8 context",
+    "ground_truth": "canonical JSON reward_model.ground_truth",
+    "content_root": "SHA256(canonical-json(namespace,question_sha256,context_sha256))",
+    "full_example": "SHA256(canonical-json(namespace,question_sha256,context_sha256,ground_truth_sha256))",
+    "alias_policy": "all rows with one content_root remain in one split",
+    "conflicting_ground_truth_policy": "fail_closed",
+    "selection_uses_ground_truth": false
+  },
+  "partition": {
+    "order_namespace": "memagent-mic-v2-label-blind-split-order-v1",
+    "seed": 20260825,
+    "rule": "sort unique non-S128 content roots by SHA256(canonical-json(order_namespace,seed,content_root)); allocate contiguous ranges",
+    "splits": [
+      {"name": "e1_dev", "content_roots": 128},
+      {"name": "e1_holdout", "content_roots": 128},
+      {"name": "formal_branching_oracle", "content_roots": 64},
+      {"name": "reference_length_calibration", "content_roots": 64},
+      {"name": "actor_training_b1_b8", "content_roots": 512, "block_roots": 64, "blocks": 8},
+      {"name": "sealed_confirm", "content_roots": 512}
+    ],
+    "external_validity": "separate dataset authority required before actor launch"
+  },
+  "runtime": {
+    "gpu_required": false,
+    "output_policy": "write_new_append_only_attempt",
+    "required_environment": [
+      "MEMAGENT_MIC_V2_WORK_ROOT",
+      "MEMAGENT_MIC_V2_REPO_DIR",
+      "MEMAGENT_MIC_V2_EXPECTED_COMMIT",
+      "MEMAGENT_MIC_V2_DATA_RUN_ID"
+    ]
+  },
+  "blocked_after_success": [
+    "e1_collection",
+    "e1_holdout_opening",
+    "formal_branching_oracle",
+    "actor_training"
+  ]
+}
