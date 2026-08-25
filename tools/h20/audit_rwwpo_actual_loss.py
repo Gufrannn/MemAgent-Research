@@ -214,14 +214,83 @@ def hydrate_authenticated_v3_receipt(receipt, ledger_path):
     row = dict(receipt)
     for key in required:
         row[key] = payload[key].tolist()
+    # Keep authenticated tensors by reference for evidence reconstruction that
+    # must preserve the producer's dtype and Torch reduction semantics.  The
+    # JSON-compatible lists above remain the public/audit representation.
+    row["_authenticated_tensors"] = payload
     trials = []
     for item in receipt.get("trial_evidence", []):
         item = dict(item)
         key = item.pop("tensor_key")
         item["log_prob"] = payload[key].tolist()
+        item["_authenticated_log_prob_tensor"] = payload[key]
         trials.append(item)
     row["trial_evidence"] = trials
     return row
+
+
+def reconstruct_authenticated_prefix_rows(row, log_prob_tensor):
+    """Rebuild producer prefix rows with the authenticated tensor dtype.
+
+    The producer computes each writer-row reduction and the trajectory prefix
+    with Torch in the log-probability dtype.  Converting shard values to Python
+    floats first silently changes float32 accumulation to float64 and can reject
+    an otherwise exact checkpoint prefix by one float32 ULP.
+    """
+    payload = row.get("_authenticated_tensors")
+    if not isinstance(payload, dict) or not torch.is_tensor(log_prob_tensor):
+        raise ValueError("authenticated tensor payload missing for prefix reconstruction")
+    old = payload["old_log_prob"]
+    writer_mask = payload["writer_mask"].bool()
+    sample_index = payload["sample_index"]
+    trajectory_turn = payload["trajectory_turn"]
+    if log_prob_tensor.shape != old.shape or writer_mask.shape != old.shape:
+        raise ValueError("authenticated prefix tensor shape mismatch")
+    if log_prob_tensor.dtype != old.dtype:
+        raise ValueError("authenticated prefix logprob dtype mismatch")
+    writer_rows = torch.nonzero(writer_mask.any(dim=-1), as_tuple=False).flatten()
+    writer_row_log_ratio = ((log_prob_tensor - old) * writer_mask).sum(dim=-1)
+    reconstructed = []
+    for sid in torch.unique(sample_index[writer_rows], sorted=True):
+        indices = writer_rows[sample_index[writer_rows] == sid]
+        order = torch.argsort(trajectory_turn[indices], stable=True)
+        indices = indices[order]
+        prefix = torch.cumsum(writer_row_log_ratio[indices], dim=0)
+        token_count = torch.cumsum(writer_mask[indices].sum(dim=-1), dim=0)
+        for index, value, tokens in zip(indices, prefix, token_count):
+            reconstructed.append({
+                "turn": int(trajectory_turn[index].item()),
+                "sample_index": int(sid.item()),
+                "log_ratio": float(value.item()),
+                "prefix_token_count": int(tokens.item()),
+            })
+    return reconstructed
+
+
+def prefix_rows_match(declared, reconstructed, *, dtype=None):
+    declared = sorted(declared, key=lambda item: (item["sample_index"], item["turn"]))
+    reconstructed = sorted(
+        reconstructed, key=lambda item: (item["sample_index"], item["turn"]))
+    if len(declared) != len(reconstructed):
+        return False
+    for expected, actual in zip(declared, reconstructed):
+        if any(expected[field] != actual[field] for field in (
+                "turn", "sample_index", "prefix_token_count")):
+            return False
+        if dtype is None:
+            if not math.isclose(float(expected["log_ratio"]),
+                                float(actual["log_ratio"]),
+                                rel_tol=1e-9, abs_tol=1e-10):
+                return False
+        else:
+            # JSON stores the producer's scalar exactly as a Python number.
+            # Round both sides back into the authenticated tensor dtype and
+            # demand bit-identical values; this is not a tolerance relaxation.
+            expected_value = torch.tensor(float(expected["log_ratio"]), dtype=dtype)
+            actual_value = torch.tensor(float(actual["log_ratio"]), dtype=dtype)
+            if not torch.equal(expected_value, actual_value):
+                return False
+    return True
 
 
 def canonical_sha(record):
@@ -450,20 +519,31 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                             raise ValueError("RWWPO-2 host variant missing")
                         if not isinstance(row.get("behavior_batch_digest"), str) or len(row["behavior_batch_digest"]) != 64:
                             raise ValueError("RWWPO-2 behavior batch digest malformed")
-                recomputed=[]
-                for sid in sorted(set(row["sample_index"])):
-                    indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
-                    indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
-                    for index in indices:
-                        active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
-                        advantages={round(float(row["advantages"][index][j]),12) for j in active}
-                        if len(advantages)!=1: raise ValueError("writer advantage is not scalar within a write")
-                        running += sum(float(row["current_log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active)
-                        tokens += len(active)
-                        recomputed.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
-                declared=sorted(row["prefix_rows"],key=lambda x:(x["sample_index"],x["turn"]))
-                actual=sorted(recomputed,key=lambda x:(x["sample_index"],x["turn"]))
-                if len(declared)!=len(actual) or any(d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or d["prefix_token_count"]!=v["prefix_token_count"] or not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10) for d,v in zip(declared,actual)):
+                for index in range(len(row["sample_index"])):
+                    active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                    if not active:
+                        continue
+                    advantages={round(float(row["advantages"][index][j]),12) for j in active}
+                    if len(advantages)!=1:
+                        raise ValueError("writer advantage is not scalar within a write")
+                if row["schema_version"] == "rwwpo-actual-loss-v3":
+                    payload = row["_authenticated_tensors"]
+                    recomputed = reconstruct_authenticated_prefix_rows(
+                        row, payload["current_log_prob"])
+                    prefix_dtype = payload["current_log_prob"].dtype
+                else:
+                    recomputed=[]
+                    for sid in sorted(set(row["sample_index"])):
+                        indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
+                        indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
+                        for index in indices:
+                            active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                            running += sum(float(row["current_log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active)
+                            tokens += len(active)
+                            recomputed.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
+                    prefix_dtype = None
+                if not prefix_rows_match(row["prefix_rows"], recomputed,
+                                         dtype=prefix_dtype):
                     raise ValueError("prefix rows do not reconstruct from actual-loss tensors")
                 if row["schema_version"]=="rwwpo-actual-loss-v3":
                     root_by_sample={}
@@ -474,19 +554,25 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                     if any(str(item.get("root_identity_hash"))!=root_by_sample.get(
                             int(item["sample_index"])) for item in row["prefix_rows"]):
                         raise ValueError("prefix/root tensor identity mismatch")
-                post_actual=[]
                 post_logprob_field = ("committed_log_prob"
                                       if row["schema_version"] in MODERN_SCHEMAS
                                       else "proposed_post_log_prob")
-                for sid in sorted(set(row["sample_index"])):
-                    indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
-                    indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
-                    for index in indices:
-                        active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
-                        running += sum(float(row[post_logprob_field][index][j])-float(row["old_log_prob"][index][j]) for j in active); tokens += len(active)
-                        post_actual.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
-                post_declared=sorted(row["post_prefix_rows"],key=lambda x:(x["sample_index"],x["turn"])); post_actual.sort(key=lambda x:(x["sample_index"],x["turn"]))
-                if len(post_declared)!=len(post_actual) or any(d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or d["prefix_token_count"]!=v["prefix_token_count"] or not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10) for d,v in zip(post_declared,post_actual)):
+                if row["schema_version"] == "rwwpo-actual-loss-v3":
+                    post_tensor = row["_authenticated_tensors"][post_logprob_field]
+                    post_actual = reconstruct_authenticated_prefix_rows(row, post_tensor)
+                    post_dtype = post_tensor.dtype
+                else:
+                    post_actual=[]
+                    for sid in sorted(set(row["sample_index"])):
+                        indices=[i for i,value in enumerate(row["sample_index"]) if value==sid and any(bool(x) for x in row["writer_mask"][i])]
+                        indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
+                        for index in indices:
+                            active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                            running += sum(float(row[post_logprob_field][index][j])-float(row["old_log_prob"][index][j]) for j in active); tokens += len(active)
+                            post_actual.append({"turn":int(row["trajectory_turn"][index]),"sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
+                    post_dtype = None
+                if not prefix_rows_match(row["post_prefix_rows"], post_actual,
+                                         dtype=post_dtype):
                     raise ValueError("post-step prefix rows do not reconstruct")
                 if row["schema_version"] in MODERN_SCHEMAS:
                     order=row["alpha_test_order"]
@@ -521,24 +607,26 @@ def audit(paths, require_method=True, *, start_round=None, through_round=None,
                     for trial in evidence:
                         if len(trial.get("log_prob",[])) != len(row["old_log_prob"]):
                             raise ValueError("trial logprob row alignment failure")
-                        trial_actual=[]
-                        for sid in sorted(set(row["sample_index"])):
-                            indices=[i for i,value in enumerate(row["sample_index"])
-                                     if value==sid and any(bool(x) for x in row["writer_mask"][i])]
-                            indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
-                            for index in indices:
-                                active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
-                                running += sum(float(trial["log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active)
-                                tokens += len(active)
-                                trial_actual.append({"turn":int(row["trajectory_turn"][index]),
-                                    "sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
-                        trial_declared=sorted(trial["prefix_rows"],key=lambda x:(x["sample_index"],x["turn"]))
-                        trial_actual.sort(key=lambda x:(x["sample_index"],x["turn"]))
-                        if len(trial_declared)!=len(trial_actual) or any(
-                            d["turn"]!=v["turn"] or d["sample_index"]!=v["sample_index"] or
-                            d["prefix_token_count"]!=v["prefix_token_count"] or
-                            not math.isclose(d["log_ratio"],v["log_ratio"],rel_tol=1e-9,abs_tol=1e-10)
-                            for d,v in zip(trial_declared,trial_actual)):
+                        if row["schema_version"] == "rwwpo-actual-loss-v3":
+                            trial_tensor = trial["_authenticated_log_prob_tensor"]
+                            trial_actual = reconstruct_authenticated_prefix_rows(
+                                row, trial_tensor)
+                            trial_dtype = trial_tensor.dtype
+                        else:
+                            trial_actual=[]
+                            for sid in sorted(set(row["sample_index"])):
+                                indices=[i for i,value in enumerate(row["sample_index"])
+                                         if value==sid and any(bool(x) for x in row["writer_mask"][i])]
+                                indices.sort(key=lambda i:row["trajectory_turn"][i]); running=0.0; tokens=0
+                                for index in indices:
+                                    active=[j for j,value in enumerate(row["writer_mask"][index]) if bool(value)]
+                                    running += sum(float(trial["log_prob"][index][j])-float(row["old_log_prob"][index][j]) for j in active)
+                                    tokens += len(active)
+                                    trial_actual.append({"turn":int(row["trajectory_turn"][index]),
+                                        "sample_index":int(sid),"log_ratio":running,"prefix_token_count":tokens})
+                            trial_dtype = None
+                        if not prefix_rows_match(trial["prefix_rows"], trial_actual,
+                                                 dtype=trial_dtype):
                             raise ValueError("trial prefix rows do not reconstruct from actual logprobs")
                         if row["schema_version"]=="rwwpo-actual-loss-v3" and any(
                                 str(item.get("root_identity_hash"))!=root_by_sample.get(

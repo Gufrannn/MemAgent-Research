@@ -212,7 +212,11 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     attempt = (ROOT / "tools/h20/audit_rwwpo2_attempt.py").read_text()
     for token in ("prefix_sha256", "tail_sha256", "tensor_inventory",
                   "checkpoint_inventory_event_sha256", "failed_suffix_imported",
-                  "record_limits", "rwwpo_rollout_seed_anchor"):
+                  "record_limits", "rwwpo_rollout_seed_anchor",
+                  'parser.add_argument(\n        "--producer-commit"',
+                  '"producer_git_commit": producer_commit',
+                  '"auditor_git_commit": head',
+                  '"auditor_source_sha256": sha256_file(Path(__file__).resolve())'):
         assert token in lineage
     assert "execution_prefix_to_checkpoint" in lineage
     assert "execution_prefix_through_round" in attempt

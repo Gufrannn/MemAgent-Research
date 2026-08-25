@@ -122,6 +122,12 @@ def main() -> None:
     parser.add_argument("--resolved-contract", required=True)
     parser.add_argument("--resolved-contract-sha256", required=True)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument(
+        "--producer-commit",
+        help=("Exact commit recorded by the parent attempt. Defaults to the "
+              "auditor checkout; set only for an independently reviewed "
+              "auditor-only compatibility correction."),
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -130,6 +136,9 @@ def main() -> None:
     ).strip()
     if head != args.expected_commit or dirty:
         raise SystemExit("RWWPO2_LINEAGE_NO_GO:checkout")
+    producer_commit = args.producer_commit or head
+    if re.fullmatch(r"[0-9a-f]{40}", producer_commit) is None:
+        raise SystemExit("RWWPO2_LINEAGE_NO_GO:producer commit")
     if args.cell not in "ABCDE" or args.checkpoint_round <= 0 \
             or args.checkpoint_round % 10 != 0:
         raise SystemExit("RWWPO2_LINEAGE_NO_GO:identity")
@@ -161,12 +170,12 @@ def main() -> None:
     if declared_resolved != recomputed_resolved \
             or resolved.get("status") != "PASS" \
             or resolved.get("decision") != "RWWPO2_RESOLVED_CONTRACT_PASS" \
-            or resolved.get("git_commit") != head:
+            or resolved.get("git_commit") != producer_commit:
         raise SystemExit("RWWPO2_LINEAGE_NO_GO:resolved contract receipt")
     try:
         events, inventory_event, execution_prefix_sha256 = execution_prefix_to_checkpoint(
             execution_path, checkpoint_round=args.checkpoint_round,
-            expected_commit=head,
+            expected_commit=producer_commit,
         )
     except ValueError as error:
         raise SystemExit("RWWPO2_LINEAGE_NO_GO:" + str(error)) from error
@@ -290,7 +299,13 @@ def main() -> None:
     report = {
         "schema_version": "rwwpo2-lineage-parent-v1",
         "status": "PASS", "decision": "RWWPO2_LINEAGE_PARENT_PASS",
-        "git_commit": head, "cell": args.cell,
+        # Keep the established resume-facing `git_commit` as the producer
+        # identity, while separately binding the independent auditor code.
+        "git_commit": producer_commit,
+        "producer_git_commit": producer_commit,
+        "auditor_git_commit": head,
+        "auditor_source_sha256": sha256_file(Path(__file__).resolve()),
+        "cell": args.cell,
         "experiment_seed": args.experiment_seed,
         "checkpoint_round": args.checkpoint_round,
         "parent_attempt_root": str(attempt_root),

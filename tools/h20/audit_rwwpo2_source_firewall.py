@@ -155,6 +155,9 @@ def main():
                   "RWWPO-2 RNG phase digest closure",
                   "RWWPO-2 rejected transaction RNG rollback",
                   "RWWPO-2 behavior replay RNG binding",
+                  "reconstruct_authenticated_prefix_rows",
+                  "writer_row_log_ratio = ((log_prob_tensor - old) * writer_mask).sum(dim=-1)",
+                  "torch.cumsum(writer_row_log_ratio[indices], dim=0)",
                   "immutable behavior logprob digest mismatch",
                   "RWWPO-2 FSDP/behavior-reference closure",
                   "RWWPO-2 FSDP/trial wall-time closure",
@@ -305,6 +308,12 @@ def main():
     trainer=(ROOT/"verl/trainer/ppo/ray_trainer.py").read_text(encoding="utf-8")
     attempt=(ROOT/"tools/h20/audit_rwwpo2_attempt.py").read_text(encoding="utf-8")
     lineage=(ROOT/"tools/h20/audit_rwwpo2_lineage_parent.py").read_text(encoding="utf-8")
+    for token in ('parser.add_argument(\n        "--producer-commit"',
+                  '"producer_git_commit": producer_commit',
+                  '"auditor_git_commit": head',
+                  '"auditor_source_sha256": sha256_file(Path(__file__).resolve())'):
+        if token not in lineage:
+            violations.append("lineage compatibility auditor binding:"+token)
     for token in ("rwwpo_ledger_anchors", "rwwpo_tensor_inventory",
                   "rwwpo_rollout_seed_anchor",
                   "rwwpo2_resolved_contract_file_sha256",

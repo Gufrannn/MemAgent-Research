@@ -15,7 +15,8 @@ from recurrent.research.rwwpo_transaction import (
 )
 from tools.h20.audit_rwwpo_actual_loss import (
     audit, canonical_sha, hydrate_authenticated_v3_receipt,
-    independently_recompute_actual_loss, validate_rwwpo2_rng_phase_digests,
+    independently_recompute_actual_loss, prefix_rows_match,
+    reconstruct_authenticated_prefix_rows, validate_rwwpo2_rng_phase_digests,
 )
 
 
@@ -183,6 +184,30 @@ def test_v3_fresh_post_forward_may_differ_from_trial_within_frozen_tolerance(
         receipt,tmp_path/"actual_loss_rank0.jsonl")
     assert hydrated["trial_evidence"][0]["prefix_rows"] != \
         hydrated["post_prefix_rows"]
+
+
+def test_v3_prefix_reconstruction_preserves_float32_torch_accumulation():
+    old = torch.zeros((1, 3), dtype=torch.float32)
+    current = torch.tensor(
+        [[100_000_000.0, 1.0, -100_000_000.0]], dtype=torch.float32)
+    writer = torch.ones_like(current, dtype=torch.bool)
+    row = {"_authenticated_tensors": {
+        "old_log_prob": old,
+        "writer_mask": writer,
+        "sample_index": torch.tensor([0]),
+        "trajectory_turn": torch.tensor([4]),
+    }}
+    actual = reconstruct_authenticated_prefix_rows(row, current)
+    producer_value = float(((current - old) * writer).sum(dim=-1)[0].item())
+    python_value = sum(float(value) for value in current[0].tolist())
+    assert producer_value != python_value
+    declared = [{
+        "turn": 4, "sample_index": 0,
+        "log_ratio": producer_value, "prefix_token_count": 3,
+    }]
+    assert prefix_rows_match(declared, actual, dtype=torch.float32)
+    forged = [{**declared[0], "log_ratio": python_value}]
+    assert not prefix_rows_match(forged, actual, dtype=torch.float32)
 
 
 def test_v3_tensor_shard_byte_tamper_is_rejected(tmp_path):
