@@ -1,0 +1,78 @@
+{
+  "schema": "memagent.mic.v2.reference-length-calibration-preregistration",
+  "status": "FROZEN_BEFORE_CALIBRATION_OUTPUTS",
+  "scientific_contract_sha256": "6dc99a253c0f3a39230ba93688c6270cb80efdd097774d301f5522dde9c4b3e4",
+  "data_freeze_authority": {
+    "run_id": "mic-v2-data-freeze-20260825-r1",
+    "root": "/data/cw/memagent_work/logs/mic_v2_data_freeze/mic-v2-data-freeze-20260825-r1",
+    "certificate_file_sha256": "d5aa9888be06d7cfe21a85f8605a540775fdd6cc0551e4bc737dc67190dcdff9",
+    "certificate_canonical_sha256": "97b1d8456ca148002b039e2c98f624d96fe7e0392aaf24d9ddd8a993a4c0c376",
+    "resolved_file_sha256": "bfafee33ebdd0abe8aa7f343818d66627785fb7196661c70247c1b7170c87c00",
+    "resolved_canonical_sha256": "28b84b36a2efd129f1cf188163fbd907d719b6c826b0aeeeb4d3a9c8753d79c5",
+    "split": "reference_length_calibration",
+    "content_roots": 64
+  },
+  "source": {
+    "path": "/data/cw/memagent_work/datasets/hotpotqa/hotpotqa_train_32k.parquet",
+    "sha256": "798b7a2a9ece4f40884e2a9d02d165d7352df7763d1569ceaf402b45f76896f8",
+    "rows": 32768,
+    "cpu_visible_columns": ["prompt", "context", "extra_info"],
+    "gpu_input_fields": ["source_position", "semantic_dataset_index", "question_sha256", "context_sha256", "content_root_id", "question", "context"]
+  },
+  "model": {
+    "path": "/data/cw/memagent_work/models/Qwen2.5-7B-Instruct",
+    "required_vllm_version": "0.8.2",
+    "files": [
+      {"path": "config.json", "size": 663, "sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"},
+      {"path": "generation_config.json", "size": 243, "sha256": "3a8f9087e486054c8a4a08dae2e5a3ba62e23da212b5b8c08bc42cb983c3459f"},
+      {"path": "merges.txt", "size": 1671839, "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"},
+      {"path": "model-00001-of-00004.safetensors", "size": 3945441440, "sha256": "a1333e6293854747c481288ea83b348226af178dd565c49b6f9495ba1966aba7"},
+      {"path": "model-00002-of-00004.safetensors", "size": 3864726352, "sha256": "f5d25a2772cb825164a2a2c0fb6d51a87e282abf21e4dd75bc5cfb3cd0ea6185"},
+      {"path": "model-00003-of-00004.safetensors", "size": 3864726424, "sha256": "8efdec4c1bc12317ae1a38dc42b595ce777738a64deea3fcb8a0a91381bcdfd5"},
+      {"path": "model-00004-of-00004.safetensors", "size": 3556377672, "sha256": "1a72d403cdf0c1ec3cb7f289f17b394a01e64394c2e9b3c0f94dbce3faf879bd"},
+      {"path": "model.safetensors.index.json", "size": 27752, "sha256": "624bf7c47cd12468fdc16e38a47cf4f19e0415b859a223ba3c027eed2f0e1028"},
+      {"path": "tokenizer.json", "size": 7031645, "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"},
+      {"path": "tokenizer_config.json", "size": 7305, "sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583"},
+      {"path": "vocab.json", "size": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+    ]
+  },
+  "recurrent": {
+    "max_question_tokens": 1024,
+    "max_context_tokens": 40000,
+    "chunk_size": 5000,
+    "max_writer_slots": 8,
+    "max_memory_tokens": 1024,
+    "max_answer_tokens": 1024,
+    "no_memory_text": "No previous memory"
+  },
+  "materialization": {
+    "parser_version": "memagent-unpad-remove-pad-and-eos-v1",
+    "sampled_mask_rule": "boolean active prefix through first sampled terminator; forced truncation fills the declared token width"
+  },
+  "sampling": {
+    "replicas": 4,
+    "base_seed": 20260825,
+    "mode": "independent",
+    "writer": {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0, "n": 1, "best_of": 1, "max_tokens": 1024},
+    "answer": {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0, "n": 1, "best_of": 1, "max_tokens": 1024}
+  },
+  "backend": {
+    "tensor_parallel_size": 2,
+    "dtype": "bfloat16",
+    "engine_seed": 20260825,
+    "gpu_memory_utilization": 0.45,
+    "swap_space_gib": 1,
+    "max_model_len": 9216,
+    "max_num_batched_tokens": 9216,
+    "max_num_seqs": 1,
+    "termination_token_ids": [151645, 151643],
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true,
+    "enable_prefix_caching": false
+  },
+  "statistic": {
+    "scheduled_slots_per_trajectory": 9,
+    "inactive_writer_slot_tokens": 0,
+    "definition": "arithmetic mean sampled policy-token count over all 64*4*(8+1) scheduled slots"
+  }
+}

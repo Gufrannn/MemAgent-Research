@@ -25,6 +25,7 @@ CONTRACT_SHA256 = "6dc99a253c0f3a39230ba93688c6270cb80efdd097774d301f5522dde9c4b
 FOLD_RULE = "sha256_content_root_namespace_modulo_v2"
 T_MAX = 8
 GROUP_SIZE = 4
+MATERIALIZATION_PARSER_VERSION = "memagent-unpad-remove-pad-and-eos-v1"
 
 FORBIDDEN_STATE_KEYS = frozenset({
     "answer", "answer_text", "current_outcome", "dense_reward", "em",
@@ -60,6 +61,91 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sampled_policy_mask_receipt(
+    *, token_ids: Sequence[int], termination: str,
+    termination_token_ids: Sequence[int], token_width: int,
+) -> dict[str, Any]:
+    """Bind an unpadded vLLM completion to the actor's sampled-token mask.
+
+    Training pads responses to ``token_width`` and includes the first sampled
+    terminator in the policy mask.  Everything after that terminator is padding.
+    Forced truncation contains no terminator and must fill the declared width.
+    The compact receipt hashes the exact boolean prefix mask without storing it.
+    """
+    tokens = list(token_ids)
+    terminators = list(termination_token_ids)
+    if token_width < 1 or not terminators or len(set(terminators)) != len(terminators):
+        raise ValueError("MIC_V2_NO_GO: sampled-mask authority is invalid")
+    if any(isinstance(token, bool) or not isinstance(token, int) or token < 0
+           for token in tokens + terminators):
+        raise ValueError("MIC_V2_NO_GO: sampled-mask token IDs are invalid")
+    if not 0 < len(tokens) <= token_width:
+        raise ValueError("MIC_V2_NO_GO: active completion length is invalid")
+    if termination == "sampled_eos":
+        if tokens[-1] not in terminators or any(
+            token in terminators for token in tokens[:-1]
+        ):
+            raise ValueError("MIC_V2_NO_GO: sampled terminator is not first and final")
+    elif termination == "forced_truncation":
+        if len(tokens) != token_width or any(token in terminators for token in tokens):
+            raise ValueError("MIC_V2_NO_GO: forced truncation has a terminator or wrong width")
+    else:
+        raise ValueError("MIC_V2_NO_GO: active completion termination is invalid")
+    mask = [True] * len(tokens) + [False] * (token_width - len(tokens))
+    return {
+        "sampled_mask_width": token_width,
+        "sampled_mask_true_count": len(tokens),
+        "sampled_mask_sha256": sha256_json(mask),
+    }
+
+
+def materialized_memory_receipt(
+    *, token_ids: Sequence[int], termination_token_ids: Sequence[int],
+    content_root_id: str, trajectory_seed: int, turn_index: int,
+    arrived_chunk_token_sha256: Sequence[str],
+    prior_memory_token_sha256: Sequence[str],
+) -> tuple[list[int], dict[str, Any]]:
+    """Reconstruct MemoryAgent's declared post-write afterstate from raw tokens."""
+    tokens = list(token_ids)
+    terminators = set(termination_token_ids)
+    is_hex64 = lambda value: (
+        isinstance(value, str) and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+    if not is_hex64(content_root_id) \
+            or isinstance(trajectory_seed, bool) or not isinstance(trajectory_seed, int) \
+            or trajectory_seed < 0 \
+            or isinstance(turn_index, bool) or not isinstance(turn_index, int) \
+            or not 0 <= turn_index < T_MAX:
+        raise ValueError("MIC_V2_NO_GO: materialization identity is invalid")
+    if len(arrived_chunk_token_sha256) != turn_index + 1 \
+            or len(prior_memory_token_sha256) != turn_index:
+        raise ValueError("MIC_V2_NO_GO: afterstate history is not phase-nested")
+    digests = list(arrived_chunk_token_sha256) + list(prior_memory_token_sha256)
+    if any(not is_hex64(value) for value in digests):
+        raise ValueError("MIC_V2_NO_GO: afterstate history digest is invalid")
+    parsed = [token for token in tokens if token not in terminators]
+    parsed_sha256 = sha256_json(parsed)
+    afterstate = {
+        "schema": "memagent.mic.v2.materialized-afterstate-v1",
+        "content_root_id": content_root_id,
+        "trajectory_seed": trajectory_seed,
+        "turn_index": turn_index,
+        "arrived_chunk_token_sha256": list(arrived_chunk_token_sha256),
+        "materialized_memory_token_sha256": [
+            *prior_memory_token_sha256, parsed_sha256,
+        ],
+        "current_memory_token_sha256": parsed_sha256,
+        "parser_version": MATERIALIZATION_PARSER_VERSION,
+    }
+    return parsed, {
+        "parsed_memory_token_ids": parsed,
+        "parsed_memory_sha256": parsed_sha256,
+        "parser_version": MATERIALIZATION_PARSER_VERSION,
+        "afterstate_sha256": sha256_json(afterstate),
+    }
 
 
 def canonical_content_root(question: str, all_source_chunks: Sequence[str]) -> str:
