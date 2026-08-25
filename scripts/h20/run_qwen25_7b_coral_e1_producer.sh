@@ -3,16 +3,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/cosi_common.sh"
 cosi_checkout_guard
-echo CORAL_E1_NO_GO:post_v11_storage_capacity_and_replacement_review_pending >&2
-exit 81
-
-# Unreachable retained implementation.  A later independently reviewed source
-# tip must remove the lock and freeze one exact replacement run identity only
-# after an H20 capacity receipt proves the complete evidence run fits.
 readonly PYTHON=$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python
+readonly REVIEWED_RUN_ID=coral_e1_seed2026_v12
 readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-}
-[[ $RUN_ID =~ ^[a-z0-9][a-z0-9_-]{7,79}$ ]] || {
-  echo CORAL_E1_NO_GO:explicit_independently_reviewed_fresh_run_id_required >&2; exit 78;
+[[ $RUN_ID == "$REVIEWED_RUN_ID" ]] || {
+  echo CORAL_E1_NO_GO:exact_independently_reviewed_v12_run_id_required >&2; exit 78;
 }
 case "$RUN_ID" in
   coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10|coral_e1_seed2026_v11)
@@ -23,6 +18,14 @@ readonly RUN_ROOT=$MEMAGENT_COSI_WORK_ROOT/logs/coral_e1/$RUN_ID
 readonly OUTPUT=$MEMAGENT_COSI_WORK_ROOT/logs/memory_agent/$EXP
 readonly CAPTURE=$RUN_ROOT/actual_loss_receipts
 readonly CERT=$MEMAGENT_COSI_WORK_ROOT/logs/cosi_preflight/certificates
+readonly CAPACITY_REFERENCE_RUN=coral_e1_seed2026_v11
+readonly CAPACITY_REFERENCE_MAX_CHECKPOINT_BYTES=30462906368
+readonly CAPACITY_RETAINED_CHECKPOINTS=15
+readonly CAPACITY_SAFETY_MARGIN_BYTES=68719476736
+readonly CAPACITY_REQUIRED_BYTES=525663072256
+(( CAPACITY_REFERENCE_MAX_CHECKPOINT_BYTES * CAPACITY_RETAINED_CHECKPOINTS + CAPACITY_SAFETY_MARGIN_BYTES == CAPACITY_REQUIRED_BYTES )) || {
+  echo CORAL_E1_NO_GO:invalid_frozen_capacity_contract >&2; exit 82;
+}
 [[ ! -e $RUN_ROOT && ! -e $OUTPUT ]] || {
   echo CORAL_E1_NO_GO:append_only_output_exists >&2; exit 79;
 }
@@ -30,6 +33,15 @@ readonly CERT=$MEMAGENT_COSI_WORK_ROOT/logs/cosi_preflight/certificates
   echo CORAL_E1_NO_GO:certificate_exists >&2; exit 80;
 }
 cosi_acquire_gpu_locks
+AVAILABLE_BYTES=$(df -B1 --output=avail "$MEMAGENT_COSI_WORK_ROOT" | tail -n 1 | tr -d ' ')
+[[ $AVAILABLE_BYTES =~ ^[0-9]+$ ]] || {
+  echo CORAL_E1_NO_GO:storage_capacity_probe_invalid >&2; exit 82;
+}
+(( AVAILABLE_BYTES >= CAPACITY_REQUIRED_BYTES )) || {
+  echo "CORAL_E1_NO_GO:insufficient_storage_capacity:available=$AVAILABLE_BYTES:required=$CAPACITY_REQUIRED_BYTES" >&2
+  exit 82
+}
+echo "CORAL_E1_CAPACITY_PASS:available=$AVAILABLE_BYTES:required=$CAPACITY_REQUIRED_BYTES:reference_run=$CAPACITY_REFERENCE_RUN:reference_max_checkpoint=$CAPACITY_REFERENCE_MAX_CHECKPOINT_BYTES:retained=$CAPACITY_RETAINED_CHECKPOINTS:margin=$CAPACITY_SAFETY_MARGIN_BYTES"
 "$PYTHON" "$MEMAGENT_COSI_REPO_DIR/tools/h20/preflight_qwen25_7b_cosi.py" \
   --manifest "$MEMAGENT_COSI_REPO_DIR/manifests/h20/qwen25_7b_cosi_seed2026.json" \
   --stage research

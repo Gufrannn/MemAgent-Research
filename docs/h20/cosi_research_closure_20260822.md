@@ -34,15 +34,17 @@ The accepted Original training protocol is the resolved manifest under `/data/cw
 
 ```bash
 bash scripts/h20/run_qwen25_7b_cosi_research.sh
-## The GPU diagnostic entry is deliberately locked at this source tip.
-## It exits before GPU locking until capacity and an exact replacement identity
-## are frozen in a later independently reviewed commit.
-bash scripts/h20/run_qwen25_7b_coral_e1_producer.sh  # expected fail-closed exit 81
+export MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v12
+bash scripts/h20/run_qwen25_7b_coral_e1_producer.sh
 ```
 
 E0 is an exact CPU enumeration. E1 is produced inside the real trainer, not imported from external JSON: odd writer updates 1,3,...,15 each contribute four new b4 roots with two trajectory replicas. After the actual writer update and audited vLLM synchronization, the same roots/seeds are regenerated. Source-policy final answers are discarded. Cached-old-memory and refreshed-memory terminal prompts are each sampled anew at the proposal weights with identical terminal request seeds, and reward/GRPO advantage is recomputed per branch. The actor then performs read-only actual-loss backward passes for cached answer, duplicate cached answer, refreshed answer, and cached writer. Four frozen, nonlinearly basis-separated 256-bucket CountSketch maps, an optimizer-step non-mutation check, the Gate-A ledger, and full actor inventories are sealed. The 32 roots are descriptive units nested four per writer proposal; uncertainty and the LCB are computed from the eight proposal means. This diagnostic output is never a Method warm-start.
 
-The E1 entry is unconditionally locked before GPU locking at this source tip. Versions v3--v11 are retired evidence identities. In particular, v11 produced proposal receipts 1/3/5 and checkpoints through step 6 before `/data` reached 100% capacity; it is incomplete and cannot be resumed or reused. Supplying an arbitrary post-v11 run ID does not unlock the entry. A later source commit may remove the lock only after storage is provisioned for the complete append-only inventory and an independent review freezes one exact fresh replacement identity. Every accepted replacement must rerun both oracles and all updates from the fresh base and import no earlier artifact. Before the distributed sketch oracle or trainer starts, the same `$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python` executes a zero-tensor-leaf `DataProto` clone oracle. Its complete runtime report and SHA are embedded by the sealer and revalidated by the final E1 auditor; bypassing that entry gate cannot yield a valid E1 certificate. The two-rank sketch oracle additionally calibrates 64 distinct parameter ordinals against the pure fixed-map reference before trainer entry.
+Versions v3--v11 are retired evidence identities. In particular, v11 produced proposal receipts 1/3/5 and checkpoints through step 6 before `/data` reached 100% capacity; it is incomplete and cannot be resumed or reused. The only reviewed replacement identity is `coral_e1_seed2026_v12`; the entry rejects every other identity and requires both its run root and training output to be absent. It reruns both oracles and all 15 updates from the fresh base and imports no earlier artifact.
+
+The v12 storage gate is based on the retained v11 checkpoint evidence: the largest complete checkpoint occupied `30,462,906,368` bytes. Fifteen retained checkpoints plus a 64-GiB safety margin require `525,663,072,256` available bytes. The H20 read-only capacity probe on 2026-08-25 reported `996,536,406,016` available bytes and therefore passed. The executable entry recomputes available bytes after acquiring both GPU locks and fails closed before preflight/oracles/training if the available capacity is below the frozen requirement.
+
+Before the distributed sketch oracle or trainer starts, the same `$MEMAGENT_COSI_WORK_ROOT/.venv/bin/python` executes a zero-tensor-leaf `DataProto` clone oracle. Its complete runtime report and SHA are embedded by the sealer and revalidated by the final E1 auditor; bypassing that entry gate cannot yield a valid E1 certificate. The two-rank sketch oracle additionally calibrates 64 distinct parameter ordinals against the pure fixed-map reference before trainer entry.
 
 Expected H20 time for E1 is approximately 2--5 hours because it includes eight same-root regenerated rollouts and 128 root-level backward measurements. This is the required mechanism diagnostic, not the fresh Method curve; the fresh-T25 command remains locked unless it and the independent framing review pass.
 

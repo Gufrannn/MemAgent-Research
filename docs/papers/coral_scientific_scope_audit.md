@@ -76,4 +76,4 @@ The scope entry is deliberately data-only and cannot promote a postrun budget. A
 
 ## Current operational evidence
 
-E1 v11 at source commit `e4f897a2ee9e9e2cfd50916eaca181d628661893` is **NOT RELEASE**. It produced proposal receipts 1/3/5 and checkpoints through step 6, then stopped with `/data` at 100% capacity. It cannot be resumed or reused. This failure does not provide a T25 budget or performance result. A replacement E1 remains blocked until storage capacity for the full evidence inventory is measured and provisioned and a new run identity/source tip is independently reviewed.
+E1 v11 at source commit `e4f897a2ee9e9e2cfd50916eaca181d628661893` is **NOT RELEASE**. It produced proposal receipts 1/3/5 and checkpoints through step 6, then stopped with `/data` at 100% capacity. It cannot be resumed or reused. This failure does not provide a T25 budget or performance result. Storage was subsequently provisioned and measured for the complete inventory; the only replacement candidate is the independently reviewed, fresh-only v12 entry. No v12 runtime result is claimed until its complete E1 certificate passes.

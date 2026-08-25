@@ -183,16 +183,17 @@ class CoralFrozenContractTests(unittest.TestCase):
         self.assertIn("ordinal_calibration_max_abs_error",sketch_oracle)
         self.assertIn("coral_dataproto_clone_oracle.py",entry)
         self.assertIn("--dataproto-clone-oracle",entry)
-        self.assertIn("explicit_independently_reviewed_fresh_run_id_required",entry)
-        self.assertIn("coral_e1_seed2026_v11",entry)
-        self.assertIn(
-            "CORAL_E1_NO_GO:post_v11_storage_capacity_and_replacement_review_pending",
-            entry,
-        )
-        self.assertLess(
-            entry.index("post_v11_storage_capacity_and_replacement_review_pending"),
-            entry.index("cosi_acquire_gpu_locks"),
-        )
+        self.assertIn("readonly REVIEWED_RUN_ID=coral_e1_seed2026_v12",entry)
+        self.assertIn("readonly RUN_ID=${MEMAGENT_COSI_E1_RUN_ID:-}",entry)
+        self.assertIn("exact_independently_reviewed_v12_run_id_required",entry)
+        self.assertIn("readonly CAPACITY_REFERENCE_MAX_CHECKPOINT_BYTES=30462906368",entry)
+        self.assertIn("readonly CAPACITY_RETAINED_CHECKPOINTS=15",entry)
+        self.assertIn("readonly CAPACITY_SAFETY_MARGIN_BYTES=68719476736",entry)
+        self.assertIn("readonly CAPACITY_REQUIRED_BYTES=525663072256",entry)
+        self.assertEqual(30462906368 * 15 + 68719476736,525663072256)
+        self.assertIn("CORAL_E1_NO_GO:insufficient_storage_capacity",entry)
+        self.assertLess(entry.index("cosi_acquire_gpu_locks"),entry.index("AVAILABLE_BYTES="))
+        self.assertLess(entry.index("AVAILABLE_BYTES="),entry.index("preflight_qwen25_7b_cosi.py"))
         self.assertIn(
             "coral_e1_seed2026_v3|coral_e1_seed2026_v4|coral_e1_seed2026_v5|coral_e1_seed2026_v6|coral_e1_seed2026_v7|coral_e1_seed2026_v8|coral_e1_seed2026_v9|coral_e1_seed2026_v10|coral_e1_seed2026_v11",
             entry,
@@ -207,9 +208,10 @@ class CoralFrozenContractTests(unittest.TestCase):
 
         runbook=(ROOT/"docs/h20/cosi_research_closure_20260822.md").read_text()
         release_status=(ROOT/"docs/h20/COSI_RELEASE_STATUS.md").read_text()
-        self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=<INDEPENDENTLY_REVIEWED_FRESH_POST_V11_RUN_ID>",runbook)
+        self.assertIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v12",runbook)
         self.assertIn("Versions v3--v11 are retired",runbook)
-        self.assertIn("100% capacity",runbook)
+        self.assertIn("525,663,072,256",runbook)
+        self.assertIn("996,536,406,016",runbook)
         self.assertIn("18a39b1f727013734b7b92718f3f694072f1f299",release_status)
         self.assertNotIn("MEMAGENT_COSI_E1_RUN_ID=coral_e1_seed2026_v3",runbook)
         clone_oracle=(ROOT/"tools/h20/coral_dataproto_clone_oracle.py").read_text()
