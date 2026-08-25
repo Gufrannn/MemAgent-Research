@@ -15,6 +15,11 @@ CPU preflight projects the frozen split into a label-blind source artifact. The
 GPU producer can read only the certified question, context, stable identity, and
 source-position fields in that artifact; it cannot open the source parquet or
 read rewards, gold answers, the exposed S128 set, E1, oracle, confirm, or metrics.
+Fresh-base verification recursively requires the exact 11 loading-effective
+files plus four SHA-pinned inert repository artifacts; any unknown file,
+symlink, adapter, tokenizer override, chat template, or remote code is `NO_GO`.
+The launcher pins `VLLM_USE_MODELSCOPE=False`; the GPU runner and both execution
+receipts reject any other config-loader environment before model loading.
 
 ## Fresh launch on physical H20 4,5
 

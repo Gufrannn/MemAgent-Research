@@ -22,6 +22,7 @@
   "model": {
     "path": "/data/cw/memagent_work/models/Qwen2.5-7B-Instruct",
     "required_vllm_version": "0.8.2",
+    "config_loader_environment": {"VLLM_USE_MODELSCOPE": "False"},
     "files": [
       {"path": "config.json", "size": 663, "sha256": "7463bb0ea78315365e6c6b74de4e73bbcc8359dfb0c5a737584e077d42c0b03c"},
       {"path": "generation_config.json", "size": 243, "sha256": "3a8f9087e486054c8a4a08dae2e5a3ba62e23da212b5b8c08bc42cb983c3459f"},
@@ -34,6 +35,12 @@
       {"path": "tokenizer.json", "size": 7031645, "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"},
       {"path": "tokenizer_config.json", "size": 7305, "sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583"},
       {"path": "vocab.json", "size": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+    ],
+    "inert_files": [
+      {"path": ".gitattributes", "size": 1519, "sha256": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361", "reason": "repository metadata; not read by Transformers or vLLM model loading"},
+      {"path": "LICENSE", "size": 11343, "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e", "reason": "license text; not read by Transformers or vLLM model loading"},
+      {"path": "README.md", "size": 6240, "sha256": "f366f33bbf6bcadbb7d87f0a21a7b65584a56b8d58b0743c77c88bee625b93a6", "reason": "model card; not read by Transformers or vLLM model loading"},
+      {"path": "configuration.json", "size": 2, "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "reason": "empty noncanonical JSON; loaders use the separately authenticated config.json"}
     ]
   },
   "recurrent": {

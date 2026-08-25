@@ -152,6 +152,18 @@ def _source_rows(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> list
     return rows
 
 
+def _strict_vllm_environment() -> dict[str, str]:
+    expected = {
+        "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+        "VLLM_USE_V1": "0",
+        "VLLM_USE_MODELSCOPE": "False",
+        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+    }
+    _require(all(os.environ.get(key) == value for key, value in expected.items()),
+             "strict vLLM environment differs")
+    return expected
+
+
 def run(
     repo: Path, expected_commit: str, output_root: Path, run_id: str, mode: str,
 ) -> dict[str, Any]:
@@ -166,10 +178,7 @@ def run(
     pair = ",".join(str(item) for item in p0["gpu_pair"])
     _require(os.environ.get("CUDA_VISIBLE_DEVICES") == pair,
              "CUDA_VISIBLE_DEVICES differs from authenticated GPU pair")
-    _require(os.environ.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID"
-             and os.environ.get("VLLM_USE_V1") == "0"
-             and os.environ.get("VLLM_WORKER_MULTIPROC_METHOD") == "spawn",
-             "strict vLLM environment differs")
+    strict_environment = _strict_vllm_environment()
     source_artifact = p0.get("label_blind_source", {})
     source_artifact_path = output_root / "authorities/label_blind_source.jsonl"
     _require(source_artifact.get("path") == str(source_artifact_path)
@@ -201,6 +210,9 @@ def run(
     manifest = _load(repo / MANIFEST_REL)
     _require(sha256_file(repo / MANIFEST_REL) == p0["manifest_sha256"],
              "calibration manifest SHA differs")
+    _require(manifest["model"].get("config_loader_environment")
+             == {"VLLM_USE_MODELSCOPE": strict_environment["VLLM_USE_MODELSCOPE"]},
+             "model config-loader authority differs")
     _require(sha256_file(repo / Path(__file__).resolve().relative_to(repo))
              == p0["code_sha256"][str(Path(__file__).resolve().relative_to(repo))],
              "GPU runner code SHA differs")
@@ -462,6 +474,7 @@ def run(
             "gpu_pair": p0["gpu_pair"],
             "physical_gpu_identity": physical_gpu_identity,
             "vllm_version": vllm.__version__,
+            "config_loader_environment": manifest["model"]["config_loader_environment"],
             "termination_token_ids": termination_token_ids,
             "trajectory_count": len(expected_pairs),
             "regenerated_generate_calls": generate_calls,
@@ -485,6 +498,7 @@ def run(
         "gpu_pair": p0["gpu_pair"],
         "physical_gpu_identity": physical_gpu_identity,
         "vllm_version": vllm.__version__,
+        "config_loader_environment": manifest["model"]["config_loader_environment"],
         "strict_vllm": True,
         "tensor_parallel_size": backend["tensor_parallel_size"],
         "prefix_cache_enabled": False,

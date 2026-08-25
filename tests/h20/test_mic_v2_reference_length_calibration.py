@@ -33,6 +33,7 @@ from tools.h20.run_qwen25_7b_mic_v2_reference_length_calibration import (
     _completion_receipt,
     _source_rows,
     _stable_seed,
+    _strict_vllm_environment,
 )
 
 
@@ -205,6 +206,10 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
         )
         self.assertEqual(calibration["recurrent"]["max_writer_slots"], 8)
         self.assertEqual(calibration["sampling"]["replicas"], 4)
+        self.assertEqual(
+            {item["path"] for item in calibration["model"]["inert_files"]},
+            {".gitattributes", "LICENSE", "README.md", "configuration.json"},
+        )
 
     def test_projection_removes_every_outcome_field(self):
         rows = [frozen_row(index) for index in range(64)]
@@ -288,11 +293,26 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "config.json").write_text("{}")
-            manifest = {"model": {"path": str(root), "files": [{
-                "path": "config.json", "size": 2,
-                "sha256": sha256_file(root / "config.json"),
-            }]}}
-            self.assertEqual(len(_verify_model(manifest)), 1)
+            inert = {
+                ".gitattributes": "attrs", "LICENSE": "license",
+                "README.md": "readme", "configuration.json": "{}",
+            }
+            for name, content in inert.items():
+                (root / name).write_text(content)
+            manifest = {"model": {
+                "path": str(root),
+                "files": [{
+                    "path": "config.json", "size": 2,
+                    "sha256": sha256_file(root / "config.json"),
+                }],
+                "inert_files": [{
+                    "path": name, "size": (root / name).stat().st_size,
+                    "sha256": sha256_file(root / name), "reason": "test inert file",
+                } for name in inert],
+            }}
+            receipts = _verify_model(manifest)
+            self.assertEqual(len(receipts), 5)
+            self.assertEqual(sum(item["loading_effective"] for item in receipts), 1)
             (root / "adapter_config.json").write_text("{}")
             with self.assertRaisesRegex(RuntimeError, "recursive file inventory"):
                 _verify_model(manifest)
@@ -441,6 +461,21 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
             'if [[ ! -e "$OUTPUT_ROOT/certificates/gpu_replay.json" ]]',
             entry_source,
         )
+        self.assertIn("export VLLM_USE_MODELSCOPE=False", entry_source)
+
+    def test_modelscope_config_loader_is_fail_closed(self):
+        strict = {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "VLLM_USE_V1": "0",
+            "VLLM_USE_MODELSCOPE": "False",
+            "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+        }
+        with mock.patch.dict(os.environ, strict, clear=True):
+            self.assertEqual(_strict_vllm_environment(), strict)
+        with mock.patch.dict(os.environ, {**strict, "VLLM_USE_MODELSCOPE": "true"},
+                             clear=True):
+            with self.assertRaisesRegex(RuntimeError, "strict vLLM environment"):
+                _strict_vllm_environment()
 
     def test_finalize_reconstructs_fixed_slot_mean_and_binds_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -505,6 +540,7 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
                     {"index": 5, "uuid": "GPU-uuid-5", "name": "NVIDIA H20"},
                 ],
                 "vllm_version": "0.8.2",
+                "config_loader_environment": {"VLLM_USE_MODELSCOPE": "False"},
                 "strict_vllm": True,
                 "tensor_parallel_size": 2,
                 "prefix_cache_enabled": False,
@@ -531,6 +567,7 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
                 "gpu_pair": [4, 5],
                 "physical_gpu_identity": execution["physical_gpu_identity"],
                 "vllm_version": "0.8.2",
+                "config_loader_environment": {"VLLM_USE_MODELSCOPE": "False"},
                 "termination_token_ids": [151645, 151643],
                 "trajectory_count": 2,
                 "regenerated_generate_calls": 6,
@@ -542,7 +579,10 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
                 json.dumps(replay, sort_keys=True) + "\n"
             )
             manifest = {
-                "model": {"required_vllm_version": "0.8.2"},
+                "model": {
+                    "required_vllm_version": "0.8.2",
+                    "config_loader_environment": {"VLLM_USE_MODELSCOPE": "False"},
+                },
                 "sampling": {
                     "replicas": 1, "base_seed": 20260825,
                     "writer": {"max_tokens": 1024},

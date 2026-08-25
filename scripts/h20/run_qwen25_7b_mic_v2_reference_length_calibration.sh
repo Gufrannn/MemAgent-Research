@@ -78,6 +78,7 @@ else
 fi
 
 cd "$MEMAGENT_MIC_V2_REPO_DIR"
+export VLLM_USE_MODELSCOPE=False
 PYTHONPATH="$MEMAGENT_MIC_V2_REPO_DIR" "$MIC_V2_PYTHON" -m py_compile \
   tools/h20/mic_v2_reference_length_calibration.py \
   tools/h20/run_qwen25_7b_mic_v2_reference_length_calibration.py

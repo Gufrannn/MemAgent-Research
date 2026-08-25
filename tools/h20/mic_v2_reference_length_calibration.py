@@ -175,7 +175,21 @@ def _verify_model(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     entries = list(root.rglob("*"))
     _require(not any(path.is_symlink() for path in entries),
              "fresh-base recursive inventory contains a symlink")
-    expected_paths = {item["path"] for item in manifest["model"]["files"]}
+    loading_files = manifest["model"]["files"]
+    inert_files = manifest["model"].get("inert_files", [])
+    allowed_inert_paths = {".gitattributes", "LICENSE", "README.md", "configuration.json"}
+    _require({item.get("path") for item in inert_files} == allowed_inert_paths
+             and all(set(item) == {"path", "size", "sha256", "reason"}
+                     and isinstance(item["reason"], str) and item["reason"]
+                     for item in inert_files),
+             "fresh-base inert-file authority differs")
+    expected_items = [
+        *({**item, "loading_effective": True} for item in loading_files),
+        *({**item, "loading_effective": False} for item in inert_files),
+    ]
+    expected_paths = {item["path"] for item in expected_items}
+    _require(len(expected_paths) == len(expected_items),
+             "fresh-base file authority contains duplicate paths")
     actual_paths = {
         path.relative_to(root).as_posix()
         for path in entries
@@ -184,14 +198,17 @@ def _verify_model(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     _require(actual_paths == expected_paths,
              "fresh-base recursive file inventory differs")
     receipts = []
-    for expected in manifest["model"]["files"]:
+    for expected in expected_items:
         path = root / expected["path"]
         _require(not path.is_symlink(), f"model file is a symlink: {path}")
         _require(path.is_file() and path.stat().st_size == expected["size"],
                  f"model file size differs: {path}")
         digest = sha256_file(path)
         _require(digest == expected["sha256"], f"model file SHA differs: {path}")
-        receipts.append({"path": str(path), "size": expected["size"], "sha256": digest})
+        receipts.append({
+            "path": str(path), "size": expected["size"], "sha256": digest,
+            "loading_effective": expected["loading_effective"],
+        })
     return receipts
 
 
@@ -710,7 +727,8 @@ def finalize(repo: Path, expected_commit: str, output_root: Path, run_id: str) -
     _self_digest(execution, "execution_sha256")
     execution_fields = {
         "schema", "status", "git_commit", "run_id", "p0_sha256", "gpu_pair",
-        "physical_gpu_identity", "vllm_version", "strict_vllm",
+        "physical_gpu_identity", "vllm_version", "config_loader_environment",
+        "strict_vllm",
         "tensor_parallel_size", "prefix_cache_enabled", "termination_token_ids",
         "trainer_attached", "actor_updates", "new_generate_calls_this_session",
         "represented_generate_calls", "trajectory_count", "ledger_file_sha256",
@@ -737,6 +755,9 @@ def finalize(repo: Path, expected_commit: str, output_root: Path, run_id: str) -
                      for item in execution["physical_gpu_identity"])
              and execution.get("vllm_version")
                  == manifest["model"]["required_vllm_version"]
+             and execution.get("config_loader_environment")
+                 == manifest["model"]["config_loader_environment"]
+                 == {"VLLM_USE_MODELSCOPE": "False"}
              and execution.get("strict_vllm") is True
              and execution.get("tensor_parallel_size") == 2
              and execution.get("prefix_cache_enabled") is False
@@ -757,6 +778,7 @@ def finalize(repo: Path, expected_commit: str, output_root: Path, run_id: str) -
     replay_fields = {
         "schema", "status", "decision", "git_commit", "run_id", "p0_sha256",
         "execution_sha256", "gpu_pair", "physical_gpu_identity", "vllm_version",
+        "config_loader_environment",
         "termination_token_ids", "trajectory_count", "regenerated_generate_calls",
         "exact_token_match_count", "ledger_file_sha256", "gpu_replay_sha256",
     }
@@ -776,6 +798,8 @@ def finalize(repo: Path, expected_commit: str, output_root: Path, run_id: str) -
                      for item in replay["physical_gpu_identity"])
              and replay.get("vllm_version")
                  == manifest["model"]["required_vllm_version"]
+             and replay.get("config_loader_environment")
+                 == execution["config_loader_environment"]
              and replay.get("termination_token_ids")
                  == p0["tokenization_authority"]["termination_token_ids"]
              and replay.get("trajectory_count") == summary["trajectory_count"]
