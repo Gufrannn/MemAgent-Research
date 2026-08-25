@@ -1,0 +1,54 @@
+{
+  "schema_version": "rwwpo2-babilong-adapter-v1",
+  "program": "RWWPO-2",
+  "scientific_role": "adaptive_development_pilot_then_sealed_confirmation",
+  "dataset_id": "RMT-team/babilong",
+  "dataset_revision": "e3a924b6686759422257925a695cbbb4b2684936",
+  "source_rows_per_cell": 100,
+  "lengths": ["32k", "128k"],
+  "task_depth": {"qa1": 1, "qa2": 2, "qa3": 3},
+  "chunk_size": 5000,
+  "max_chunks": {"32k": 8, "128k": 32},
+  "generation_seed": 602214076,
+  "selection_namespace": "rwwpo2-babilong-pilot-v1",
+  "development_source_indices": {
+    "32k": {
+      "qa1": [54, 40, 16, 89, 9, 90, 7, 36],
+      "qa2": [21, 27, 69, 58, 96, 90, 14, 4],
+      "qa3": [20, 70, 55, 36, 6, 57, 99, 80]
+    },
+    "128k": {
+      "qa1": [19, 83, 43, 21, 20, 82, 24, 15],
+      "qa2": [25, 81, 27, 21, 93, 95, 32, 5],
+      "qa3": [97, 24, 72, 98, 9, 1, 0, 22]
+    }
+  },
+  "partition_sizes_per_cell": {"development": 8, "confirmation": 92},
+  "development_is_adaptive": true,
+  "confirmation_forbidden_until_r400_training_complete": true,
+  "primary_metric": "official_case_insensitive_target_substring_accuracy",
+  "key_secondary": "strict_normalized_exact_match",
+  "secondary_metrics": ["macro_token_f1", "macro_precision", "macro_recall"],
+  "safety_metric": "boxed_format_success",
+  "decode": {"n": 1, "do_sample": false, "temperature": 0.0, "top_p": 1.0, "top_k": -1},
+  "prompt_source": {
+    "implementation": "EleutherAI/lm-evaluation-harness BABILong qa1/qa2/qa3 task descriptions",
+    "qa1_url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/babilong/babilong_qa1.yaml",
+    "qa2_url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/babilong/babilong_qa2.yaml",
+    "qa3_url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/babilong/babilong_qa3.yaml",
+    "adapter_change": "wrap the unchanged target sentence in one final \\boxed{...} line"
+  },
+  "evaluation_order": [
+    "B-R20-development",
+    "D-R20-development",
+    "E-R20-development-when-available",
+    "B-D-E-R50-development",
+    "B-D-E-R400-sealed-confirmation"
+  ],
+  "claim_limits": {
+    "qa_depth": "registered reasoning-depth proxy, not direct causal credit-location evidence",
+    "development": "descriptive and adaptive only",
+    "r50": "mechanism/pilot evidence, not final performance",
+    "r400_confirmation": "formal performance only after the 92-per-cell complement is sealed"
+  }
+}

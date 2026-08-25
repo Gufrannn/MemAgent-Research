@@ -39,12 +39,28 @@ ENTRY=(
     ROOT/"tools/h20/finalize_rwwpo2_confirmation.py",
     ROOT/"scripts/h20/run_rwwpo2_confirmation_eval.sh",
     ROOT/"recurrent/research/rwwpo2_confirmation.py",
+    ROOT/"recurrent/research/rwwpo2_babilong.py",
     ROOT/"recurrent/research/hotpotqa_dense_reward.py",
+    ROOT/"manifests/h20/rwwpo2_babilong_pilot_v1.json",
+    ROOT/"tools/h20/audit_rwwpo2_babilong_fixtures.py",
+    ROOT/"tools/h20/audit_rwwpo2_babilong_data_boundary.py",
+    ROOT/"tools/h20/fetch_rwwpo2_babilong_source.py",
+    ROOT/"tools/h20/materialize_rwwpo2_babilong.py",
+    ROOT/"tools/h20/audit_rwwpo2_babilong_bundle.py",
+    ROOT/"tools/h20/preflight_rwwpo2_babilong.py",
+    ROOT/"tools/h20/materialize_rwwpo2_babilong_eval.py",
+    ROOT/"tools/h20/audit_rwwpo2_babilong_eval.py",
+    ROOT/"tools/h20/compare_rwwpo2_babilong.py",
+    ROOT/"scripts/h20/run_rwwpo2_babilong_eval.sh",
+    ROOT/"scripts/h20/run_rwwpo2_babilong_bd_t20.sh",
+    ROOT/"scripts/h20/run_rwwpo2_babilong_cell.sh",
+    ROOT/"scripts/h20/run_rwwpo2_babilong_prepare_and_bd_t20.sh",
+    ROOT/"tests/h20/test_rwwpo2_babilong.py",
     ROOT/"rwwpo2_actual_loss_receipt.schema.json",
     ROOT/"rwwpo2_experiment_manifest.schema.json",
 )
 FORBIDDEN=("paired_effect","ccod","bopr","ncr","gold_answer","future_chunk",
-           "hotpotqa_dev.parquet","s128_original")
+           "hotpotqa_dev.parquet","s128_original","babilong")
 
 
 def main():
@@ -403,6 +419,75 @@ def main():
                   "collect_current_node_ids", "non-PASS/skip/xfail"):
         if token not in release_verifier:
             violations.append("release-test verifier:"+token)
+    if '"tests/h20/test_rwwpo2_babilong.py"' not in release_verifier:
+        violations.append("release-test BABILong inventory")
+    babilong_contract_path = ROOT/"manifests/h20/rwwpo2_babilong_pilot_v1.json"
+    babilong_contract = json.loads(babilong_contract_path.read_text(encoding="utf-8"))
+    expected_babilong_contract = {
+        "schema_version": "rwwpo2-babilong-adapter-v1",
+        "dataset_id": "RMT-team/babilong",
+        "dataset_revision": "e3a924b6686759422257925a695cbbb4b2684936",
+        "source_rows_per_cell": 100,
+        "lengths": ["32k", "128k"],
+        "task_depth": {"qa1": 1, "qa2": 2, "qa3": 3},
+        "chunk_size": 5000,
+        "max_chunks": {"32k": 8, "128k": 32},
+        "generation_seed": 602214076,
+        "partition_sizes_per_cell": {"development": 8, "confirmation": 92},
+        "primary_metric": "official_case_insensitive_target_substring_accuracy",
+        "key_secondary": "strict_normalized_exact_match",
+    }
+    for field, value in expected_babilong_contract.items():
+        if babilong_contract.get(field) != value:
+            violations.append("BABILong frozen contract:"+field)
+    babilong_adapter = (ROOT/"recurrent/research/rwwpo2_babilong.py").read_text(
+        encoding="utf-8")
+    for token in (
+        "SOURCE_REVISION = \"e3a924b6686759422257925a695cbbb4b2684936\"",
+        "DEVELOPMENT_SOURCE_INDICES = {",
+        "truncation is forbidden",
+        "def official_substring_accuracy(",
+        "def paired_descriptive_difference(",
+    ):
+        if token not in babilong_adapter:
+            violations.append("BABILong executable adapter:"+token)
+    babilong_bundle_auditor = (
+        ROOT/"tools/h20/audit_rwwpo2_babilong_bundle.py").read_text(encoding="utf-8")
+    for token in (
+        "validate_frozen_contract(manifest)",
+        'partition_indices(length, task, materialized["partition"])',
+        "RWWPO2_BABILONG_BUNDLE_AUDIT_PASS",
+    ):
+        if token not in babilong_bundle_auditor:
+            violations.append("BABILong bundle auditor:"+token)
+    babilong_eval_auditor = (
+        ROOT/"tools/h20/audit_rwwpo2_babilong_eval.py").read_text(encoding="utf-8")
+    for token in (
+        "score_babilong_output(",
+        "summarize_babilong_metrics(",
+        "RWWPO2_BABILONG_CONFIRMATION_EVAL_PASS",
+        "validate_attempt_identity_rows(",
+    ):
+        if token not in babilong_eval_auditor:
+            violations.append("BABILong eval auditor:"+token)
+    babilong_eval_launcher = (
+        ROOT/"scripts/h20/run_rwwpo2_babilong_eval.sh").read_text(encoding="utf-8")
+    for token in (
+        "verify_rwwpo2_release_tests.py", "flock -n 8", "flock -n 9",
+        "GPU occupied pass", "preflight_rwwpo2_babilong.py",
+    ):
+        if token not in babilong_eval_launcher:
+            violations.append("BABILong eval launcher:"+token)
+    babilong_boundary = (
+        ROOT/"tools/h20/audit_rwwpo2_babilong_data_boundary.py").read_text(
+            encoding="utf-8")
+    for token in (
+        "_actor_consumed_rows(", "train_intersect_babilong_root",
+        "train_intersect_babilong_content", "raw_examples_emitted",
+        "RWWPO2_BABILONG_DATA_BOUNDARY_AUDIT_PASS",
+    ):
+        if token not in babilong_boundary:
+            violations.append("BABILong data boundary:"+token)
     confirmation=(ROOT/"tools/h20/finalize_rwwpo2_confirmation.py").read_text(
         encoding="utf-8")
     confirmation_protocol=(ROOT/"recurrent/research/rwwpo2_confirmation.py").read_text(

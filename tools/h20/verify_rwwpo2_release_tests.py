@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 EXPECTED_BRANCH = "h20/qwen25-7b-tf-rwwpo-t25-frozen-20260822"
 TEST_INVENTORY = (
     "tests/h20/test_rwwpo2_program.py",
+    "tests/h20/test_rwwpo2_babilong.py",
     "tests/h20/test_rwwpo2_tensor_ledger.py",
     "tests/h20/test_rwwpo_core.py",
     "tests/h20/test_rwwpo_entrypoints.py",
