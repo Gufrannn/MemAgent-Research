@@ -164,6 +164,18 @@ def _strict_vllm_environment() -> dict[str, str]:
     return expected
 
 
+def _arrived_chunk_hashes(
+    frozen: Mapping[str, Any], token_receipt: Mapping[str, Any], turn: int,
+) -> list[str]:
+    """Bind one generated afterstate to the same root's frozen chunk authority."""
+    _require(token_receipt.get("content_root_id") == frozen.get("content_root_id"),
+             "prepared token receipt is bound to a different content root")
+    chunks = token_receipt.get("chunk_token_ids_sha256")
+    _require(isinstance(chunks, list) and 0 <= turn < len(chunks),
+             "prepared token receipt does not cover the writer turn")
+    return chunks[:turn + 1]
+
+
 def run(
     repo: Path, expected_commit: str, output_root: Path, run_id: str, mode: str,
 ) -> dict[str, Any]:
@@ -297,7 +309,7 @@ def run(
                  and expected_tokens["chunk_token_ids_sha256"]
                      == [sha256_json(chunk) for chunk in chunks],
                  "runtime tokenization differs from P0")
-        prepared.append((source["frozen"], question_ids, chunks))
+        prepared.append((source["frozen"], question_ids, chunks, expected_tokens))
 
     backend = manifest["backend"]
     llm = LLM(
@@ -326,7 +338,7 @@ def run(
         )
     replicas = manifest["sampling"]["replicas"]
     expected_pairs = [(frozen["content_root_id"], replica)
-                      for frozen, _question, _chunks in prepared
+                      for frozen, _question, _chunks, _token_receipt in prepared
                       for replica in range(replicas)]
     _require([(row.get("content_root_id"), row.get("replica")) for row in existing]
              == expected_pairs[:len(existing)], "resume ledger is not an exact prefix")
@@ -335,7 +347,7 @@ def run(
                  "GPU replay requires a complete trajectory ledger")
     cursor = 0
     generate_calls = 0
-    for frozen, question_ids, chunks in prepared:
+    for frozen, question_ids, chunks, prepared_token_receipt in prepared:
         for replica in range(replicas):
             if mode == "produce" and cursor < len(existing):
                 cursor += 1
@@ -367,9 +379,9 @@ def run(
                         content_root_id=frozen["content_root_id"],
                         trajectory_seed=trajectory_seed,
                         turn_index=turn,
-                        arrived_chunk_token_sha256=expected_tokens[
-                            "chunk_token_ids_sha256"
-                        ][:turn + 1],
+                        arrived_chunk_token_sha256=_arrived_chunk_hashes(
+                            frozen, prepared_token_receipt, turn,
+                        ),
                         prior_memory_token_sha256=memory_history_sha256,
                     )
                     memory_history_sha256.append(afterstate["parsed_memory_sha256"])

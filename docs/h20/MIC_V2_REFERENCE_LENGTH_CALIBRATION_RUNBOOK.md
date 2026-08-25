@@ -20,6 +20,8 @@ files plus four SHA-pinned inert repository artifacts; any unknown file,
 symlink, adapter, tokenizer override, chat template, or remote code is `NO_GO`.
 The launcher pins `VLLM_USE_MODELSCOPE=False`; the GPU runner and both execution
 receipts reject any other config-loader environment before model loading.
+Every writer afterstate is bound to the same prepared content root's frozen
+chunk-token receipt; a cross-root receipt substitution is `NO_GO`.
 
 ## Fresh launch on physical H20 4,5
 
@@ -29,7 +31,7 @@ set -euo pipefail
 export MEMAGENT_MIC_V2_WORK_ROOT=/data/cw/memagent_work
 export MEMAGENT_MIC_V2_REPO_DIR=/data/cw/memagent_work/code/MemAgent-MIC-Audit
 export MEMAGENT_MIC_V2_EXPECTED_COMMIT=REPLACE_WITH_APPROVED_EXACT_COMMIT
-export MEMAGENT_MIC_V2_CALIBRATION_RUN_ID=mic-v2-lbar-20260825-r1
+export MEMAGENT_MIC_V2_CALIBRATION_RUN_ID=mic-v2-lbar-20260825-r2
 export MEMAGENT_MIC_V2_GPU_PAIR=4,5
 unset MEMAGENT_MIC_V2_CALIBRATION_RESUME
 
@@ -37,7 +39,7 @@ cd "$MEMAGENT_MIC_V2_REPO_DIR"
 test "$(git rev-parse HEAD)" = "$MEMAGENT_MIC_V2_EXPECTED_COMMIT"
 test -z "$(git status --porcelain)"
 
-screen -dmS mic-v2-lbar-r1 bash -lc '
+screen -dmS mic-v2-lbar-r2 bash -lc '
 set -euo pipefail
 cd "$MEMAGENT_MIC_V2_REPO_DIR"
 bash scripts/h20/run_qwen25_7b_mic_v2_reference_length_calibration.sh
@@ -51,8 +53,8 @@ GPU or lock is `NO_GO`; the entry never kills another process.
 ## Monitor
 
 ```bash
-export MIC_V2_LBAR_ROOT=/data/cw/memagent_work/logs/mic_v2_reference_length/mic-v2-lbar-20260825-r1
-screen -ls | grep mic-v2-lbar-r1 || true
+export MIC_V2_LBAR_ROOT=/data/cw/memagent_work/logs/mic_v2_reference_length/mic-v2-lbar-20260825-r2
+screen -ls | grep mic-v2-lbar-r2 || true
 tail -n 80 -F "$MIC_V2_LBAR_ROOT/calibration.log"
 ```
 
@@ -63,13 +65,18 @@ real duration.
 
 ## Recover after a connection or process failure
 
+The historical `mic-v2-lbar-20260825-r1` attempt contains cross-root afterstate
+receipts rejected by independent replay. It is immutable failed evidence: never
+resume, edit, move, or delete it. The recovery procedure below applies only to
+a valid partial `r2` prefix created by the exact corrected commit.
+
 Do not delete, edit, or move the attempt directory. Completed trajectory
 records form an append-only hash chain and are reused only when they are the
 exact expected prefix.
 
 ```bash
 export MEMAGENT_MIC_V2_CALIBRATION_RESUME=1
-screen -dmS mic-v2-lbar-r1-resume bash -lc '
+screen -dmS mic-v2-lbar-r2-resume bash -lc '
 set -euo pipefail
 cd "$MEMAGENT_MIC_V2_REPO_DIR"
 bash scripts/h20/run_qwen25_7b_mic_v2_reference_length_calibration.sh

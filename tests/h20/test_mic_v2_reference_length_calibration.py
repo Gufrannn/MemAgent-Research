@@ -30,6 +30,7 @@ from tools.h20.mic_v2_reference_length_calibration import (
     finalize,
 )
 from tools.h20.run_qwen25_7b_mic_v2_reference_length_calibration import (
+    _arrived_chunk_hashes,
     _completion_receipt,
     _source_rows,
     _stable_seed,
@@ -462,6 +463,13 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
             entry_source,
         )
         self.assertIn("export VLLM_USE_MODELSCOPE=False", entry_source)
+        runbook = (REPO / "docs/h20/MIC_V2_REFERENCE_LENGTH_CALIBRATION_RUNBOOK.md").read_text()
+        self.assertIn("mic-v2-lbar-20260825-r2", runbook)
+        self.assertIn("immutable failed evidence", runbook)
+        self.assertNotIn(
+            "export MEMAGENT_MIC_V2_CALIBRATION_RUN_ID=mic-v2-lbar-20260825-r1",
+            runbook,
+        )
 
     def test_modelscope_config_loader_is_fail_closed(self):
         strict = {
@@ -476,6 +484,21 @@ class MicV2ReferenceLengthCalibrationTest(unittest.TestCase):
                              clear=True):
             with self.assertRaisesRegex(RuntimeError, "strict vLLM environment"):
                 _strict_vllm_environment()
+
+    def test_prepared_chunk_authority_is_root_bound(self):
+        frozen_a = {"content_root_id": "a" * 64}
+        receipt_a = {
+            "content_root_id": "a" * 64,
+            "chunk_token_ids_sha256": ["1" * 64, "2" * 64],
+        }
+        receipt_b = {
+            "content_root_id": "b" * 64,
+            "chunk_token_ids_sha256": ["3" * 64, "4" * 64],
+        }
+        self.assertEqual(_arrived_chunk_hashes(frozen_a, receipt_a, 1),
+                         ["1" * 64, "2" * 64])
+        with self.assertRaisesRegex(RuntimeError, "different content root"):
+            _arrived_chunk_hashes(frozen_a, receipt_b, 0)
 
     def test_finalize_reconstructs_fixed_slot_mean_and_binds_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
