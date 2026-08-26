@@ -47,7 +47,26 @@ changed by either failure. That consumed release-test root is `NO_GO` and may
 not be reused; the test-only correction requires a new exact commit and fresh
 authenticated release-test root before any numeric oracle or R50 work.
 
-The latest failed training attempt is preserved at
+Commit `4a6a72ef51aa9e8bba2b9c2efe22dc4c98b54dfe` subsequently passed its
+pre-R50 gates. Its B and D seed-2026 assignments reached the round-30 checkpoint
+boundary and then failed outside the actor transaction: the recovery-pruning
+method referenced `append_gate_a_record` without importing it in that method's
+scope. This branch is first reachable at round 30 because only then is round 10
+older than the two retained full checkpoints. The completed actor transactions
+remain useful implementation diagnostics, but neither attempt is a valid R50
+endpoint. Any round-30 directory is only a candidate recovery parent pending a
+read-only checkpoint-prefix and lineage audit; its mere presence does not
+authorize resume. Because the repaired training commit differs from the parent
+producer, the current preflight still rejects that lineage even after a parent
+audit. A separately reviewed cross-commit algorithm/resolved-contract
+compatibility certificate would be required to reuse it, and no such gate is
+implemented. The correction adds a method-local import and a fail-closed
+two-phase prune ledger bound to both checkpoint and scientific-anchor
+inventories. It changes checkpoint lifecycle evidence, so it requires a new
+exact commit and fresh authenticated release-test/CPU/numeric receipts before
+new training.
+
+An earlier failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
 its operator pipeline log is
 `/data/cw/memagent_work/logs/rwwpo2_b540521_B_2026_pipeline.log` (the stale
@@ -157,7 +176,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...` nor `7d7054a...` has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The RNG fix was necessary but insufficient. The leading FSDP derived-state hypothesis must pass exact-commit release tests, the FP32-shard/BF16-forward transaction closure oracle, independent audit and review before a fresh-base B/seed2026 R50 restart. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...`, `7d7054a...`, nor the B/D `4a6a72ef...` attempts has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The R30 pruning repair must pass a new exact-commit authenticated release suite and pre-R50 evidence gates. The old B/D round-30 roots are not resumable under the repaired commit without a new, separately reviewed cross-commit compatibility gate. |
 
 ## 5. Reproducible read-only H20 entry
 

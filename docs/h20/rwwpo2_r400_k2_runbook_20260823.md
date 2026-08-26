@@ -270,6 +270,12 @@ The healthy endpoint contains 100 rank-paired transaction receipts, no
 `failure_rank*.jsonl` artifact of any kind, full
 recovery checkpoints at 10/20/30/40/50 with only 40 and 50 retained, and
 immutable actor anchors at 5/10/15/20/25/50. Training never invokes validation.
+The deleted recovery roots at 10/20/30 must each have one consecutive
+`rwwpo2_recovery_prune_intent` / `rwwpo2_recovery_pruned` ledger pair. The pair
+binds the checkpoint inventory, preserved scientific-anchor inventory, exact
+resolved root, prune round, intent-record digest, and post-delete absence. An
+unmatched intent is an interrupted deletion and makes the full endpoint
+`NO_GO`; it may not be repaired by appending a completion after restart.
 Every transaction receipt must bind a fresh post-commit/post-rollback forward
 certificate to the resolved `tau_logprob`; cached trial or pre-update tensors
 are not admissible post-state evidence. Behavior materialization records an RNG
@@ -308,6 +314,13 @@ target round. A malformed/empty failure artifact or a failure at or before the
 requested prefix is fail-closed. If a run fails after a fully audited round-10
 multiple, create a signed parent receipt from the last usable recovery
 checkpoint:
+
+This procedure assumes the parent producer commit equals the resumed training
+commit. `audit_rwwpo2_lineage_parent.py --producer-commit` can independently
+inspect an older checkpoint with a newer auditor, but that auditor-only
+compatibility option is not a cross-commit training authorization. Current
+preflight rejects such a parent. Do not resume across a source fix without a
+separately frozen algorithm and resolved-contract compatibility gate.
 
 ```bash
 export RWWPO_RESUME_ROUND=20

@@ -76,8 +76,8 @@ def load_frozen_manifest(path: str | Path, environment: Mapping[str, str] | None
     return resolve_manifest_environment(raw, environment)
 
 
-def append_jsonl(path: str | Path, record: Mapping[str, Any]) -> None:
-    """Append one canonical, hash-chained JSON record under a process lock."""
+def append_jsonl(path: str | Path, record: Mapping[str, Any]) -> dict[str, Any]:
+    """Append one canonical, hash-chained JSON record and return that record."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     supplied = dict(record)
@@ -110,6 +110,7 @@ def append_jsonl(path: str | Path, record: Mapping[str, Any]) -> None:
         stream.flush()
         os.fsync(stream.fileno())
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return chained
 
 
 def record_sha256(record: Mapping[str, Any]) -> str:
@@ -141,9 +142,9 @@ def gate_a_enabled() -> bool:
     return os.getenv("GATE_A_FROZEN_AUDIT", "0") == "1"
 
 
-def append_gate_a_record(record_type: str, **fields: Any) -> None:
+def append_gate_a_record(record_type: str, **fields: Any) -> dict[str, Any] | None:
     if not gate_a_enabled():
-        return
+        return None
     ledger = os.environ["GATE_A_EXECUTION_LEDGER"]
     base = {
         "record_type": record_type,
@@ -153,7 +154,7 @@ def append_gate_a_record(record_type: str, **fields: Any) -> None:
         "recorded_at": utc_now(),
     }
     base.update(fields)
-    append_jsonl(ledger, base)
+    return append_jsonl(ledger, base)
 
 
 def partition_numeric_metrics(metrics: Mapping[str, Any]) -> tuple[dict[str, float], list[str]]:

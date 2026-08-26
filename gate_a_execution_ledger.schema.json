@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["record_type", "experiment_name", "git_commit", "run_id", "recorded_at", "record_index", "previous_record_sha256", "record_sha256"],
   "properties": {
-    "record_type": {"enum": ["p0_preflight", "runtime_config", "resume_load", "rollout_start", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result"]},
+    "record_type": {"enum": ["p0_preflight", "runtime_config", "resume_load", "rollout_start", "execution_signal", "weight_sync_ack", "weight_sync_summary", "checkpoint_inventory", "audit_result", "rwwpo2_actor_anchor_inventory", "rwwpo2_recovery_prune_intent", "rwwpo2_recovery_pruned", "rwwpo_t5_health_failure"]},
     "experiment_name": {"type": "string", "minLength": 1},
     "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
@@ -62,7 +62,14 @@
       "type": "object",
       "minProperties": 1,
       "additionalProperties": {"type": "string", "minLength": 1}
-    }
+    },
+    "pruned_round": {"type": "integer", "minimum": 10, "multipleOf": 10},
+    "pruned_root": {"type": "string", "pattern": "^/"},
+    "checkpoint_inventory_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "scientific_anchor_inventory_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "prune_intent_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "scientific_anchor_preserved": {"type": "boolean"},
+    "pruned_root_absent": {"type": "boolean"}
   },
   "allOf": [
     {
@@ -84,6 +91,14 @@
     {
       "if": {"properties": {"record_type": {"const": "execution_signal"}}},
       "then": {"required": ["global_step", "actor_version", "metrics", "nonfinite_metric_names"]}
+    },
+    {
+      "if": {"properties": {"record_type": {"const": "rwwpo2_recovery_prune_intent"}}},
+      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_inventory_record_sha256", "scientific_anchor_preserved"]}
+    },
+    {
+      "if": {"properties": {"record_type": {"const": "rwwpo2_recovery_pruned"}}},
+      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_inventory_record_sha256", "prune_intent_record_sha256", "scientific_anchor_preserved", "pruned_root_absent"]}
     }
   ],
   "additionalProperties": true

@@ -216,8 +216,9 @@ class LedgerAndAuditTests(unittest.TestCase):
     def test_append_jsonl_is_valid_and_checkpoint_inventory_hashes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            append_jsonl(root / "ledger.jsonl", {"b": 2, "a": 1})
+            appended = append_jsonl(root / "ledger.jsonl", {"b": 2, "a": 1})
             record = json.loads((root / "ledger.jsonl").read_text())
+            self.assertEqual(appended, record)
             self.assertEqual((record["a"], record["b"], record["record_index"]), (1, 2, 0))
             self.assertEqual(validate_jsonl_chain([record]), [])
             (root / "step/actor").mkdir(parents=True)
@@ -265,6 +266,29 @@ class LedgerAndAuditTests(unittest.TestCase):
             "optimizer_step_histogram": {"0": 0},
         }], schema)
         self.assertTrue(any("optimizer_step_histogram.0" in failure for failure in failures))
+        common = {
+            "experiment_name": "rwwpo2", "git_commit": "a" * 40,
+            "run_id": "b" * 32,
+            "recorded_at": "2026-08-21T00:00:00+00:00",
+            "previous_record_sha256": "0" * 64,
+            "checkpoint_inventory_record_sha256": "c" * 64,
+            "scientific_anchor_inventory_record_sha256": "d" * 64,
+            "global_step": 30, "pruned_round": 10,
+            "pruned_root": "/data/run/global_step_10",
+            "scientific_anchor_preserved": True,
+        }
+        intent = {
+            **common, "record_type": "rwwpo2_recovery_prune_intent",
+            "record_index": 0, "record_sha256": "e" * 64,
+        }
+        complete = {
+            **common, "record_type": "rwwpo2_recovery_pruned",
+            "record_index": 1, "previous_record_sha256": "e" * 64,
+            "record_sha256": "f" * 64,
+            "prune_intent_record_sha256": "e" * 64,
+            "pruned_root_absent": True,
+        }
+        self.assertEqual(validate_ledger_schema([intent, complete], schema), [])
 
     def test_checkpoint_inventory_requires_both_two_gpu_ranks(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,9 +1,13 @@
 import copy
+import ast
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import jsonschema
 import pytest
@@ -12,7 +16,7 @@ import torch
 from tools.h20.audit_rwwpo2_r50_program import wilson_interval
 from tools.h20.audit_rwwpo2_attempt import (
     execution_prefix_through_round, validate_transaction_failure_boundary,
-    validate_post_commit_forward_binding,
+    validate_post_commit_forward_binding, validate_recovery_prune_evidence,
 )
 from tools.h20.audit_rwwpo2_lineage_parent import execution_prefix_to_checkpoint
 from tools.h20.audit_rwwpo2_numeric_oracle import (
@@ -24,7 +28,9 @@ from tools.h20.verify_rwwpo2_release_tests import (
     collect_current_node_ids, junit_summary as release_test_junit_summary,
     node_evidence, runtime_environment, sha256_file, verify_release_test_receipt,
 )
-from recurrent.research.gate_a_execution import append_jsonl
+from recurrent.research.gate_a_execution import (
+    append_jsonl, checkpoint_inventory, validate_jsonl_chain,
+)
 from recurrent.research.rwwpo2_confirmation import (
     generation_protocol_projection, holm_two_test_decisions,
     one_sided_exact_paired_sign_flip, signed_report,
@@ -210,6 +216,7 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     lineage = (ROOT / "tools/h20/audit_rwwpo2_lineage_parent.py").read_text()
     trainer = (ROOT / "verl/trainer/ppo/ray_trainer.py").read_text()
     attempt = (ROOT / "tools/h20/audit_rwwpo2_attempt.py").read_text()
+    firewall = (ROOT / "tools/h20/audit_rwwpo2_source_firewall.py").read_text()
     for token in ("prefix_sha256", "tail_sha256", "tensor_inventory",
                   "checkpoint_inventory_event_sha256", "failed_suffix_imported",
                   "record_limits", "rwwpo_rollout_seed_anchor",
@@ -223,7 +230,18 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     assert "record_limits=record_limits" in attempt
     assert "RWWPO2_RESUME_ACCEPTED_OPTIMIZER_CLOCK_DRIFT" in trainer
     assert "rwwpo_rollout_seed_anchor" in trainer
+    assert "rwwpo2_recovery_prune_intent" in trainer
     assert "rwwpo2_recovery_pruned" in trainer
+    assert "prune_intent_record_sha256" in trainer
+    prune_method = trainer[
+        trainer.index("    def _prune_rwwpo2_recovery_roots(self):"):
+        trainer.index("    def _save_rwwpo2_actor_anchor(self):")
+    ]
+    assert "from recurrent.research.gate_a_execution import (" in prune_method
+    assert "append_gate_a_record," in prune_method
+    assert prune_method.index('"rwwpo2_recovery_prune_intent"') < \
+        prune_method.index("shutil.rmtree(path)") < \
+        prune_method.index('"rwwpo2_recovery_pruned"')
     assert "scientific_anchor_preserved=True" in trainer
     assert "anchor hardlink" in attempt
     assert '"resolved_contract_file_sha256"' in attempt
@@ -235,8 +253,212 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
     assert "validate_rwwpo2_rng_phase_digests(row)" in attempt
     assert "validate_transaction_failure_boundary(" in attempt
     assert "validate_post_commit_forward_binding(" in attempt
+    assert "validate_recovery_prune_evidence(" in attempt
+    for bound_source in (
+            'ROOT/"gate_a_execution_ledger.schema.json"',
+            'ROOT/"recurrent/research/gate_a_execution.py"',
+            'ROOT/"verl/trainer/ppo/ray_trainer.py"'):
+        assert bound_source in firewall
     gate = (ROOT / "tools/h20/audit_rwwpo2_r50_program.py").read_text()
     assert "segment contract binding" in gate
+
+
+def _prune_events(output_root: Path):
+    def digest(value: int) -> str:
+        return format(value % 16, "x") * 64
+
+    events = []
+    record_index = 0
+    checkpoint_sha = {}
+    anchor_sha = {}
+    for round_id in (10, 20, 30, 40):
+        checkpoint_sha[round_id] = digest(round_id // 10)
+        anchor_sha[round_id] = digest(round_id // 10 + 4)
+        events.extend((
+            {"record_type": "checkpoint_inventory", "global_step": round_id,
+             "record_index": record_index,
+             "record_sha256": checkpoint_sha[round_id]},
+            {"record_type": "rwwpo2_actor_anchor_inventory",
+             "global_step": round_id, "record_index": record_index + 1,
+             "record_sha256": anchor_sha[round_id]},
+        ))
+        record_index += 2
+    for pruned_round, prune_at in ((10, 30), (20, 40)):
+        root = str((output_root / f"global_step_{pruned_round}").resolve())
+        intent_sha = digest(pruned_round // 10 + 8)
+        common = {
+            "global_step": prune_at, "pruned_round": pruned_round,
+            "pruned_root": root,
+            "checkpoint_inventory_record_sha256": checkpoint_sha[pruned_round],
+            "scientific_anchor_inventory_record_sha256": anchor_sha[pruned_round],
+            "scientific_anchor_preserved": True,
+        }
+        events.extend((
+            {**common, "record_type": "rwwpo2_recovery_prune_intent",
+             "record_index": record_index, "record_sha256": intent_sha},
+            {**common, "record_type": "rwwpo2_recovery_pruned",
+             "record_index": record_index + 1,
+             "record_sha256": digest(pruned_round // 10 + 10),
+             "prune_intent_record_sha256": intent_sha,
+             "pruned_root_absent": True},
+        ))
+        record_index += 2
+    for retained in (30, 40):
+        (output_root / f"global_step_{retained}").mkdir()
+    return events
+
+
+def test_recovery_prune_requires_two_phase_authenticated_closure(tmp_path):
+    events = _prune_events(tmp_path)
+    summary = validate_recovery_prune_evidence(
+        events, expected_checkpoint_rounds=[10, 20, 30, 40],
+        output_root=tmp_path,
+    )
+    assert summary == {
+        "retained_rounds": [30, 40],
+        "pruned_rounds": [10, 20],
+        "two_phase_evidence": True,
+    }
+
+    schema = json.loads((ROOT / "gate_a_execution_ledger.schema.json").read_text())
+    for row in events:
+        if row["record_type"] not in {
+                "rwwpo2_recovery_prune_intent", "rwwpo2_recovery_pruned"}:
+            continue
+        schema_row = {
+            **row,
+            "experiment_name": "rwwpo2",
+            "git_commit": "a" * 40,
+            "run_id": "b" * 32,
+            "recorded_at": "2026-08-26T00:00:00+00:00",
+            "previous_record_sha256": "0" * 64,
+        }
+        jsonschema.Draft202012Validator(schema).validate(schema_row)
+
+    missing_complete = [row for row in events if not (
+        row["record_type"] == "rwwpo2_recovery_pruned"
+        and row.get("pruned_round") == 10
+    )]
+    with pytest.raises(ValueError, match="intent/complete"):
+        validate_recovery_prune_evidence(
+            missing_complete, expected_checkpoint_rounds=[10, 20, 30, 40],
+            output_root=tmp_path,
+        )
+
+    forged = copy.deepcopy(events)
+    next(row for row in forged if row["record_type"] ==
+         "rwwpo2_recovery_pruned")["prune_intent_record_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="semantic closure"):
+        validate_recovery_prune_evidence(
+            forged, expected_checkpoint_rounds=[10, 20, 30, 40],
+            output_root=tmp_path,
+        )
+
+
+def test_recovery_prune_rejects_delete_before_complete(tmp_path):
+    events = _prune_events(tmp_path)
+    incomplete = [row for row in events if not (
+        row["record_type"] == "rwwpo2_recovery_pruned"
+        and row.get("pruned_round") == 20
+    )]
+    with pytest.raises(ValueError, match="intent/complete"):
+        validate_recovery_prune_evidence(
+            incomplete, expected_checkpoint_rounds=[10, 20, 30, 40],
+            output_root=tmp_path,
+        )
+
+
+def test_recovery_prune_rejects_forged_post_delete_absence(tmp_path):
+    events = _prune_events(tmp_path)
+    (tmp_path / "global_step_10").mkdir()
+    with pytest.raises(ValueError, match="semantic closure"):
+        validate_recovery_prune_evidence(
+            events, expected_checkpoint_rounds=[10, 20, 30, 40],
+            output_root=tmp_path,
+        )
+
+
+def test_recovery_prune_runtime_executes_r30_two_phase_closure(
+        tmp_path, monkeypatch):
+    """Execute the real method body so a missing method-local import is fatal."""
+    trainer_source = (ROOT / "verl/trainer/ppo/ray_trainer.py").read_text()
+    trainer_tree = ast.parse(trainer_source)
+    trainer_class = next(
+        node for node in trainer_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "RayPPOTrainer"
+    )
+    prune_method = copy.deepcopy(next(
+        node for node in trainer_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_prune_rwwpo2_recovery_roots"
+    ))
+    fixture_class = ast.ClassDef(
+        name="PruneFixture", bases=[], keywords=[],
+        body=[prune_method], decorator_list=[],
+    )
+    namespace = {"json": json, "os": os, "re": re, "shutil": shutil}
+    exec(compile(ast.fix_missing_locations(ast.Module(
+        body=[fixture_class], type_ignores=[])), "<prune-fixture>", "exec"),
+         namespace)
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    for round_id in (10, 20, 30):
+        checkpoint = output_root / f"global_step_{round_id}"
+        (checkpoint / "actor").mkdir(parents=True)
+        (checkpoint / "actor" / "model.pt").write_bytes(
+            f"model-{round_id}".encode())
+        (checkpoint / "data.pt").write_bytes(f"data-{round_id}".encode())
+    anchor_root = output_root / "scientific_anchors/round_10"
+    (anchor_root / "actor").mkdir(parents=True)
+    (anchor_root / "actor/model.pt").write_bytes(b"anchor-10")
+
+    ledger = tmp_path / "execution.jsonl"
+    common = {
+        "experiment_name": "rwwpo2", "git_commit": "a" * 40,
+        "run_id": "b" * 32, "recorded_at": "2026-08-26T00:00:00+00:00",
+    }
+    checkpoint_records = {}
+    for round_id in (10, 20, 30):
+        checkpoint_records[round_id] = append_jsonl(ledger, {
+            **common, "record_type": "checkpoint_inventory",
+            "global_step": round_id,
+            "inventory": checkpoint_inventory(
+                output_root / f"global_step_{round_id}"),
+        })
+    anchor_record = append_jsonl(ledger, {
+        **common, "record_type": "rwwpo2_actor_anchor_inventory",
+        "global_step": 10, "inventory": checkpoint_inventory(anchor_root),
+    })
+    monkeypatch.setenv("GATE_A_FROZEN_AUDIT", "1")
+    monkeypatch.setenv("GATE_A_EXECUTION_LEDGER", str(ledger))
+    monkeypatch.setenv("GATE_A_EXPERIMENT_NAME", "rwwpo2")
+    monkeypatch.setenv("GATE_A_GIT_COMMIT", "a" * 40)
+    monkeypatch.setenv("GATE_A_RUN_ID", "b" * 32)
+
+    actor = {"rwwpo": {"enable": True, "program_version": "rwwpo2-k2"}}
+    fixture = namespace["PruneFixture"]()
+    fixture.global_steps = 30
+    fixture.config = SimpleNamespace(
+        actor_rollout_ref=SimpleNamespace(actor=actor),
+        trainer=SimpleNamespace(default_local_dir=str(output_root)),
+    )
+    fixture._prune_rwwpo2_recovery_roots()
+
+    assert not (output_root / "global_step_10").exists()
+    assert (output_root / "global_step_20").is_dir()
+    assert (output_root / "global_step_30").is_dir()
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert validate_jsonl_chain(rows) == []
+    intent, complete = rows[-2:]
+    assert intent["record_type"] == "rwwpo2_recovery_prune_intent"
+    assert complete["record_type"] == "rwwpo2_recovery_pruned"
+    assert complete["prune_intent_record_sha256"] == intent["record_sha256"]
+    assert intent["checkpoint_inventory_record_sha256"] == \
+        checkpoint_records[10]["record_sha256"]
+    assert intent["scientific_anchor_inventory_record_sha256"] == \
+        anchor_record["record_sha256"]
+    assert complete["pruned_root_absent"] is True
 
 
 def test_attempt_failure_evidence_is_prefix_aware_and_fail_closed(tmp_path):

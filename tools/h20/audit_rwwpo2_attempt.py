@@ -148,6 +148,83 @@ def validate_post_commit_forward_binding(rows, *, tau_logprob: float) -> None:
             raise ValueError("post-commit forward binding")
 
 
+def validate_recovery_prune_evidence(
+        events: list[dict], *, expected_checkpoint_rounds: list[int],
+        output_root: Path) -> dict:
+    """Require an authenticated intent/delete/complete pair for every prune."""
+    expected = [int(value) for value in expected_checkpoint_rounds]
+    retained = set(expected[-2:])
+    pruned = expected[:-2]
+    checkpoint_events = {
+        int(row["global_step"]): row for row in events
+        if row.get("record_type") == "checkpoint_inventory"
+        and int(row.get("global_step", -1)) in expected
+    }
+    anchor_events = {
+        int(row["global_step"]): row for row in events
+        if row.get("record_type") == "rwwpo2_actor_anchor_inventory"
+        and int(row.get("global_step", -1)) in expected
+    }
+
+    def indexed(record_type: str) -> dict[int, dict]:
+        selected = [row for row in events if row.get("record_type") == record_type]
+        by_round = {}
+        for row in selected:
+            round_id = int(row.get("pruned_round", -1))
+            if round_id not in pruned or round_id in by_round:
+                raise ValueError("unexpected or duplicate recovery prune evidence")
+            by_round[round_id] = row
+        return by_round
+
+    intents = indexed("rwwpo2_recovery_prune_intent")
+    completes = indexed("rwwpo2_recovery_pruned")
+    if set(intents) != set(pruned) or set(completes) != set(pruned):
+        raise ValueError("recovery prune intent/complete closure")
+
+    for round_id in expected:
+        root = output_root / f"global_step_{round_id}"
+        if round_id in retained:
+            if not root.is_dir():
+                raise ValueError("retained recovery roots")
+            continue
+        intent = intents[round_id]
+        complete = completes[round_id]
+        checkpoint = checkpoint_events.get(round_id)
+        anchor = anchor_events.get(round_id)
+        prune_at = expected[expected.index(round_id) + 2]
+        resolved_root = str(root.resolve())
+        common = (
+            checkpoint is not None,
+            anchor is not None,
+            int(intent.get("global_step", -1)) == prune_at,
+            int(complete.get("global_step", -1)) == prune_at,
+            intent.get("pruned_root") == resolved_root,
+            complete.get("pruned_root") == resolved_root,
+            intent.get("checkpoint_inventory_record_sha256") == (
+                checkpoint or {}).get("record_sha256"),
+            complete.get("checkpoint_inventory_record_sha256") == (
+                checkpoint or {}).get("record_sha256"),
+            intent.get("scientific_anchor_inventory_record_sha256") == (
+                anchor or {}).get("record_sha256"),
+            complete.get("scientific_anchor_inventory_record_sha256") == (
+                anchor or {}).get("record_sha256"),
+            intent.get("scientific_anchor_preserved") is True,
+            complete.get("scientific_anchor_preserved") is True,
+            complete.get("pruned_root_absent") is True,
+            complete.get("prune_intent_record_sha256") == intent.get(
+                "record_sha256"),
+            int(complete.get("record_index", -1)) == int(intent.get(
+                "record_index", -2)) + 1,
+        )
+        if root.exists() or not all(common):
+            raise ValueError("recovery prune semantic closure")
+    return {
+        "retained_rounds": sorted(retained),
+        "pruned_rounds": pruned,
+        "two_phase_evidence": True,
+    }
+
+
 def execution_prefix_through_round(path: Path, *, target_round: int,
                                    expected_commit: str):
     """Authenticate only the completed execution prefix for `target_round`.
@@ -733,32 +810,15 @@ def main() -> None:
     if [int(row["global_step"]) for row in segment_checkpoint_events] != \
             expected_checkpoint_rounds:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:recovery checkpoint sequence")
-    retained_checkpoint_rounds = set(expected_checkpoint_rounds[-2:])
-    pruned_events = [
-        row for row in events if row.get("record_type") == "rwwpo2_recovery_pruned"
-        and int(row.get("pruned_round", -1)) in expected_checkpoint_rounds
-    ]
-    pruned_by_round = {}
-    for row in pruned_events:
-        round_id = int(row["pruned_round"])
-        if round_id in pruned_by_round:
-            raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:duplicate recovery prune")
-        pruned_by_round[round_id] = row
-    event_by_checkpoint_round = {
-        int(row["global_step"]): row for row in segment_checkpoint_events
-    }
-    for round_id in expected_checkpoint_rounds:
-        root = output_root / f"global_step_{round_id}"
-        if round_id in retained_checkpoint_rounds:
-            if not root.is_dir() or round_id in pruned_by_round:
-                raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:retained recovery roots")
-        else:
-            prune = pruned_by_round.get(round_id)
-            if root.exists() or prune is None \
-                    or prune.get("checkpoint_inventory_record_sha256") != \
-                        event_by_checkpoint_round[round_id]["record_sha256"] \
-                    or prune.get("scientific_anchor_preserved") is not True:
-                raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:recovery prune closure")
+    try:
+        recovery_prune_summary = validate_recovery_prune_evidence(
+            events, expected_checkpoint_rounds=expected_checkpoint_rounds,
+            output_root=output_root,
+        )
+    except ValueError as error:
+        raise SystemExit(
+            "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+        ) from error
     anchor_events = [row for row in events if row.get("record_type") ==
                      "rwwpo2_actor_anchor_inventory" and start_round <= int(
                          row.get("global_step", -1)) <= args.target_round]
@@ -885,6 +945,7 @@ def main() -> None:
         "thresholds": thresholds,
         "maximum_root_loo_feasibility_flip_fraction": maximum_loo,
         "marker_evidence": marker_evidence,
+        "recovery_prune_summary": recovery_prune_summary,
         "tensor_inventory": tensor_inventory,
         "execution_ledger_forensic_full_sha256": sha256_file(execution_path),
         "execution_prefix_sha256": execution_prefix_sha256,

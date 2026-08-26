@@ -14,6 +14,8 @@ SCIENTIFIC=(
     ROOT/"verl/workers/actor/dp_actor.py",
 )
 ENTRY=(
+    ROOT/"gate_a_execution_ledger.schema.json",
+    ROOT/"recurrent/research/gate_a_execution.py",
     ROOT/"experiments/7b_gate_a/run_gate_a.sh",
     ROOT/"scripts/h20/rwwpo2_common.sh",
     ROOT/"scripts/h20/run_qwen25_7b_rwwpo2.sh",
@@ -41,6 +43,7 @@ ENTRY=(
     ROOT/"recurrent/research/rwwpo2_confirmation.py",
     ROOT/"recurrent/research/rwwpo2_babilong.py",
     ROOT/"recurrent/research/hotpotqa_dense_reward.py",
+    ROOT/"verl/trainer/ppo/ray_trainer.py",
     ROOT/"manifests/h20/rwwpo2_babilong_pilot_v1.json",
     ROOT/"tools/h20/audit_rwwpo2_babilong_fixtures.py",
     ROOT/"tools/h20/audit_rwwpo2_babilong_data_boundary.py",
@@ -339,6 +342,24 @@ def main():
     for token in ("record_limits=record_limits", "execution_prefix_sha256"):
         if token not in attempt or token not in lineage:
             violations.append("recovery prefix audit:"+token)
+    for token in (
+        "rwwpo2_recovery_prune_intent",
+        "rwwpo2_recovery_pruned",
+        "prune_intent_record_sha256",
+        "scientific_anchor_inventory_record_sha256",
+        "RWWPO2_RECOVERY_PRUNE_INTENT_NOT_RECORDED",
+        "RWWPO2_RECOVERY_PRUNE_COMPLETE_NOT_RECORDED",
+    ):
+        if token not in trainer:
+            violations.append("two-phase recovery prune producer:"+token)
+    for token in (
+        "validate_recovery_prune_evidence(",
+        "recovery prune intent/complete closure",
+        "recovery prune semantic closure",
+        '"two_phase_evidence": True',
+    ):
+        if token not in attempt:
+            violations.append("two-phase recovery prune audit:"+token)
     for token in (
         'parser.add_argument("--preflight", required=True)',
         '"preflight_report_sha256"', "R400 preflight gate binding",

@@ -79,6 +79,26 @@ The production algorithm and audit thresholds were unchanged. The consumed root
 is `NO_GO`; a new exact commit must pass a fresh authenticated suite and numeric
 oracle before R50 is unlocked.
 
+Commit `4a6a72ef51aa9e8bba2b9c2efe22dc4c98b54dfe` later passed its frozen
+pre-R50 gates and launched B/D/E seed-2026 assignments. The B and D attempts
+reached the round-30 checkpoint boundary, where recovery-root pruning ran for
+the first time and raised `NameError: append_gate_a_record is not defined`.
+Rounds 10 and 20 did not exercise this branch because no recovery root was yet
+old enough to prune. Both full attempts are `NO_GO`; an existing round-30 root
+is only a candidate lineage parent. The current preflight does not authorize a
+parent produced by a different training commit, so the checkpoint cannot be
+resumed under the repaired commit merely because the read-only lineage auditor
+authenticates its prefix. Cross-commit resume would additionally require a
+separately frozen compatibility certificate proving unchanged algorithm and
+resolved controller/numeric semantics; no such certificate currently exists.
+The repair
+does not merely add the missing local import: pruning is now a two-phase
+append-only transaction (`intent -> delete -> complete`) bound to the recovery
+checkpoint inventory and the preserved scientific-anchor inventory. Missing,
+duplicate, reordered, forged, or incomplete prune evidence is fail-closed.
+Any process that already loaded the old producer remains unaffected by the
+source repair and must not cross the round-30 pruning boundary.
+
 ## 1. Scientific question
 
 A recurrent memory writer emits free text that is materialized as the next
@@ -419,7 +439,12 @@ both reported.
 Non-multiple-of-10 full checkpoint materializations used to create scientific
 anchors may be deleted only after their actor shards are hard-linked/copied into
 an immutable anchor inventory and audited. Recovery deletion is never allowed
-to delete a scientific actor anchor or evidence ledger.
+to delete a scientific actor anchor or evidence ledger. Every recovery-root
+prune must first append an authenticated intent bound to both the checkpoint and
+scientific-anchor inventories, then delete the exact resolved root, and finally
+append the immediately following completion record proving the root is absent.
+An intent without completion, a completion without its exact intent digest, or
+any unexpected prune makes the full endpoint ineligible for PASS.
 
 The actual-loss evidence is stored as immutable tensor shards (round x inner x
 rank) plus small append-only JSONL receipts and a hash chain. Each tensor shard

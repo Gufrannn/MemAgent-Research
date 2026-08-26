@@ -1385,6 +1385,11 @@ class RayPPOTrainer:
 
     def _prune_rwwpo2_recovery_roots(self):
         """Keep exactly the newest two authenticated full recovery roots."""
+        from recurrent.research.gate_a_execution import (
+            append_gate_a_record,
+            checkpoint_inventory,
+        )
+
         rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
         if not (bool(rwwpo_cfg.get("enable",False)) and
                 str(rwwpo_cfg.get("program_version",""))=="rwwpo2-k2"):
@@ -1402,6 +1407,9 @@ class RayPPOTrainer:
         events=[json.loads(line) for line in open(execution_path,encoding="utf-8") if line.strip()]
         authenticated={int(row["global_step"]):row for row in events
                        if row.get("record_type")=="checkpoint_inventory"}
+        anchor_authenticated={int(row["global_step"]):row for row in events
+                              if row.get("record_type")==
+                              "rwwpo2_actor_anchor_inventory"}
         for step,path in sorted(candidates):
             if step in keep:
                 continue
@@ -1410,12 +1418,35 @@ class RayPPOTrainer:
             if os.path.dirname(os.path.realpath(path)) != output_root:
                 raise RuntimeError(f"RWWPO2_RECOVERY_PRUNE_PATH_ESCAPE:{path}")
             anchored=authenticated[step]
-            shutil.rmtree(path)
-            append_gate_a_record(
-                "rwwpo2_recovery_pruned",global_step=int(self.global_steps),
-                pruned_round=int(step),pruned_root=os.path.realpath(path),
+            anchor_event=anchor_authenticated.get(step)
+            anchor_root=os.path.join(output_root,"scientific_anchors",f"round_{step}")
+            if anchor_event is None or not os.path.isdir(anchor_root) \
+                    or anchor_event.get("inventory") != checkpoint_inventory(anchor_root):
+                raise RuntimeError(f"RWWPO2_RECOVERY_PRUNE_ANCHOR_MISSING:{anchor_root}")
+            resolved_path=os.path.realpath(path)
+            intent=append_gate_a_record(
+                "rwwpo2_recovery_prune_intent",global_step=int(self.global_steps),
+                pruned_round=int(step),pruned_root=resolved_path,
                 checkpoint_inventory_record_sha256=anchored["record_sha256"],
+                scientific_anchor_inventory_record_sha256=
+                    anchor_event["record_sha256"],
                 scientific_anchor_preserved=True)
+            if not isinstance(intent,dict) or re.fullmatch(
+                    r"[0-9a-f]{64}",str(intent.get("record_sha256",""))) is None:
+                raise RuntimeError("RWWPO2_RECOVERY_PRUNE_INTENT_NOT_RECORDED")
+            shutil.rmtree(path)
+            if os.path.lexists(path):
+                raise RuntimeError(f"RWWPO2_RECOVERY_PRUNE_ROOT_REMAINS:{path}")
+            complete=append_gate_a_record(
+                "rwwpo2_recovery_pruned",global_step=int(self.global_steps),
+                pruned_round=int(step),pruned_root=resolved_path,
+                checkpoint_inventory_record_sha256=anchored["record_sha256"],
+                scientific_anchor_inventory_record_sha256=
+                    anchor_event["record_sha256"],
+                prune_intent_record_sha256=intent["record_sha256"],
+                pruned_root_absent=True,scientific_anchor_preserved=True)
+            if not isinstance(complete,dict):
+                raise RuntimeError("RWWPO2_RECOVERY_PRUNE_COMPLETE_NOT_RECORDED")
 
     def _save_rwwpo2_actor_anchor(self):
         rwwpo_cfg=self.config.actor_rollout_ref.actor.get("rwwpo",{})
