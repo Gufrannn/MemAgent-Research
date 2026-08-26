@@ -1840,9 +1840,59 @@ class RayPPOTrainer:
             actual = hashlib.sha256(json.dumps(
                 lineage_parent, sort_keys=True, separators=(",", ":"),
                 allow_nan=False).encode()).hexdigest()
+            consumer_commit = os.environ.get("GATE_A_GIT_COMMIT")
+            producer_commit = lineage_parent.get("git_commit")
+            cross_commit_compatibility = None
+            compatibility_path = os.environ.get(
+                "RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT", ""
+            )
+            if producer_commit != consumer_commit:
+                if not compatibility_path or not os.path.isabs(compatibility_path):
+                    raise RuntimeError(
+                        "RWWPO2_RESUME_CROSS_COMMIT_COMPATIBILITY_DRIFT"
+                    )
+                compatibility_path = os.path.realpath(compatibility_path)
+                cross_commit_compatibility = json.loads(open(
+                    compatibility_path, encoding="utf-8").read())
+                compatibility_declared = cross_commit_compatibility.pop(
+                    "report_sha256", None
+                )
+                compatibility_actual = hashlib.sha256(json.dumps(
+                    cross_commit_compatibility, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False
+                ).encode()).hexdigest()
+                if (compatibility_declared != compatibility_actual or
+                        cross_commit_compatibility.get("status") != "PASS" or
+                        cross_commit_compatibility.get("decision") !=
+                        "RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS" or
+                        cross_commit_compatibility.get("git_commit") !=
+                        consumer_commit or
+                        cross_commit_compatibility.get("consumer_git_commit") !=
+                        consumer_commit or
+                        cross_commit_compatibility.get("producer_git_commit") !=
+                        producer_commit or
+                        cross_commit_compatibility.get(
+                            "producer_resolved_contract_file_sha256") !=
+                        os.environ.get("RWWPO_RESOLVED_CONTRACT_SHA256") or
+                        cross_commit_compatibility.get("source_manifest_sha256") !=
+                        os.environ.get("RWWPO_SOURCE_MANIFEST_SHA256") or
+                        cross_commit_compatibility.get(
+                            "algorithmic_source_or_contract_change") is not False):
+                    raise RuntimeError(
+                        "RWWPO2_RESUME_CROSS_COMMIT_COMPATIBILITY_DRIFT"
+                    )
+                cross_commit_compatibility.update({
+                    "report_sha256": compatibility_declared,
+                    "file_sha256": hashlib.sha256(open(
+                        compatibility_path, "rb").read()).hexdigest(),
+                    "path": compatibility_path,
+                })
+            elif compatibility_path:
+                raise RuntimeError(
+                    "RWWPO2_RESUME_CROSS_COMMIT_COMPATIBILITY_DRIFT"
+                )
             if (declared != actual or lineage_parent.get("status") != "PASS" or
                     lineage_parent.get("decision") != "RWWPO2_LINEAGE_PARENT_PASS" or
-                    lineage_parent.get("git_commit") != os.environ.get("GATE_A_GIT_COMMIT") or
                     os.path.realpath(str(lineage_parent.get("checkpoint_path", ""))) !=
                     os.path.realpath(global_step_folder) or
                     str(lineage_parent.get("cell")) != str(rwwpo_cfg.get("cell")) or
@@ -1853,6 +1903,9 @@ class RayPPOTrainer:
             lineage_parent["file_sha256"] = hashlib.sha256(
                 open(lineage_path, "rb").read()).hexdigest()
             lineage_parent["path"] = lineage_path
+            lineage_parent["cross_commit_compatibility"] = (
+                cross_commit_compatibility
+            )
 
         actor_path = os.path.join(global_step_folder, "actor")
         critic_path = os.path.join(global_step_folder, "critic")
@@ -1898,6 +1951,33 @@ class RayPPOTrainer:
                                 "accepted_optimizer_clock_at_checkpoint"
                             ],
                             "failed_suffix_imported": False,
+                            "producer_git_commit": lineage_parent[
+                                "producer_git_commit"
+                            ],
+                            "consumer_git_commit": os.environ.get(
+                                "GATE_A_GIT_COMMIT"
+                            ),
+                            "cross_commit_compatibility": (
+                                None if lineage_parent[
+                                    "cross_commit_compatibility"
+                                ] is None else {
+                                    "path": lineage_parent[
+                                        "cross_commit_compatibility"
+                                    ]["path"],
+                                    "file_sha256": lineage_parent[
+                                        "cross_commit_compatibility"
+                                    ]["file_sha256"],
+                                    "report_sha256": lineage_parent[
+                                        "cross_commit_compatibility"
+                                    ]["report_sha256"],
+                                    "producer_git_commit": lineage_parent[
+                                        "cross_commit_compatibility"
+                                    ]["producer_git_commit"],
+                                    "consumer_git_commit": lineage_parent[
+                                        "cross_commit_compatibility"
+                                    ]["consumer_git_commit"],
+                                }
+                            ),
                         }
                         if lineage_parent is not None else None
                     ),

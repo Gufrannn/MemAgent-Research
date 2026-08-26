@@ -85,12 +85,13 @@ reached the round-30 checkpoint boundary, where recovery-root pruning ran for
 the first time and raised `NameError: append_gate_a_record is not defined`.
 Rounds 10 and 20 did not exercise this branch because no recovery root was yet
 old enough to prune. Both full attempts are `NO_GO`; an existing round-30 root
-is only a candidate lineage parent. The current preflight does not authorize a
-parent produced by a different training commit, so the checkpoint cannot be
-resumed under the repaired commit merely because the read-only lineage auditor
-authenticates its prefix. Cross-commit resume would additionally require a
-separately frozen compatibility certificate proving unchanged algorithm and
-resolved controller/numeric semantics; no such certificate currently exists.
+is only a candidate lineage parent. A read-only lineage audit alone never
+authorizes a different training commit. Cross-commit resume now has a separate
+fail-closed compatibility producer that requires unchanged algorithm and
+resolved controller/numeric semantics, identical authenticated runtime
+environments, and consumer release-test PASS evidence. No H20 compatibility
+receipt or resumed endpoint currently exists, so these checkpoints remain
+unauthorized until those gates actually PASS.
 The repair
 does not merely add the missing local import: pruning is now a two-phase
 append-only transaction (`intent -> delete -> complete`) bound to the recovery

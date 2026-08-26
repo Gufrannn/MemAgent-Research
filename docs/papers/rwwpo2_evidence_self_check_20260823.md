@@ -56,11 +56,15 @@ older than the two retained full checkpoints. The completed actor transactions
 remain useful implementation diagnostics, but neither attempt is a valid R50
 endpoint. Any round-30 directory is only a candidate recovery parent pending a
 read-only checkpoint-prefix and lineage audit; its mere presence does not
-authorize resume. Because the repaired training commit differs from the parent
-producer, the current preflight still rejects that lineage even after a parent
-audit. A separately reviewed cross-commit algorithm/resolved-contract
-compatibility certificate would be required to reuse it, and no such gate is
-implemented. The correction adds a method-local import and a fail-closed
+authorize resume. A fail-closed cross-commit compatibility producer is now
+implemented, but has not yet produced H20 evidence. It requires byte-identical
+actor/objective/controller/numeric sources, an unchanged projected trainer and
+launcher outside explicitly delimited recovery wiring, the producer's exact
+resolved contract, identical authenticated Python/Torch runtime environments,
+and fresh release-test PASS evidence at the consumer commit. Only a signed PASS
+receipt plus a separately authenticated checkpoint-prefix receipt can authorize
+resume; absent either receipt, preflight and runtime reject. The correction adds
+a method-local import and a fail-closed
 two-phase prune ledger bound to both checkpoint and scientific-anchor
 inventories. It changes checkpoint lifecycle evidence, so it requires a new
 exact commit and fresh authenticated release-test/CPU/numeric receipts before
@@ -176,7 +180,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...`, `7d7054a...`, nor the B/D `4a6a72ef...` attempts has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The R30 pruning repair must pass a new exact-commit authenticated release suite and pre-R50 evidence gates. The old B/D round-30 roots are not resumable under the repaired commit without a new, separately reviewed cross-commit compatibility gate. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...`, `7d7054a...`, nor the B/D `4a6a72ef...` attempts has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The repaired exact commit must pass a fresh authenticated release suite. Then a signed cross-commit compatibility receipt and per-checkpoint lineage audit must PASS before B/D/E resume; no such H20 receipt or resumed endpoint exists yet. |
 
 ## 5. Reproducible read-only H20 entry
 

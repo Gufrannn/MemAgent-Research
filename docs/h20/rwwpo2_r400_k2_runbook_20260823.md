@@ -315,12 +315,25 @@ requested prefix is fail-closed. If a run fails after a fully audited round-10
 multiple, create a signed parent receipt from the last usable recovery
 checkpoint:
 
-This procedure assumes the parent producer commit equals the resumed training
-commit. `audit_rwwpo2_lineage_parent.py --producer-commit` can independently
-inspect an older checkpoint with a newer auditor, but that auditor-only
-compatibility option is not a cross-commit training authorization. Current
-preflight rejects such a parent. Do not resume across a source fix without a
-separately frozen algorithm and resolved-contract compatibility gate.
+Same-commit resume follows the procedure below unchanged. Cross-commit resume
+is forbidden unless `audit_rwwpo2_cross_commit_resume.py` first emits a signed
+PASS receipt. That producer requires exact algorithm/source projections, the
+producer's original resolved numeric contract, identical authenticated runtime
+environments, and release-test PASS receipts for both commits. The consumer
+preflight, runtime load event, segment auditor, and R50 finalizer all bind that
+same receipt. A newer lineage auditor alone is never authorization.
+
+For a compatible producer-only recovery fix, additionally set:
+
+```bash
+export RWWPO_PRODUCER_COMMIT=<40-hex parent producer>
+export RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT=/absolute/path/cross_commit_compatibility.json
+```
+
+Create the parent lineage receipt with
+`--producer-commit "$RWWPO_PRODUCER_COMMIT"`. Keep
+`RWWPO_RESOLVED_CONTRACT` pointed at the producer's authenticated resolved
+contract; substituting a consumer numeric contract is forbidden.
 
 ```bash
 export RWWPO_RESUME_ROUND=20
@@ -338,6 +351,10 @@ export RWWPO_PARENT_SEGMENT_AUDIT="$RWWPO_CERT_ROOT/attempt_audit_r${RWWPO_RESUM
   --output "$RWWPO_PARENT_SEGMENT_AUDIT"
 
 export RWWPO_LINEAGE_PARENT_RECEIPT="$RWWPO_CERT_ROOT/lineage_parent_r${RWWPO_RESUME_ROUND}.json"
+LINEAGE_PRODUCER_ARGS=()
+if [[ -n ${RWWPO_PRODUCER_COMMIT:-} ]]; then
+  LINEAGE_PRODUCER_ARGS+=(--producer-commit "$RWWPO_PRODUCER_COMMIT")
+fi
 "$RWWPO_PYTHON" tools/h20/audit_rwwpo2_lineage_parent.py \
   --parent-attempt-root "$RWWPO_ATTEMPT_ROOT" \
   --parent-output-root "$RWWPO_OUTPUT" \
@@ -347,10 +364,12 @@ export RWWPO_LINEAGE_PARENT_RECEIPT="$RWWPO_CERT_ROOT/lineage_parent_r${RWWPO_RE
   --resolved-contract "$RWWPO_RESOLVED_CONTRACT" \
   --resolved-contract-sha256 "$RWWPO_RESOLVED_CONTRACT_SHA256" \
   --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  "${LINEAGE_PRODUCER_ARGS[@]}" \
   --output "$RWWPO_LINEAGE_PARENT_RECEIPT"
 
 export RWWPO_PARENT_OUTPUT_ROOT="$RWWPO_OUTPUT"
 export RWWPO_PHASE=resume
+export RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT=${RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT:-}
 export RWWPO_RUN_ID="rwwpo2_r50_${RWWPO_CELL,,}_seed${RWWPO_EXPERIMENT_SEED}_${RWWPO_EXPECTED_COMMIT:0:8}_resume_r${RWWPO_RESUME_ROUND}_r1"
 bash scripts/h20/run_qwen25_7b_rwwpo2.sh
 ```

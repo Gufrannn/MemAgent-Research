@@ -54,6 +54,20 @@ def verified(path: Path, *, commit: str) -> dict:
             "path": str(path.resolve())}
 
 
+def verified_decision(path: Path, *, decision: str, commit: str) -> dict:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("compatibility receipt path")
+    row = json.loads(path.read_text(encoding="utf-8"))
+    declared = row.pop("report_sha256", None)
+    actual = hashlib.sha256(json.dumps(
+        row, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()).hexdigest()
+    if declared != actual or row.get("status") != "PASS" \
+            or row.get("decision") != decision or row.get("git_commit") != commit:
+        raise ValueError("compatibility receipt identity")
+    return {**row, "report_sha256": declared}
+
+
 def verified_resolved(path: Path, *, expected_sha: str, commit: str) -> dict:
     if path.is_symlink() or not path.is_file():
         raise ValueError("resolved contract is missing or a symlink")
@@ -77,6 +91,7 @@ def main() -> None:
     parser.add_argument("--resolved-contract", required=True)
     parser.add_argument("--resolved-contract-sha256", required=True)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument("--cross-commit-compatibility")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -88,11 +103,31 @@ def main() -> None:
     try:
         raw_resolved = Path(args.resolved_contract)
         if raw_resolved.is_symlink() \
-                or any(Path(path).is_symlink() for path in args.attempt_audit):
+                or any(Path(path).is_symlink() for path in args.attempt_audit) \
+                or (args.cross_commit_compatibility is not None and
+                    Path(args.cross_commit_compatibility).is_symlink()):
             raise ValueError("R50 input symlink")
+        compatibility = None
+        resolved_commit = head
+        if args.cross_commit_compatibility is not None:
+            compatibility = verified_decision(
+                Path(args.cross_commit_compatibility).resolve(),
+                decision="RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS",
+                commit=head,
+            )
+            resolved_commit = compatibility.get("producer_git_commit")
+            if compatibility.get("consumer_git_commit") != head \
+                    or compatibility.get("compatibility_scope") != \
+                    "producer_contract_continuity" \
+                    or compatibility.get(
+                        "producer_resolved_contract_file_sha256") != \
+                    args.resolved_contract_sha256 \
+                    or compatibility.get(
+                        "algorithmic_source_or_contract_change") is not False:
+                raise ValueError("compatibility receipt semantics")
         resolved = verified_resolved(
             raw_resolved.resolve(),
-            expected_sha=args.resolved_contract_sha256, commit=head,
+            expected_sha=args.resolved_contract_sha256, commit=resolved_commit,
         )
         reports = [verified(Path(path).resolve(), commit=head) for path in args.attempt_audit]
     except ValueError as error:
@@ -102,6 +137,18 @@ def main() -> None:
     expected_assignments = {(cell, seed) for cell in CELLS for seed in seeds}
     grouped = defaultdict(list)
     for row in reports:
+        segment_compatibility = row.get(
+            "segment_cross_commit_compatibility_report_sha256"
+        )
+        preflight_compatibility = row.get(
+            "cross_commit_compatibility_report_sha256"
+        )
+        if compatibility is None:
+            if segment_compatibility is not None or preflight_compatibility is not None:
+                raise SystemExit("RWWPO2_R50_NO_GO:unexpected compatibility evidence")
+        elif compatibility["report_sha256"] not in {
+                segment_compatibility, preflight_compatibility}:
+            raise SystemExit("RWWPO2_R50_NO_GO:segment compatibility binding")
         if row.get("resolved_contract_file_sha256") != \
                 args.resolved_contract_sha256 \
                 or row.get("resolved_contract_report_sha256") != \
@@ -192,6 +239,10 @@ def main() -> None:
         "git_commit": head, "program_version": "rwwpo2-k2",
         "resolved_contract_file_sha256": args.resolved_contract_sha256,
         "resolved_contract_report_sha256": resolved["report_sha256"],
+        "cross_commit_compatibility_report_sha256": (
+            None if compatibility is None else compatibility["report_sha256"]
+        ),
+        "resolved_contract_producer_git_commit": resolved_commit,
         "source_manifest_sha256": resolved["source_manifest_sha256"],
         "mechanism_seeds": list(seeds), "cells": list(CELLS),
         "assignment_summaries": assignment_summaries,

@@ -29,7 +29,11 @@ ENTRY=(
     ROOT/"tools/h20/materialize_rwwpo2_resolved_contract.py",
     ROOT/"tools/h20/audit_rwwpo2_attempt.py",
     ROOT/"tools/h20/audit_rwwpo2_lineage_parent.py",
+    ROOT/"tools/h20/audit_rwwpo2_cross_commit_resume.py",
     ROOT/"tools/h20/audit_rwwpo2_r50_program.py",
+    ROOT/"tools/h20/materialize_rwwpo_diagnostic_eval_manifest.py",
+    ROOT/"tools/h20/compare_rwwpo2_hotpot_t20_bde.py",
+    ROOT/"scripts/h20/run_rwwpo2_hotpot_t20_bde_diagnostic.sh",
     ROOT/"tools/h20/audit_rwwpo2_base_protocol.py",
     ROOT/"tools/h20/audit_rwwpo2_data_boundary.py",
     ROOT/"tools/h20/calibrate_rwwpo2_numeric_oracle.py",
@@ -309,6 +313,8 @@ def main():
         "RWWPO_FSDP_WRITEBACK_MAX_WALL_SECONDS",
         "RWWPO_MAX_TRIAL_FORWARD_SECONDS",
         "RWWPO_RELEASE_TEST_RECEIPT",
+        "RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT",
+        "--cross-commit-compatibility",
     ):
         if token not in launcher:
             violations.append("launcher contract:"+token)
@@ -333,6 +339,73 @@ def main():
                   '"auditor_source_sha256": sha256_file(Path(__file__).resolve())'):
         if token not in lineage:
             violations.append("lineage compatibility auditor binding:"+token)
+    compatibility=(ROOT/"tools/h20/audit_rwwpo2_cross_commit_resume.py").read_text(
+        encoding="utf-8")
+    preflight=(ROOT/"tools/h20/preflight_rwwpo2.py").read_text(encoding="utf-8")
+    for token in (
+        "PROTECTED_EXACT_SOURCES",
+        "TRAINER_COMPATIBILITY_EXCLUSIONS",
+        "trainer_projection(",
+        "producer_resolved_contract_reused",
+        "consumer_numeric_contract_substitution_forbidden",
+        "algorithmic_source_or_contract_change",
+        "launcher_projection(",
+        "RWWPO2_CROSS_COMMIT_COMPATIBILITY_WIRING",
+        "RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS",
+    ):
+        if token not in compatibility:
+            violations.append("cross-commit compatibility producer:"+token)
+    for token in (
+        "--cross-commit-compatibility",
+        "cross_commit_compatibility_report_sha256",
+        "cross_commit_producer_git_commit",
+        "producer_resolved_contract_file_sha256",
+    ):
+        if token not in preflight:
+            violations.append("cross-commit preflight binding:"+token)
+    for token in (
+        "RWWPO2_RESUME_CROSS_COMMIT_COMPATIBILITY_DRIFT",
+        '"cross_commit_compatibility"',
+        '"producer_git_commit"',
+        '"consumer_git_commit"',
+    ):
+        if token not in trainer:
+            violations.append("cross-commit runtime binding:"+token)
+    for token in (
+        "cross_commit_compatibility_report_sha256",
+        "cross-commit resume binding",
+        "cross_commit_producer_git_commit",
+        "--segment-producer-commit",
+        "--cross-commit-compatibility",
+    ):
+        if token not in attempt:
+            violations.append("cross-commit attempt audit:"+token)
+    r50=(ROOT/"tools/h20/audit_rwwpo2_r50_program.py").read_text(encoding="utf-8")
+    for token in (
+        "--cross-commit-compatibility",
+        "segment compatibility binding",
+        "resolved_contract_producer_git_commit",
+    ):
+        if token not in r50:
+            violations.append("cross-commit R50 aggregation:"+token)
+    t20_runner=(ROOT/"scripts/h20/run_rwwpo2_hotpot_t20_bde_diagnostic.sh").read_text(
+        encoding="utf-8")
+    t20_compare=(ROOT/"tools/h20/compare_rwwpo2_hotpot_t20_bde.py").read_text(
+        encoding="utf-8")
+    for token in (
+        "RWWPO2_TRAINING_COMMIT", "RWWPO2_S128_RESOLVED_SHA256",
+        "RWWPO2_S128_MANIFEST_HASH", "for cell in B D E",
+        "--diagnostic-only", "wait_for_idle",
+    ):
+        if token not in t20_runner:
+            violations.append("T20 B/D/E diagnostic runner:"+token)
+    for token in (
+        "development_diagnostic_not_blind_final",
+        "single_seed_fixed_S128_descriptive_only",
+        '"B", "D"', '"E", "D"', '"B", "E"',
+    ):
+        if token not in t20_compare:
+            violations.append("T20 B/D/E diagnostic comparison:"+token)
     for token in ("rwwpo_ledger_anchors", "rwwpo_tensor_inventory",
                   "rwwpo_rollout_seed_anchor",
                   "rwwpo2_resolved_contract_file_sha256",

@@ -12,14 +12,16 @@ def sha(path):
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--source",required=True); p.add_argument("--source-sha256",required=True)
-    p.add_argument("--checkpoint-root",required=True); p.add_argument("--training-commit",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True); a=p.parse_args()
+    p.add_argument("--checkpoint-root",required=True); p.add_argument("--training-commit",required=True); p.add_argument("--expected-commit",required=True); p.add_argument("--output",required=True)
+    p.add_argument("--step",type=int,action="append",choices=[5,10,15,20,25])
+    a=p.parse_args()
     source=Path(a.source).resolve(); root=Path(a.checkpoint_root).resolve(); out=Path(a.output)
     if out.exists(): raise SystemExit("RWWPO_DIAGNOSTIC_MANIFEST_NO_GO:output exists")
     if sha(source)!=a.source_sha256: raise SystemExit("RWWPO_DIAGNOSTIC_MANIFEST_NO_GO:source SHA")
     if subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()!=a.expected_commit: raise SystemExit("RWWPO_DIAGNOSTIC_MANIFEST_NO_GO:checkout")
     if not re.fullmatch(r"[0-9a-f]{40}",a.training_commit): raise SystemExit("RWWPO_DIAGNOSTIC_MANIFEST_NO_GO:training commit")
     manifest=json.loads(source.read_text()); artifacts=manifest.setdefault("execution_binding",{}).setdefault("model_artifacts",{})
-    for step in (5,10,15,20,25):
+    for step in (a.step or (5,10,15,20,25)):
         checkpoint=root/f"global_step_{step}"; shards=[]
         for rank in (0,1):
             path=checkpoint/"actor"/f"model_world_size_2_rank_{rank}.pt"

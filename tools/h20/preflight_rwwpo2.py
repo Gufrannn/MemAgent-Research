@@ -81,6 +81,7 @@ def main() -> None:
     parser.add_argument("--original-resolved-manifest", required=True)
     parser.add_argument("--original-resolved-sha256", required=True)
     parser.add_argument("--lineage-parent")
+    parser.add_argument("--cross-commit-compatibility")
     parser.add_argument("--resume-round", type=int)
     parser.add_argument("--r50-program-gate")
     parser.add_argument("--r50-program-gate-sha256")
@@ -107,14 +108,59 @@ def main() -> None:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:GPU pair must be canonical ascending")
 
     if Path(args.resolved_contract).is_symlink() \
-            or Path(args.original_resolved_manifest).is_symlink():
+            or Path(args.original_resolved_manifest).is_symlink() \
+            or (args.cross_commit_compatibility is not None and
+                Path(args.cross_commit_compatibility).is_symlink()):
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:source symlink")
+    compatibility = None
+    resolved_commit = head
+    if args.cross_commit_compatibility is not None:
+        try:
+            compatibility = receipt(
+                args.cross_commit_compatibility,
+                decision="RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS",
+                commit=head,
+            )
+        except (OSError, ValueError, KeyError, TypeError,
+                json.JSONDecodeError) as error:
+            raise SystemExit(
+                "RWWPO2_PREFLIGHT_NO_GO:cross-commit compatibility"
+            ) from error
+        resolved_commit = str(compatibility.get("producer_git_commit", ""))
+        if re.fullmatch(r"[0-9a-f]{40}", resolved_commit) is None \
+                or compatibility.get("consumer_git_commit") != head \
+                or compatibility.get("compatibility_scope") != \
+                "producer_contract_continuity" \
+                or args.phase not in compatibility.get(
+                    "allowed_training_phases", []) \
+                or compatibility.get("producer_resolved_contract_reused") is not True \
+                or compatibility.get(
+                    "consumer_numeric_contract_substitution_forbidden") is not True \
+                or compatibility.get("algorithmic_source_or_contract_change") is not False \
+                or compatibility.get("producer_resolved_contract_file_sha256") != \
+                args.resolved_contract_sha256:
+            raise SystemExit(
+                "RWWPO2_PREFLIGHT_NO_GO:cross-commit compatibility identity"
+            )
     resolved_path = Path(args.resolved_contract).resolve()
     if sha256_file(resolved_path) != args.resolved_contract_sha256:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:resolved contract SHA")
     resolved = receipt(
-        str(resolved_path), decision="RWWPO2_RESOLVED_CONTRACT_PASS", commit=head
+        str(resolved_path), decision="RWWPO2_RESOLVED_CONTRACT_PASS",
+        commit=resolved_commit,
     )
+    if compatibility is not None \
+            and (compatibility.get("producer_resolved_contract_report_sha256") !=
+                 resolved["report_sha256"]
+                 or compatibility.get("source_manifest_sha256") !=
+                 resolved["source_manifest_sha256"]
+                 or compatibility.get("numeric_thresholds") !=
+                 resolved["numeric_thresholds"]
+                 or compatibility.get("proposal_schedule") !=
+                 resolved["proposal_schedule"]):
+        raise SystemExit(
+            "RWWPO2_PREFLIGHT_NO_GO:cross-commit resolved contract binding"
+        )
     manifest = resolved["manifest"]
     if manifest.get("program") != "RWWPO-2" or manifest.get("branch") != EXPECTED_BRANCH:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:program identity")
@@ -142,6 +188,18 @@ def main() -> None:
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:release tests:" + str(error)) from error
+    if compatibility is not None \
+            and (compatibility.get(
+                "consumer_release_test_receipt_file_sha256") !=
+                 args.release_test_receipt_sha256
+                 or compatibility.get(
+                    "consumer_release_test_receipt_report_sha256") !=
+                 release_tests["report_sha256"]
+                 or compatibility.get("runtime_environment") !=
+                 release_tests["runtime_environment"]):
+        raise SystemExit(
+            "RWWPO2_PREFLIGHT_NO_GO:cross-commit release-test binding"
+        )
     receipt(args.e0, decision="RWWPO2_E0_PASS", commit=head)
     data_audit = receipt(
         args.data_boundary_audit,
@@ -307,7 +365,8 @@ def main() -> None:
                 or args.resume_round >= args.target_round:
             raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:resume lineage arguments")
         parent = receipt(
-            args.lineage_parent, decision="RWWPO2_LINEAGE_PARENT_PASS", commit=head
+            args.lineage_parent, decision="RWWPO2_LINEAGE_PARENT_PASS",
+            commit=resolved_commit,
         )
         if parent.get("cell") != args.cell \
                 or int(parent.get("experiment_seed", -1)) != args.experiment_seed \
@@ -319,6 +378,15 @@ def main() -> None:
                 or parent.get("source_manifest_sha256") != \
                 resolved["source_manifest_sha256"]:
             raise SystemExit("RWWPO2_PREFLIGHT_NO_GO:lineage parent identity")
+        if compatibility is None:
+            if parent.get("producer_git_commit") != head:
+                raise SystemExit(
+                    "RWWPO2_PREFLIGHT_NO_GO:lineage parent commit drift"
+                )
+        elif parent.get("producer_git_commit") != resolved_commit:
+            raise SystemExit(
+                "RWWPO2_PREFLIGHT_NO_GO:cross-commit parent producer drift"
+            )
         lineage_start_round = args.resume_round + 1
 
     r50_gate = None
@@ -399,6 +467,13 @@ def main() -> None:
         "resume_round": args.resume_round,
         "lineage_start_round": lineage_start_round,
         "lineage_parent_report_sha256": None if parent is None else parent["report_sha256"],
+        "lineage_parent_git_commit": None if parent is None else parent["git_commit"],
+        "cross_commit_compatibility_report_sha256": (
+            None if compatibility is None else compatibility["report_sha256"]
+        ),
+        "cross_commit_producer_git_commit": (
+            None if compatibility is None else compatibility["producer_git_commit"]
+        ),
         "numeric_thresholds": thresholds,
         "behavior_coefficient_tolerance": resolved["behavior_coefficient_tolerance"],
         "behavior_gradient_tolerance": resolved["behavior_gradient_tolerance"],

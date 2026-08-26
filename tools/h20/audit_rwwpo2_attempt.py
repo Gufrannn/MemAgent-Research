@@ -349,6 +349,8 @@ def main() -> None:
     parser.add_argument("--cell", choices=sorted(CELL_CONTRACT), required=True)
     parser.add_argument("--experiment-seed", type=int, required=True)
     parser.add_argument("--target-round", type=int, required=True)
+    parser.add_argument("--segment-producer-commit")
+    parser.add_argument("--cross-commit-compatibility")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -358,6 +360,36 @@ def main() -> None:
     ).strip()
     if head != args.expected_commit or dirty:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:checkout")
+    segment_producer_commit = args.segment_producer_commit or head
+    compatibility = None
+    if segment_producer_commit != head:
+        if re.fullmatch(r"[0-9a-f]{40}", segment_producer_commit) is None \
+                or not args.cross_commit_compatibility:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:cross-commit segment arguments"
+            )
+        try:
+            compatibility = verified_report(
+                Path(args.cross_commit_compatibility).resolve(),
+                decision="RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS",
+                commit=head,
+            )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
+        if compatibility.get("producer_git_commit") != segment_producer_commit \
+                or compatibility.get("consumer_git_commit") != head \
+                or compatibility.get("producer_resolved_contract_file_sha256") != \
+                args.resolved_contract_sha256 \
+                or compatibility.get("algorithmic_source_or_contract_change") is not False:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:cross-commit segment compatibility"
+            )
+    elif args.cross_commit_compatibility is not None:
+        raise SystemExit(
+            "RWWPO2_ATTEMPT_AUDIT_NO_GO:unexpected cross-commit segment receipt"
+        )
     if args.target_round <= 0 or args.target_round > 400 \
             or args.target_round % 10 != 0:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:target recovery round")
@@ -366,7 +398,9 @@ def main() -> None:
     raw_resolved = Path(args.resolved_contract)
     raw_preflight = Path(args.preflight)
     if any(path.is_symlink() for path in (
-            raw_attempt_root, raw_output_root, raw_resolved, raw_preflight)):
+            raw_attempt_root, raw_output_root, raw_resolved, raw_preflight)) \
+            or (args.cross_commit_compatibility is not None and
+                Path(args.cross_commit_compatibility).is_symlink()):
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:source symlink")
     attempt_root = raw_attempt_root.resolve()
     output_root = raw_output_root.resolve()
@@ -379,12 +413,18 @@ def main() -> None:
     if not (checkpoint.joinpath("actor").is_dir() and checkpoint.joinpath("data.pt").is_file()):
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:target checkpoint")
     try:
+        preflight = verified_report(
+            raw_preflight.resolve(), decision="RWWPO2_PREFLIGHT_PASS",
+            commit=segment_producer_commit,
+        )
+        resolved_commit = (
+            segment_producer_commit if compatibility is not None else
+            preflight.get("cross_commit_producer_git_commit") or head
+        )
         resolved = verified_resolved(
             raw_resolved.resolve(),
-            expected_sha=args.resolved_contract_sha256, commit=head,
-        )
-        preflight = verified_report(
-            raw_preflight.resolve(), decision="RWWPO2_PREFLIGHT_PASS", commit=head,
+            expected_sha=args.resolved_contract_sha256,
+            commit=resolved_commit,
         )
     except ValueError as error:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)) from error
@@ -425,7 +465,7 @@ def main() -> None:
         events, target_inventory_event, execution_prefix_sha256 = \
             execution_prefix_through_round(
                 execution_path, target_round=args.target_round,
-                expected_commit=head,
+                expected_commit=segment_producer_commit,
             )
     except ValueError as error:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)) from error
@@ -810,15 +850,38 @@ def main() -> None:
     if [int(row["global_step"]) for row in segment_checkpoint_events] != \
             expected_checkpoint_rounds:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:recovery checkpoint sequence")
-    try:
-        recovery_prune_summary = validate_recovery_prune_evidence(
-            events, expected_checkpoint_rounds=expected_checkpoint_rounds,
-            output_root=output_root,
-        )
-    except ValueError as error:
-        raise SystemExit(
-            "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
-        ) from error
+    if compatibility is not None:
+        # The producer prefix predates the consumer's two-phase prune
+        # evidence contract.  Its target checkpoint and all scientific actor
+        # anchors are authenticated independently below; deletion of an older
+        # recovery-only root is not imported into the resumed lineage.
+        retained = expected_checkpoint_rounds[-2:]
+        if any(not (output_root / f"global_step_{value}").is_dir()
+               for value in retained) \
+                or any(row.get("record_type") ==
+                       "rwwpo2_recovery_prune_intent" for row in events):
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:producer recovery boundary"
+            )
+        recovery_prune_summary = {
+            "mode": "producer_prefix_before_consumer_two_phase_contract",
+            "retained_rounds": retained,
+            "older_recovery_roots_not_imported":
+                expected_checkpoint_rounds[:-2],
+            "two_phase_evidence": False,
+            "cross_commit_compatibility_report_sha256":
+                compatibility["report_sha256"],
+        }
+    else:
+        try:
+            recovery_prune_summary = validate_recovery_prune_evidence(
+                events, expected_checkpoint_rounds=expected_checkpoint_rounds,
+                output_root=output_root,
+            )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
     anchor_events = [row for row in events if row.get("record_type") ==
                      "rwwpo2_actor_anchor_inventory" and start_round <= int(
                          row.get("global_step", -1)) <= args.target_round]
@@ -872,12 +935,40 @@ def main() -> None:
                 or resume[0]["rwwpo2_lineage_parent"].get("failed_suffix_imported") is not False:
             raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:resume lineage execution binding")
         resume_lineage = resume[0]["rwwpo2_lineage_parent"]
+        compatibility_sha = preflight.get(
+            "cross_commit_compatibility_report_sha256"
+        )
+        execution_compatibility = resume_lineage.get(
+            "cross_commit_compatibility"
+        )
+        if compatibility_sha is None:
+            if execution_compatibility is not None \
+                    or resume_lineage.get("producer_git_commit") != head \
+                    or resume_lineage.get("consumer_git_commit") != head:
+                raise SystemExit(
+                    "RWWPO2_ATTEMPT_AUDIT_NO_GO:same-commit resume binding"
+                )
+        elif not isinstance(execution_compatibility, dict) \
+                or execution_compatibility.get("report_sha256") != compatibility_sha \
+                or execution_compatibility.get("producer_git_commit") != \
+                preflight.get("cross_commit_producer_git_commit") \
+                or execution_compatibility.get("consumer_git_commit") != head \
+                or resume_lineage.get("producer_git_commit") != \
+                preflight.get("lineage_parent_git_commit") \
+                or resume_lineage.get("consumer_git_commit") != head:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:cross-commit resume binding"
+            )
 
     report = {
         "schema_version": "rwwpo2-attempt-audit-v1",
         "status": "PASS",
         "decision": f"RWWPO2_R{args.target_round}_ATTEMPT_AUDIT_PASS",
         "git_commit": head, "program_version": "rwwpo2-k2",
+        "segment_producer_git_commit": segment_producer_commit,
+        "segment_cross_commit_compatibility_report_sha256": (
+            None if compatibility is None else compatibility["report_sha256"]
+        ),
         "cell": args.cell, "objective_variant": objective,
         "controller_variant": controller, "experiment_seed": args.experiment_seed,
         "attempt_root": str(attempt_root), "output_root": str(output_root),
@@ -893,6 +984,15 @@ def main() -> None:
         "preflight_lineage_parent_report_sha256": preflight[
             "lineage_parent_report_sha256"
         ],
+        "preflight_lineage_parent_git_commit": preflight.get(
+            "lineage_parent_git_commit"
+        ),
+        "cross_commit_compatibility_report_sha256": preflight.get(
+            "cross_commit_compatibility_report_sha256"
+        ),
+        "cross_commit_producer_git_commit": preflight.get(
+            "cross_commit_producer_git_commit"
+        ),
         "r50_program_gate_report_sha256": preflight[
             "r50_program_gate_report_sha256"
         ],

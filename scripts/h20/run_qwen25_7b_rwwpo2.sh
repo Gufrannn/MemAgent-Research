@@ -25,6 +25,17 @@ PREFLIGHT=(
   --original-resolved-sha256 "$RWWPO_ORIGINAL_RESOLVED_SHA256"
   --output "$RWWPO_PREFLIGHT"
 )
+# BEGIN RWWPO2_CROSS_COMMIT_COMPATIBILITY_WIRING
+if [[ -n ${RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT:-} ]]; then
+  [[ $RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT == /* \
+      && -f $RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT ]] || {
+    echo 'RWWPO2_NO_GO:missing absolute cross-commit compatibility receipt' >&2; exit 92;
+  }
+  PREFLIGHT+=(
+    --cross-commit-compatibility "$RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT"
+  )
+fi
+# END RWWPO2_CROSS_COMMIT_COMPATIBILITY_WIRING
 
 if [[ $RWWPO_PHASE == resume ]]; then
   [[ ${RWWPO_RESUME_ROUND:-} =~ ^[0-9]+$ && $RWWPO_RESUME_ROUND -gt 0 \

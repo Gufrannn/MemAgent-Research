@@ -22,6 +22,10 @@ from tools.h20.audit_rwwpo2_lineage_parent import execution_prefix_to_checkpoint
 from tools.h20.audit_rwwpo2_numeric_oracle import (
     validate_fsdp_transaction_closure,
 )
+from tools.h20.audit_rwwpo2_cross_commit_resume import (
+    PROTECTED_EXACT_SOURCES, allowed_changed_path, launcher_projection,
+    trainer_projection,
+)
 from tools.h20.preflight_rwwpo2 import receipt
 from tools.h20.verify_rwwpo2_release_tests import (
     TEST_INVENTORY, canonical_sha as release_test_canonical_sha,
@@ -261,6 +265,94 @@ def test_recovery_contract_authenticates_prefix_and_excludes_failed_suffix():
         assert bound_source in firewall
     gate = (ROOT / "tools/h20/audit_rwwpo2_r50_program.py").read_text()
     assert "segment contract binding" in gate
+
+
+def test_cross_commit_resume_excludes_only_recovery_and_load_wiring():
+    producer = subprocess.check_output([
+        "git", "show",
+        "4a6a72ef51aa9e8bba2b9c2efe22dc4c98b54dfe:"
+        "verl/trainer/ppo/ray_trainer.py",
+    ], cwd=ROOT)
+    consumer = (ROOT / "verl/trainer/ppo/ray_trainer.py").read_bytes()
+    assert trainer_projection(producer) == trainer_projection(consumer)
+    tampered = consumer.replace(
+        b"def _balance_batch(self, batch: DataProto, metrics,",
+        b"def _balance_batch_changed(self, batch: DataProto, metrics,",
+        1,
+    )
+    assert trainer_projection(producer) != trainer_projection(tampered)
+    assert "verl/workers/actor/dp_actor.py" in PROTECTED_EXACT_SOURCES
+    assert not allowed_changed_path("verl/workers/actor/dp_actor.py")
+    assert not allowed_changed_path("experiments/7b_gate_a/run_gate_a.sh")
+    assert allowed_changed_path("tools/h20/preflight_rwwpo2.py")
+    assert allowed_changed_path("verl/trainer/ppo/ray_trainer.py")
+    producer_launcher = subprocess.check_output([
+        "git", "show",
+        "4a6a72ef51aa9e8bba2b9c2efe22dc4c98b54dfe:"
+        "scripts/h20/run_qwen25_7b_rwwpo2.sh",
+    ], cwd=ROOT)
+    consumer_launcher = (
+        ROOT / "scripts/h20/run_qwen25_7b_rwwpo2.sh"
+    ).read_bytes()
+    assert launcher_projection(producer_launcher) == launcher_projection(
+        consumer_launcher
+    )
+    tampered_launcher = consumer_launcher.replace(
+        b"trainer.total_training_steps=$RWWPO_TARGET_ROUND",
+        b"trainer.total_training_steps=999",
+        1,
+    )
+    assert launcher_projection(producer_launcher) != launcher_projection(
+        tampered_launcher
+    )
+
+
+def test_cross_commit_resume_is_bound_at_preflight_runtime_and_attempt_audit():
+    compatibility = (
+        ROOT / "tools/h20/audit_rwwpo2_cross_commit_resume.py"
+    ).read_text()
+    preflight = (ROOT / "tools/h20/preflight_rwwpo2.py").read_text()
+    launcher = (ROOT / "scripts/h20/run_qwen25_7b_rwwpo2.sh").read_text()
+    trainer = (ROOT / "verl/trainer/ppo/ray_trainer.py").read_text()
+    attempt = (ROOT / "tools/h20/audit_rwwpo2_attempt.py").read_text()
+    for token in (
+        "PROTECTED_EXACT_SOURCES", "TRAINER_COMPATIBILITY_EXCLUSIONS",
+        "producer_resolved_contract_reused",
+        "consumer_numeric_contract_substitution_forbidden",
+        "algorithmic_source_or_contract_change",
+    ):
+        assert token in compatibility
+    assert "--cross-commit-compatibility" in preflight + launcher
+    assert "RWWPO_CROSS_COMMIT_COMPATIBILITY_RECEIPT" in launcher + trainer
+    assert "RWWPO2_RESUME_CROSS_COMMIT_COMPATIBILITY_DRIFT" in trainer
+    assert "cross-commit resume binding" in attempt
+    assert "producer_prefix_before_consumer_two_phase_contract" in attempt
+    assert "older_recovery_roots_not_imported" in attempt
+    assert "--segment-producer-commit" in attempt
+    r50 = (ROOT / "tools/h20/audit_rwwpo2_r50_program.py").read_text()
+    assert "--cross-commit-compatibility" in r50
+    assert "segment compatibility binding" in r50
+
+
+def test_hotpot_t20_bde_diagnostic_is_single_anchor_and_descriptive_only():
+    materializer = (
+        ROOT / "tools/h20/materialize_rwwpo_diagnostic_eval_manifest.py"
+    ).read_text()
+    runner = (
+        ROOT / "scripts/h20/run_rwwpo2_hotpot_t20_bde_diagnostic.sh"
+    ).read_text()
+    comparison = (
+        ROOT / "tools/h20/compare_rwwpo2_hotpot_t20_bde.py"
+    ).read_text()
+    assert 'p.add_argument("--step",type=int,action="append"' in materializer
+    assert "for step in (a.step or (5,10,15,20,25))" in materializer
+    assert "for cell in B D E" in runner
+    assert "--step 20" in runner
+    assert "wait_for_idle" in runner
+    assert "DIAGNOSTIC_ONLY" in comparison
+    assert "development_diagnostic_not_blind_final" in comparison
+    assert "single_seed_fixed_S128_descriptive_only" in comparison
+    assert '("B", "D"), ("E", "D"), ("B", "E")' in comparison
 
 
 def _prune_events(output_root: Path):
