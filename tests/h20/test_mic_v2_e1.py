@@ -17,7 +17,7 @@ from recurrent.research import mic_v2_e1 as e1
 from recurrent.research.mic_v2 import sha256_file, sha256_json
 from tools.h20.mic_v2_e1_pipeline import (
     _coverage_cells, _exact_materialized_memory_token_count, _materialize_sources,
-    _open_holdout_once, _project_split,
+    _has_exact_fields, _open_holdout_once, _project_split,
     _root_cluster_diagnostic_intervals, _validate_cross_turn_filtration,
     _verify_inherited_lock_authority,
 )
@@ -30,6 +30,23 @@ def root(index: int) -> str:
 
 
 class MicV2E1CoreTest(unittest.TestCase):
+    def test_exact_json_schema_is_invariant_to_canonical_key_order(self):
+        fields = ("source_position", "content_root_id", "ground_truth")
+        insertion_order = {
+            "source_position": 7,
+            "content_root_id": root(7),
+            "ground_truth": ["answer"],
+        }
+        canonical_round_trip = json.loads(
+            json.dumps(insertion_order, sort_keys=True, separators=(",", ":"))
+        )
+        self.assertNotEqual(tuple(canonical_round_trip), fields)
+        self.assertTrue(_has_exact_fields(canonical_round_trip, fields))
+        self.assertFalse(_has_exact_fields({**canonical_round_trip, "reward": 1.0}, fields))
+        missing = dict(canonical_round_trip)
+        missing.pop("ground_truth")
+        self.assertFalse(_has_exact_fields(missing, fields))
+
     def test_gpu_collector_rechecks_git_and_model_before_loading(self):
         repo = Path(__file__).resolve().parents[2]
         expected_commit = "a" * 40

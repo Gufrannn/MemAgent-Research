@@ -84,6 +84,11 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _has_exact_fields(row: Mapping[str, Any], fields: tuple[str, ...]) -> bool:
+    """Validate a JSON object schema without relying on non-semantic key order."""
+    return isinstance(row, Mapping) and set(row) == set(fields)
+
+
 def _git(repo: Path, *arguments: str) -> str:
     return subprocess.check_output(
         ["git", "-C", str(repo), *arguments], text=True,
@@ -278,8 +283,8 @@ def _materialize_gpu_source(
             "content_root_id": frozen["content_root_id"],
             "question": question, "context": context,
         })
-    _require(all(tuple(row) == GPU_FIELDS for row in gpu_rows),
-             "E1 GPU artifact field order differs")
+    _require(all(_has_exact_fields(row, GPU_FIELDS) for row in gpu_rows),
+             "E1 GPU artifact schema differs")
     gpu_path = output_root / "authorities/gpu_source.jsonl"
     if verify_existing:
         _require(gpu_path.is_file() and _jsonl(gpu_path) == gpu_rows,
@@ -316,8 +321,8 @@ def _materialize_outcomes(
             "ground_truth_sha256": frozen["ground_truth_sha256"],
             "ground_truth": ground_truth,
         })
-    _require(all(tuple(row) == OUTCOME_FIELDS for row in rows),
-             "E1 outcome artifact field order differs")
+    _require(all(_has_exact_fields(row, OUTCOME_FIELDS) for row in rows),
+             "E1 outcome artifact schema differs")
     path = output_root / "authorities/cpu_outcomes.jsonl"
     if verify_existing:
         _require(path.is_file() and _jsonl(path) == rows,
@@ -1059,7 +1064,7 @@ def score_split(
              "E1 CPU outcome authority differs")
     outcome_rows = _jsonl(outcomes_path)
     _require(len(outcome_rows) == 128
-             and all(tuple(row) == OUTCOME_FIELDS for row in outcome_rows),
+             and all(_has_exact_fields(row, OUTCOME_FIELDS) for row in outcome_rows),
              "E1 CPU outcome coverage/schema differs")
     outcomes = {row["content_root_id"]: row for row in outcome_rows}
     _require(len(outcomes) == 128, "E1 outcome roots are not unique")
