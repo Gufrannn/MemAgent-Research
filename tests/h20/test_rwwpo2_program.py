@@ -297,11 +297,12 @@ def test_cross_commit_resume_excludes_only_recovery_and_load_wiring():
     assert launcher_projection(producer_launcher) == launcher_projection(
         consumer_launcher
     )
+    launcher_budget = b'FRESH_TOTAL_STEPS="$RWWPO_TARGET_ROUND"'
+    assert launcher_budget in consumer_launcher
     tampered_launcher = consumer_launcher.replace(
-        b"trainer.total_training_steps=$RWWPO_TARGET_ROUND",
-        b"trainer.total_training_steps=999",
-        1,
+        launcher_budget, b'FRESH_TOTAL_STEPS="999"', 1,
     )
+    assert tampered_launcher != consumer_launcher
     assert launcher_projection(producer_launcher) != launcher_projection(
         tampered_launcher
     )
