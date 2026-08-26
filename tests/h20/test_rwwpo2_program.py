@@ -26,6 +26,7 @@ from tools.h20.audit_rwwpo2_cross_commit_resume import (
     PROTECTED_EXACT_SOURCES, allowed_changed_path, launcher_projection,
     trainer_projection,
 )
+from tools.h20.compare_rwwpo2_hotpot_t20_bde import shared_eval_manifest_hash
 from tools.h20.preflight_rwwpo2 import receipt
 from tools.h20.verify_rwwpo2_release_tests import (
     TEST_INVENTORY, canonical_sha as release_test_canonical_sha,
@@ -345,6 +346,7 @@ def test_hotpot_t20_bde_diagnostic_is_single_anchor_and_descriptive_only():
     comparison = (
         ROOT / "tools/h20/compare_rwwpo2_hotpot_t20_bde.py"
     ).read_text()
+    auditor = (ROOT / "tools/h20/audit_rwwpo_s128.py").read_text()
     assert 'p.add_argument("--step",type=int,action="append"' in materializer
     assert "for step in (a.step or (5,10,15,20,25))" in materializer
     assert "for cell in B D E" in runner
@@ -354,6 +356,24 @@ def test_hotpot_t20_bde_diagnostic_is_single_anchor_and_descriptive_only():
     assert "development_diagnostic_not_blind_final" in comparison
     assert "single_seed_fixed_S128_descriptive_only" in comparison
     assert '("B", "D"), ("E", "D"), ("B", "E")' in comparison
+    assert 'row.get("eval_manifest_hash"' in comparison
+    assert '"eval_manifest_hash":resolved["eval_manifest_hash"]' in auditor
+
+
+def test_hotpot_t20_comparison_uses_shared_eval_identity_not_checkpoint_manifest_sha():
+    identity = "a" * 64
+    rows = {
+        "B": {"eval_manifest_hash": identity,
+              "resolved_manifest_sha256": "1" * 64},
+        "D": {"eval_manifest_hash": identity,
+              "resolved_manifest_sha256": "2" * 64},
+        "E": {"eval_manifest_hash": identity,
+              "resolved_manifest_sha256": "3" * 64},
+    }
+    assert shared_eval_manifest_hash(rows) == identity
+    rows["E"]["eval_manifest_hash"] = "b" * 64
+    with pytest.raises(ValueError, match="evaluation identity drift"):
+        shared_eval_manifest_hash(rows)
 
 
 def _prune_events(output_root: Path):

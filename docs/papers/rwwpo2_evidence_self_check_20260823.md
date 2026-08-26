@@ -70,6 +70,20 @@ inventories. It changes checkpoint lifecycle evidence, so it requires a new
 exact commit and fresh authenticated release-test/CPU/numeric receipts before
 new training.
 
+Commit `39373a4cb133a524513cbfd9fff3be9388b16ba6` later passed 177/177
+authenticated release tests, the CPU evidence gates, and the formal
+`4a6a72ef... -> 39373a4c...` cross-commit compatibility audit. The B round-30
+lineage parent passed. The D round-30 lineage parent remains `NO_GO` because its
+post-step prefix rows did not reconstruct from the authenticated tensor shard;
+no D resume is authorized. A separate adaptive fixed-S128 diagnostic completed
+all three B/D/E T20 generations and per-cell audits, but its final comparison
+stopped before E resume: the comparison code incorrectly required byte-equal
+per-cell resolved manifests even though each manifest intentionally binds a
+different actor checkpoint. The correction retains each distinct manifest SHA
+and instead requires their independently validated `eval_manifest_hash` to be
+identical. The three completed diagnostic outputs are not a blind or
+confirmatory result, and no E resume occurred after the failed comparison gate.
+
 An earlier failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
 its operator pipeline log is

@@ -100,6 +100,18 @@ duplicate, reordered, forged, or incomplete prune evidence is fail-closed.
 Any process that already loaded the old producer remains unaffected by the
 source repair and must not cross the round-30 pruning boundary.
 
+Commit `39373a4cb133a524513cbfd9fff3be9388b16ba6` subsequently passed its
+authenticated release/CPU/cross-commit gates. B round-30 lineage passed, while
+D round-30 lineage failed post-step tensor reconstruction and remains
+unauthorized for resume. The post-hoc B/D/E T20 fixed-S128 generations and
+per-cell audits completed, but the descriptive comparison failed before any E
+resume because it compared the three checkpoint-specific resolved-manifest
+file hashes for equality. Those files must differ by construction. The repaired
+diagnostic contract preserves each file hash as cell-specific evidence and
+uses the common, validated `eval_manifest_hash` as the cross-cell example/order
+identity. This is an audit correction only; S128 remains adaptive development
+evidence and cannot become confirmatory performance evidence.
+
 ## 1. Scientific question
 
 A recurrent memory writer emits free text that is materialized as the next

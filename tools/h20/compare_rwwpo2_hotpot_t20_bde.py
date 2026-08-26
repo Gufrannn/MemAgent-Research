@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -31,11 +32,29 @@ def verified(path: Path, *, commit: str) -> dict:
     if declared != actual or row.get("status") != "DIAGNOSTIC_ONLY" \
             or row.get("decision") != "RWWPO_T20_S128_DIAGNOSTIC_ONLY" \
             or row.get("git_commit") != commit or int(row.get("step", -1)) != 20 \
+            or re.fullmatch(r"[0-9a-f]{64}", str(
+                row.get("eval_manifest_hash", ""))) is None \
             or set(row.get("metrics", {})) != {
                 "denominator", *METRICS
             } or int(row["metrics"]["denominator"]) != 128:
         raise ValueError("certificate identity")
     return {**row, "report_sha256": declared, "file_sha256": sha256_file(path)}
+
+
+def shared_eval_manifest_hash(rows: dict[str, dict]) -> str:
+    """Require one stable S128 example/order identity across cell manifests.
+
+    Each post-hoc diagnostic manifest intentionally binds a different actor
+    checkpoint, so its file SHA must differ across B/D/E. The immutable
+    ``eval_manifest_hash`` is the shared identity payload that must be equal.
+    """
+    identities = {str(row.get("eval_manifest_hash", "")) for row in rows.values()}
+    if len(identities) != 1:
+        raise ValueError("evaluation identity drift")
+    identity = next(iter(identities))
+    if re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+        raise ValueError("evaluation identity malformed")
+    return identity
 
 
 def main() -> None:
@@ -61,8 +80,10 @@ def main() -> None:
         }
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise SystemExit("RWWPO2_T20_COMPARE_NO_GO:" + str(error)) from error
-    if len({row["resolved_manifest_sha256"] for row in rows.values()}) != 1:
-        raise SystemExit("RWWPO2_T20_COMPARE_NO_GO:identity manifest drift")
+    try:
+        eval_manifest_hash = shared_eval_manifest_hash(rows)
+    except ValueError as error:
+        raise SystemExit("RWWPO2_T20_COMPARE_NO_GO:" + str(error)) from error
     aggregates = {cell: row["metrics"] for cell, row in rows.items()}
     differences = {}
     for left, right in (("B", "D"), ("E", "D"), ("B", "E")):
@@ -76,6 +97,7 @@ def main() -> None:
         "decision": "RWWPO2_HOTPOT_T20_BDE_DIAGNOSTIC_ONLY",
         "git_commit": head,
         "step": 20,
+        "eval_manifest_hash": eval_manifest_hash,
         "adaptive_dataset_role": "development_diagnostic_not_blind_final",
         "primary_descriptive_metric": "token_f1",
         "aggregates": aggregates,
@@ -85,6 +107,8 @@ def main() -> None:
                 "path": str(Path(path).resolve()),
                 "file_sha256": rows[cell]["file_sha256"],
                 "report_sha256": rows[cell]["report_sha256"],
+                "resolved_manifest_sha256": rows[cell][
+                    "resolved_manifest_sha256"],
             }
             for cell, path in (("B", args.b), ("D", args.d), ("E", args.e))
         },

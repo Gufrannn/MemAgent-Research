@@ -24,7 +24,7 @@ def main():
     truth=_ground_truth_by_source_order({"data":{"validation":a.validation}},resolved)
     metrics=[score_terminal_output(row["output"],truth[int(row["source_order_index"])]) for row in rows]
     aggregate=summarize_fixed_s128(metrics)
-    report={"status":"DIAGNOSTIC_ONLY" if a.diagnostic_only else "PASS","decision":f"RWWPO_T{a.step}_S128_DIAGNOSTIC_ONLY" if a.diagnostic_only else f"RWWPO_T{a.step}_S128_PASS","git_commit":a.expected_commit,"step":a.step,"metrics":aggregate,"terminal_sha256":hashlib.sha256(terminal_path.read_bytes()).hexdigest(),"resolved_manifest_sha256":a.expected_manifest_sha256}
+    report={"status":"DIAGNOSTIC_ONLY" if a.diagnostic_only else "PASS","decision":f"RWWPO_T{a.step}_S128_DIAGNOSTIC_ONLY" if a.diagnostic_only else f"RWWPO_T{a.step}_S128_PASS","git_commit":a.expected_commit,"step":a.step,"metrics":aggregate,"terminal_sha256":hashlib.sha256(terminal_path.read_bytes()).hexdigest(),"eval_manifest_hash":resolved["eval_manifest_hash"],"resolved_manifest_sha256":a.expected_manifest_sha256}
     report["report_sha256"]=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     Path(a.output).parent.mkdir(parents=True,exist_ok=True); Path(a.output).write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
 if __name__=="__main__": main()

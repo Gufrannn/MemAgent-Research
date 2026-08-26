@@ -390,6 +390,8 @@ def main():
             violations.append("cross-commit R50 aggregation:"+token)
     t20_runner=(ROOT/"scripts/h20/run_rwwpo2_hotpot_t20_bde_diagnostic.sh").read_text(
         encoding="utf-8")
+    s128_audit=(ROOT/"tools/h20/audit_rwwpo_s128.py").read_text(
+        encoding="utf-8")
     t20_compare=(ROOT/"tools/h20/compare_rwwpo2_hotpot_t20_bde.py").read_text(
         encoding="utf-8")
     for token in (
@@ -399,9 +401,13 @@ def main():
     ):
         if token not in t20_runner:
             violations.append("T20 B/D/E diagnostic runner:"+token)
+    if '"eval_manifest_hash":resolved["eval_manifest_hash"]' not in s128_audit:
+        violations.append("S128 audit:eval_manifest_hash certificate binding")
     for token in (
         "development_diagnostic_not_blind_final",
         "single_seed_fixed_S128_descriptive_only",
+        "shared_eval_manifest_hash",
+        "eval_manifest_hash",
         '"B", "D"', '"E", "D"', '"B", "E"',
     ):
         if token not in t20_compare:
