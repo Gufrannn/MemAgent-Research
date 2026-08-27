@@ -27,6 +27,21 @@ from tools.h20.materialize_rwwpo2_babilong import read_source_bundle, sha256_fil
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_prepare_entry_accepts_resolved_venv_python_symlink_only():
+    entry = (
+        ROOT / "scripts/h20/run_rwwpo2_babilong_prepare_and_bd_t20.sh"
+    ).read_text()
+    assert 'RWWPO_PYTHON_RESOLVED=$(readlink -f -- "$RWWPO_PYTHON")' in entry
+    assert '[[ -x $RWWPO_PYTHON && -f $RWWPO_PYTHON_RESOLVED ]]' in entry
+    immutable_loop = entry[
+        entry.index('for path in "$RWWPO_MANIFEST"'):
+        entry.index("done\n", entry.index('for path in "$RWWPO_MANIFEST"'))
+    ]
+    assert '"$RWWPO_PYTHON"' not in immutable_loop
+    assert '[[ -f $path && ! -L $path ]]' in immutable_loop
+    assert "missing/symlink immutable input" in immutable_loop
+
+
 def source_rows():
     result = {}
     for length in LENGTHS:

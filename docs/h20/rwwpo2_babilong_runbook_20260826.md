@@ -119,3 +119,16 @@ The entry rejects a checkpoint whose cell, seed, round, inventory, output root,
 or training commit differs from that audit.  R20 is explicitly labelled an
 unaudited low-budget diagnostic checkpoint; it cannot be promoted to formal
 evidence by renaming its output.
+
+## H20 attempt history
+
+The first `fec051a4...` development entry
+`rwwpo2_babilong_fec051a4_bd_r20_r1` stopped before release tests, source
+materialization, or GPU work.  The preparation shell treated the normal virtual
+environment launcher `.venv/bin/python` as an invalid symlink even though the
+authenticated release-test verifier deliberately resolves and fingerprints the
+interpreter target.  Its paired E watcher therefore exited without evaluation.
+Both roots are consumed `NO_GO` evidence and must not be reused.  The correction
+accepts only an executable interpreter whose fully resolved target is a regular
+file; immutable manifests, model metadata, training data, and checkpoint files
+remain non-symlink inputs.

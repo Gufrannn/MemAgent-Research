@@ -28,6 +28,14 @@ cd "$RWWPO_REPO_DIR"
 }
 
 RWWPO_PYTHON="$RWWPO_WORK_ROOT/.venv/bin/python"
+RWWPO_PYTHON_RESOLVED=$(readlink -f -- "$RWWPO_PYTHON") || {
+  echo 'RWWPO2_BABILONG_PREPARE_NO_GO:python interpreter resolution' >&2
+  exit 63
+}
+[[ -x $RWWPO_PYTHON && -f $RWWPO_PYTHON_RESOLVED ]] || {
+  echo 'RWWPO2_BABILONG_PREPARE_NO_GO:python interpreter' >&2
+  exit 63
+}
 export RWWPO_MANIFEST="$RWWPO_REPO_DIR/manifests/h20/qwen25_7b_rwwpo2_r400_k2_seed2026.json"
 export RWWPO_MANIFEST_SHA256
 RWWPO_MANIFEST_SHA256=$(sha256sum "$RWWPO_MANIFEST" | awk '{print $1}')
@@ -40,7 +48,7 @@ DEVELOPMENT_ROOT="$ROOT/development_bundle"
 CERT_ROOT="$ROOT/certificates"
 TRAIN_DATA="$RWWPO_WORK_ROOT/datasets/hotpotqa/hotpotqa_train_32k.parquet"
 
-for path in "$RWWPO_PYTHON" "$RWWPO_MANIFEST" "$BABILONG_MANIFEST" \
+for path in "$RWWPO_MANIFEST" "$BABILONG_MANIFEST" \
   "$RWWPO_BABILONG_MODEL/config.json" \
   "$TRAIN_DATA" \
   "$RWWPO_BABILONG_B_CHECKPOINT/data.pt" \
@@ -50,7 +58,8 @@ for path in "$RWWPO_PYTHON" "$RWWPO_MANIFEST" "$BABILONG_MANIFEST" \
   "$RWWPO_BABILONG_D_CHECKPOINT/actor/model_world_size_2_rank_0.pt" \
   "$RWWPO_BABILONG_D_CHECKPOINT/actor/model_world_size_2_rank_1.pt"; do
   [[ -f $path && ! -L $path ]] || {
-    echo "RWWPO2_BABILONG_PREPARE_NO_GO:missing/symlink $path" >&2; exit 63;
+    echo "RWWPO2_BABILONG_PREPARE_NO_GO:missing/symlink immutable input $path" >&2
+    exit 63
   }
 done
 [[ ! -e $ROOT && ! -e $RELEASE_ROOT ]] || {
