@@ -35,6 +35,7 @@ CELL_CONTRACT = {
     "B": ("whole_prefix", "feasible_backtracking"),
     "A": ("whole_prefix", "hard_rollback"),
 }
+RECOVERY_PRUNE_CONTRACT = "scientific_anchor_aware_two_phase_v2"
 
 
 def sha256_file(path: Path) -> str:
@@ -150,11 +151,18 @@ def validate_post_commit_forward_binding(rows, *, tau_logprob: float) -> None:
 
 def validate_recovery_prune_evidence(
         events: list[dict], *, expected_checkpoint_rounds: list[int],
-        output_root: Path) -> dict:
+        scientific_anchor_rounds: set[int], output_root: Path,
+        allow_final_unstarted_prune: bool = False) -> dict:
     """Require an authenticated intent/delete/complete pair for every prune."""
     expected = [int(value) for value in expected_checkpoint_rounds]
     retained = set(expected[-2:])
     pruned = expected[:-2]
+    interrupted = None
+    if allow_final_unstarted_prune:
+        if not pruned or pruned[-1] in scientific_anchor_rounds:
+            raise ValueError("post-save housekeeping interruption shape")
+        interrupted = pruned[-1]
+    completed_prunes = [value for value in pruned if value != interrupted]
     checkpoint_events = {
         int(row["global_step"]): row for row in events
         if row.get("record_type") == "checkpoint_inventory"
@@ -171,31 +179,34 @@ def validate_recovery_prune_evidence(
         by_round = {}
         for row in selected:
             round_id = int(row.get("pruned_round", -1))
-            if round_id not in pruned or round_id in by_round:
+            if round_id not in completed_prunes or round_id in by_round:
                 raise ValueError("unexpected or duplicate recovery prune evidence")
             by_round[round_id] = row
         return by_round
 
     intents = indexed("rwwpo2_recovery_prune_intent")
     completes = indexed("rwwpo2_recovery_pruned")
-    if set(intents) != set(pruned) or set(completes) != set(pruned):
+    if set(intents) != set(completed_prunes) \
+            or set(completes) != set(completed_prunes):
         raise ValueError("recovery prune intent/complete closure")
 
     for round_id in expected:
         root = output_root / f"global_step_{round_id}"
-        if round_id in retained:
-            if not root.is_dir():
+        if round_id in retained or round_id == interrupted:
+            checkpoint = checkpoint_events.get(round_id)
+            if not root.is_dir() or checkpoint is None \
+                    or checkpoint.get("inventory") != checkpoint_inventory(root):
                 raise ValueError("retained recovery roots")
             continue
         intent = intents[round_id]
         complete = completes[round_id]
         checkpoint = checkpoint_events.get(round_id)
+        anchor_required = round_id in scientific_anchor_rounds
         anchor = anchor_events.get(round_id)
         prune_at = expected[expected.index(round_id) + 2]
         resolved_root = str(root.resolve())
         common = (
             checkpoint is not None,
-            anchor is not None,
             int(intent.get("global_step", -1)) == prune_at,
             int(complete.get("global_step", -1)) == prune_at,
             intent.get("pruned_root") == resolved_root,
@@ -204,24 +215,78 @@ def validate_recovery_prune_evidence(
                 checkpoint or {}).get("record_sha256"),
             complete.get("checkpoint_inventory_record_sha256") == (
                 checkpoint or {}).get("record_sha256"),
-            intent.get("scientific_anchor_inventory_record_sha256") == (
-                anchor or {}).get("record_sha256"),
-            complete.get("scientific_anchor_inventory_record_sha256") == (
-                anchor or {}).get("record_sha256"),
-            intent.get("scientific_anchor_preserved") is True,
-            complete.get("scientific_anchor_preserved") is True,
+            intent.get("scientific_anchor_required") is anchor_required,
+            complete.get("scientific_anchor_required") is anchor_required,
+            intent.get("scientific_anchor_preserved") is anchor_required,
+            complete.get("scientific_anchor_preserved") is anchor_required,
             complete.get("pruned_root_absent") is True,
             complete.get("prune_intent_record_sha256") == intent.get(
                 "record_sha256"),
             int(complete.get("record_index", -1)) == int(intent.get(
                 "record_index", -2)) + 1,
         )
-        if root.exists() or not all(common):
+        anchor_binding = (
+            anchor is not None
+            and intent.get("scientific_anchor_inventory_record_sha256") ==
+                anchor.get("record_sha256")
+            and complete.get("scientific_anchor_inventory_record_sha256") ==
+                anchor.get("record_sha256")
+        ) if anchor_required else (
+            anchor is None
+            and "scientific_anchor_inventory_record_sha256" not in intent
+            and "scientific_anchor_inventory_record_sha256" not in complete
+        )
+        if root.exists() or not all(common) or not anchor_binding:
             raise ValueError("recovery prune semantic closure")
-    return {
+    summary = {
         "retained_rounds": sorted(retained),
-        "pruned_rounds": pruned,
+        "pruned_rounds": completed_prunes,
         "two_phase_evidence": True,
+    }
+    if interrupted is not None:
+        summary.update({
+            "mode": "postsave_housekeeping_interruption_before_delete",
+            "unstarted_prune_round": interrupted,
+            "extra_retained_recovery_rounds": [interrupted],
+        })
+    return summary
+
+
+def validate_postsave_target_anchor_substitution(
+        events: list[dict], *, target_round: int,
+        expected_anchor_rounds: list[int], output_root: Path,
+        target_inventory_event: dict) -> dict:
+    """Bind a terminal checkpoint when housekeeping stopped before anchoring."""
+    target_round = int(target_round)
+    if target_round not in expected_anchor_rounds \
+            or not events or events[-1] is not target_inventory_event \
+            or target_inventory_event.get("record_type") != "checkpoint_inventory" \
+            or int(target_inventory_event.get("global_step", -1)) != target_round:
+        raise ValueError("post-save target checkpoint terminality")
+    anchor_events = [
+        row for row in events
+        if row.get("record_type") == "rwwpo2_actor_anchor_inventory"
+    ]
+    observed = sorted(int(row.get("global_step", -1)) for row in anchor_events)
+    expected_without_target = [
+        value for value in expected_anchor_rounds if value != target_round
+    ]
+    target_anchor_root = (
+        output_root / "scientific_anchors" / f"round_{target_round}")
+    if observed != expected_without_target or target_anchor_root.exists() \
+            or target_anchor_root.is_symlink():
+        raise ValueError("post-save target anchor shape")
+    return {
+        "mode": "immutable_target_recovery_checkpoint",
+        "round": target_round,
+        "checkpoint_inventory_record_sha256":
+            target_inventory_event["record_sha256"],
+        "checkpoint_inventory_sha256": hashlib.sha256(json.dumps(
+            target_inventory_event["inventory"], sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode()).hexdigest(),
+        "scientific_anchor_materialization_completed": False,
+        "checkpoint_root_must_be_preserved": True,
     }
 
 
@@ -350,7 +415,11 @@ def main() -> None:
     parser.add_argument("--experiment-seed", type=int, required=True)
     parser.add_argument("--target-round", type=int, required=True)
     parser.add_argument("--segment-producer-commit")
+    parser.add_argument("--segment-execution-commit")
     parser.add_argument("--cross-commit-compatibility")
+    parser.add_argument("--execution-cross-commit-compatibility")
+    parser.add_argument(
+        "--allow-postsave-housekeeping-interruption", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -361,6 +430,8 @@ def main() -> None:
     if head != args.expected_commit or dirty:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:checkout")
     segment_producer_commit = args.segment_producer_commit or head
+    segment_execution_commit = (
+        args.segment_execution_commit or segment_producer_commit)
     compatibility = None
     if segment_producer_commit != head:
         if re.fullmatch(r"[0-9a-f]{40}", segment_producer_commit) is None \
@@ -390,6 +461,36 @@ def main() -> None:
         raise SystemExit(
             "RWWPO2_ATTEMPT_AUDIT_NO_GO:unexpected cross-commit segment receipt"
         )
+    execution_compatibility = None
+    if segment_execution_commit != segment_producer_commit:
+        if re.fullmatch(r"[0-9a-f]{40}", segment_execution_commit) is None \
+                or not args.execution_cross_commit_compatibility:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:execution commit arguments")
+        try:
+            execution_compatibility = verified_report(
+                Path(args.execution_cross_commit_compatibility).resolve(),
+                decision="RWWPO2_CROSS_COMMIT_RESUME_COMPATIBILITY_PASS",
+                commit=segment_execution_commit,
+            )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
+        if execution_compatibility.get("producer_git_commit") != \
+                segment_producer_commit \
+                or execution_compatibility.get("consumer_git_commit") != \
+                segment_execution_commit \
+                or execution_compatibility.get(
+                    "producer_resolved_contract_file_sha256") != \
+                args.resolved_contract_sha256 \
+                or execution_compatibility.get(
+                    "algorithmic_source_or_contract_change") is not False:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:execution commit compatibility")
+    elif args.execution_cross_commit_compatibility is not None:
+        raise SystemExit(
+            "RWWPO2_ATTEMPT_AUDIT_NO_GO:unexpected execution compatibility")
     if args.target_round <= 0 or args.target_round > 400 \
             or args.target_round % 10 != 0:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:target recovery round")
@@ -400,7 +501,9 @@ def main() -> None:
     if any(path.is_symlink() for path in (
             raw_attempt_root, raw_output_root, raw_resolved, raw_preflight)) \
             or (args.cross_commit_compatibility is not None and
-                Path(args.cross_commit_compatibility).is_symlink()):
+                Path(args.cross_commit_compatibility).is_symlink()) \
+            or (args.execution_cross_commit_compatibility is not None and
+                Path(args.execution_cross_commit_compatibility).is_symlink()):
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:source symlink")
     attempt_root = raw_attempt_root.resolve()
     output_root = raw_output_root.resolve()
@@ -415,7 +518,7 @@ def main() -> None:
     try:
         preflight = verified_report(
             raw_preflight.resolve(), decision="RWWPO2_PREFLIGHT_PASS",
-            commit=segment_producer_commit,
+            commit=segment_execution_commit,
         )
         resolved_commit = (
             segment_producer_commit if compatibility is not None else
@@ -440,6 +543,13 @@ def main() -> None:
                 resolved["source_manifest_sha256"] \
             or preflight.get("s128_consumed_by_training") is not False:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:preflight identity binding")
+    if execution_compatibility is not None and (
+            preflight.get("cross_commit_compatibility_report_sha256") !=
+                execution_compatibility["report_sha256"]
+            or preflight.get("cross_commit_producer_git_commit") !=
+                segment_producer_commit):
+        raise SystemExit(
+            "RWWPO2_ATTEMPT_AUDIT_NO_GO:execution preflight compatibility")
     preflight_target_round = int(preflight["target_round"])
     if preflight_target_round == 400:
         if not all(isinstance(preflight.get(name), str) and re.fullmatch(
@@ -465,7 +575,7 @@ def main() -> None:
         events, target_inventory_event, execution_prefix_sha256 = \
             execution_prefix_through_round(
                 execution_path, target_round=args.target_round,
-                expected_commit=segment_producer_commit,
+                expected_commit=segment_execution_commit,
             )
     except ValueError as error:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)) from error
@@ -850,7 +960,50 @@ def main() -> None:
     if [int(row["global_step"]) for row in segment_checkpoint_events] != \
             expected_checkpoint_rounds:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:recovery checkpoint sequence")
-    if compatibility is not None:
+    scientific_anchor_rounds = {
+        int(value) for value in
+        manifest["checkpointing"]["scientific_actor_anchors"]
+    }
+    execution_has_scientific_prune_contract = (
+        segment_execution_commit == head
+        or (
+            execution_compatibility is not None
+            and execution_compatibility.get("recovery_prune_contract") ==
+                RECOVERY_PRUNE_CONTRACT
+        )
+    )
+    if args.allow_postsave_housekeeping_interruption:
+        if compatibility is None or execution_compatibility is None \
+                or segment_execution_commit == head \
+                or execution_has_scientific_prune_contract \
+                or args.target_round != preflight_target_round \
+                or args.target_round not in scientific_anchor_rounds \
+                or events[-1].get("record_type") != "checkpoint_inventory" \
+                or int(events[-1].get("global_step", -1)) != args.target_round:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:post-save housekeeping authorization")
+        try:
+            recovery_prune_summary = validate_recovery_prune_evidence(
+                events, expected_checkpoint_rounds=expected_checkpoint_rounds,
+                scientific_anchor_rounds=scientific_anchor_rounds,
+                output_root=output_root, allow_final_unstarted_prune=True,
+            )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
+    elif execution_has_scientific_prune_contract:
+        try:
+            recovery_prune_summary = validate_recovery_prune_evidence(
+                events, expected_checkpoint_rounds=expected_checkpoint_rounds,
+                scientific_anchor_rounds=scientific_anchor_rounds,
+                output_root=output_root,
+            )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
+    elif compatibility is not None:
         # The producer prefix predates the consumer's two-phase prune
         # evidence contract.  Its target checkpoint and all scientific actor
         # anchors are authenticated independently below; deletion of an older
@@ -873,15 +1026,8 @@ def main() -> None:
                 compatibility["report_sha256"],
         }
     else:
-        try:
-            recovery_prune_summary = validate_recovery_prune_evidence(
-                events, expected_checkpoint_rounds=expected_checkpoint_rounds,
-                output_root=output_root,
-            )
-        except ValueError as error:
-            raise SystemExit(
-                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
-            ) from error
+        raise SystemExit(
+            "RWWPO2_ATTEMPT_AUDIT_NO_GO:recovery prune contract identity")
     anchor_events = [row for row in events if row.get("record_type") ==
                      "rwwpo2_actor_anchor_inventory" and start_round <= int(
                          row.get("global_step", -1)) <= args.target_round]
@@ -889,7 +1035,23 @@ def main() -> None:
         int(value) for value in manifest["checkpointing"]["scientific_actor_anchors"]
         if start_round <= int(value) <= args.target_round
     )
-    if sorted(int(row["global_step"]) for row in anchor_events) != expected_anchor_rounds:
+    observed_anchor_rounds = sorted(
+        int(row["global_step"]) for row in anchor_events)
+    target_checkpoint_anchor_substitution = None
+    if args.allow_postsave_housekeeping_interruption:
+        try:
+            target_checkpoint_anchor_substitution = \
+                validate_postsave_target_anchor_substitution(
+                    events, target_round=args.target_round,
+                    expected_anchor_rounds=expected_anchor_rounds,
+                    output_root=output_root,
+                    target_inventory_event=target_inventory_event,
+                )
+        except ValueError as error:
+            raise SystemExit(
+                "RWWPO2_ATTEMPT_AUDIT_NO_GO:" + str(error)
+            ) from error
+    elif observed_anchor_rounds != expected_anchor_rounds:
         raise SystemExit("RWWPO2_ATTEMPT_AUDIT_NO_GO:scientific anchor sequence")
     anchor_record_sha256 = {}
     checkpoint_event_by_round = {
@@ -938,24 +1100,29 @@ def main() -> None:
         compatibility_sha = preflight.get(
             "cross_commit_compatibility_report_sha256"
         )
-        execution_compatibility = resume_lineage.get(
+        resume_execution_compatibility = resume_lineage.get(
             "cross_commit_compatibility"
         )
         if compatibility_sha is None:
-            if execution_compatibility is not None \
-                    or resume_lineage.get("producer_git_commit") != head \
-                    or resume_lineage.get("consumer_git_commit") != head:
+            if resume_execution_compatibility is not None \
+                    or resume_lineage.get("producer_git_commit") != \
+                    segment_execution_commit \
+                    or resume_lineage.get("consumer_git_commit") != \
+                    segment_execution_commit:
                 raise SystemExit(
                     "RWWPO2_ATTEMPT_AUDIT_NO_GO:same-commit resume binding"
                 )
-        elif not isinstance(execution_compatibility, dict) \
-                or execution_compatibility.get("report_sha256") != compatibility_sha \
-                or execution_compatibility.get("producer_git_commit") != \
+        elif not isinstance(resume_execution_compatibility, dict) \
+                or resume_execution_compatibility.get(
+                    "report_sha256") != compatibility_sha \
+                or resume_execution_compatibility.get("producer_git_commit") != \
                 preflight.get("cross_commit_producer_git_commit") \
-                or execution_compatibility.get("consumer_git_commit") != head \
+                or resume_execution_compatibility.get(
+                    "consumer_git_commit") != segment_execution_commit \
                 or resume_lineage.get("producer_git_commit") != \
                 preflight.get("lineage_parent_git_commit") \
-                or resume_lineage.get("consumer_git_commit") != head:
+                or resume_lineage.get("consumer_git_commit") != \
+                segment_execution_commit:
             raise SystemExit(
                 "RWWPO2_ATTEMPT_AUDIT_NO_GO:cross-commit resume binding"
             )
@@ -966,8 +1133,13 @@ def main() -> None:
         "decision": f"RWWPO2_R{args.target_round}_ATTEMPT_AUDIT_PASS",
         "git_commit": head, "program_version": "rwwpo2-k2",
         "segment_producer_git_commit": segment_producer_commit,
+        "segment_execution_git_commit": segment_execution_commit,
         "segment_cross_commit_compatibility_report_sha256": (
             None if compatibility is None else compatibility["report_sha256"]
+        ),
+        "segment_execution_compatibility_report_sha256": (
+            None if execution_compatibility is None
+            else execution_compatibility["report_sha256"]
         ),
         "cell": args.cell, "objective_variant": objective,
         "controller_variant": controller, "experiment_seed": args.experiment_seed,
@@ -1059,6 +1231,8 @@ def main() -> None:
             separators=(",", ":"), allow_nan=False,
         ).encode()).hexdigest(),
         "scientific_anchor_inventory_record_sha256": anchor_record_sha256,
+        "target_checkpoint_anchor_substitution":
+            target_checkpoint_anchor_substitution,
         "s128_consumed": False,
         "performance_evaluated": False,
     }

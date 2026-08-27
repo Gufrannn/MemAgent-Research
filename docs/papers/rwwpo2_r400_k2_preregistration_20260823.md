@@ -112,6 +112,21 @@ uses the common, validated `eval_manifest_hash` as the cross-cell example/order
 identity. This is an audit correction only; S128 remains adaptive development
 evidence and cannot become confirmatory performance evidence.
 
+Commit `34d53a0f401705e5721fbc729c9533a796a4d54a` fixed that diagnostic
+comparison, and the B/D/E T20 descriptive certificate completed. Its E
+seed-2026 resume segment subsequently completed both R50 transactions: both
+rank ledgers contain 60 records for rounds 21--50, proposal clock 100 is closed,
+and a complete `global_step_50` recovery checkpoint plus latest pointer 50 were
+written. The process nevertheless exited before the progress bar could report
+100% because post-save recovery pruning required an undeclared scientific
+anchor at recovery-only round 30. No delete intent had been appended and the
+R30/R40/R50 roots remained present. This is a checkpoint-housekeeping contract
+failure after the authenticated target checkpoint, not an actor-training
+failure, but E is **not** an R50 PASS until a newer exact-commit auditor passes
+the narrow read-only post-save-interruption contract. The repair must distinguish
+scientific recovery rounds from recovery-only rounds and must not fabricate an
+anchor, delete or edit the historical root, or weaken transaction/metric gates.
+
 ## 1. Scientific question
 
 A recurrent memory writer emits free text that is materialized as the next

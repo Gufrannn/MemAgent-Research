@@ -84,6 +84,22 @@ and instead requires their independently validated `eval_manifest_hash` to be
 identical. The three completed diagnostic outputs are not a blind or
 confirmatory result, and no E resume occurred after the failed comparison gate.
 
+Commit `34d53a0f401705e5721fbc729c9533a796a4d54a` corrected the comparison
+identity and produced the single-seed fixed-S128 T20 descriptive certificate.
+The authorized E R20 resume then reached the R50 target: each rank has 60
+authenticated transaction records for rounds 21--50, the last coordinate is
+R50/inner-2/clock-100, and the complete R50 recovery checkpoint and pointer were
+written. The process exited in post-save housekeeping before any delete intent
+because the pruner incorrectly required `scientific_anchors/round_30`, although
+round 30 is recovery-only in the frozen manifest. R30, R40 and R50 remain
+present and no transaction failure artifact exists. These facts preserve a
+candidate completed training endpoint, but do not themselves constitute an
+attempt-audit PASS. The historical root must remain byte-immutable. A new
+auditor may accept it only through a separately authenticated compatibility
+chain and the exact fail-closed post-save-interruption shape; otherwise E
+remains NO_GO. No formal R50 mechanism conclusion or R400 performance result is
+claimed here.
+
 An earlier failed training attempt is preserved at
 `/data/cw/memagent_work/logs/rwwpo/rwwpo2_r50_b_seed2026_eab35b9_r1`;
 its operator pipeline log is
@@ -194,7 +210,7 @@ attempt audits, mechanism analyses, and code are frozen.
 
 | Scientific conclusion | Direct leakage | Adaptive benchmark risk | Paper wording | Remaining blocker |
 |---|---|---|---|---|
-| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. Every R50 attempt so far is implementation-failure evidence only; neither `eab35b9...`, `7d7054a...`, nor the B/D `4a6a72ef...` attempts has a valid R50 endpoint. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The repaired exact commit must pass a fresh authenticated release suite. Then a signed cross-commit compatibility receipt and per-checkpoint lineage audit must PASS before B/D/E resume; no such H20 receipt or resumed endpoint exists yet. |
+| K1 whole-path/per-write/tokenwise objectives are single-pass degenerate under the proposition's complete-state assumptions; old T25 identifies controller dynamics only. RWWPO-2 remains scientifically KEEP. No R50 attempt has yet passed the formal attempt audit. The E `34d53a0f...` resume has a complete candidate R50 transaction/checkpoint endpoint, but its post-save housekeeping interruption still requires the narrow read-only audit before it can join scientific evidence. | Canonical actor-train/S128 content and root intersections are both 0; critic/prior/aux are 0 by construction. | High and acknowledged: S128 is development-only and cannot support confirmation. | No superiority, sufficient-training, convergence or blind-test claim; R400 is a medium-budget conditional test. | The repaired exact commit must pass a fresh authenticated release suite and producer-to-auditor compatibility audit. E then requires the historical execution compatibility receipt plus the exact post-save-interruption attempt audit; B/D/A/C retain their own independent endpoint and lineage gates. |
 
 ## 5. Reproducible read-only H20 entry
 

@@ -15,7 +15,11 @@
 > revision, S128 is now a development benchmark for this method family, not a
 > blind final test.
 
-**Scientific status (2026-08-24): PAPER-FRAMING GO; all RWWPO-2 H20 attempts are runtime NO-GO and every empirical claim remains conditional.** Sequence-level and
+**Scientific status (2026-08-27): PAPER-FRAMING GO; no RWWPO-2 R50 endpoint has
+yet passed the formal attempt audit and every empirical claim remains
+conditional. An E resume segment completed its R50 transactions and checkpoint
+but exited in post-save housekeeping; it remains a candidate endpoint pending
+the narrow read-only audit, not a scientific PASS.** Sequence-level and
 sub-sequence policy optimization are already established by GSPO, FSPO, and
 GSsPO. “Use a joint ratio for a writer response” is therefore not a sufficient
 novelty claim. The viable residual is narrower and harder: a free-text writer

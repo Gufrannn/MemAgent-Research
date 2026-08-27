@@ -273,6 +273,7 @@ class LedgerAndAuditTests(unittest.TestCase):
             "previous_record_sha256": "0" * 64,
             "checkpoint_inventory_record_sha256": "c" * 64,
             "scientific_anchor_inventory_record_sha256": "d" * 64,
+            "scientific_anchor_required": True,
             "global_step": 30, "pruned_round": 10,
             "pruned_root": "/data/run/global_step_10",
             "scientific_anchor_preserved": True,
@@ -289,6 +290,37 @@ class LedgerAndAuditTests(unittest.TestCase):
             "pruned_root_absent": True,
         }
         self.assertEqual(validate_ledger_schema([intent, complete], schema), [])
+        missing_required_anchor = dict(intent)
+        missing_required_anchor.pop(
+            "scientific_anchor_inventory_record_sha256")
+        self.assertTrue(any(
+            "scientific_anchor_inventory_record_sha256" in failure
+            for failure in validate_ledger_schema(
+                [missing_required_anchor], schema)
+        ))
+        non_anchor_common = {
+            key: value for key, value in common.items()
+            if key != "scientific_anchor_inventory_record_sha256"
+        }
+        non_anchor_common.update({
+            "scientific_anchor_required": False,
+            "scientific_anchor_preserved": False,
+        })
+        non_anchor_intent = {
+            **non_anchor_common,
+            "record_type": "rwwpo2_recovery_prune_intent",
+            "record_index": 0, "record_sha256": "e" * 64,
+        }
+        non_anchor_complete = {
+            **non_anchor_common,
+            "record_type": "rwwpo2_recovery_pruned",
+            "record_index": 1, "previous_record_sha256": "e" * 64,
+            "record_sha256": "f" * 64,
+            "prune_intent_record_sha256": "e" * 64,
+            "pruned_root_absent": True,
+        }
+        self.assertEqual(validate_ledger_schema(
+            [non_anchor_intent, non_anchor_complete], schema), [])
 
     def test_checkpoint_inventory_requires_both_two_gpu_ranks(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -272,8 +272,12 @@ recovery checkpoints at 10/20/30/40/50 with only 40 and 50 retained, and
 immutable actor anchors at 5/10/15/20/25/50. Training never invokes validation.
 The deleted recovery roots at 10/20/30 must each have one consecutive
 `rwwpo2_recovery_prune_intent` / `rwwpo2_recovery_pruned` ledger pair. The pair
-binds the checkpoint inventory, preserved scientific-anchor inventory, exact
-resolved root, prune round, intent-record digest, and post-delete absence. An
+always binds the checkpoint inventory, exact resolved root, prune round,
+intent-record digest, and post-delete absence. For a round declared in
+`scientific_actor_anchors` (10 and 20 here), it additionally requires and binds
+the preserved scientific-anchor inventory. For a recovery-only round (30
+here), it must instead declare `scientific_anchor_required=false`, omit the
+anchor digest, and prove that no undeclared anchor exists. An
 unmatched intent is an interrupted deletion and makes the full endpoint
 `NO_GO`; it may not be repaired by appending a completion after restart.
 Every transaction receipt must bind a fresh post-commit/post-rollback forward
@@ -304,6 +308,46 @@ export RWWPO_ATTEMPT_AUDIT="$RWWPO_CERT_ROOT/attempt_audit_r50.json"
   --target-round 50 \
   --output "$RWWPO_ATTEMPT_AUDIT"
 ```
+
+If and only if an older compatible execution reached its target checkpoint and
+then stopped before starting the final recovery prune, the upgraded auditor may
+use `--allow-postsave-housekeeping-interruption`. This is not a generic recovery
+waiver. It requires the target `checkpoint_inventory` to be the terminal
+authenticated execution event, all three final recovery roots to remain
+byte-identical to their checkpoint inventories, no intent for the unstarted
+delete, and the target scientific-anchor event/root alone to be absent. The
+target recovery checkpoint is then bound as the immutable scientific endpoint
+and must never be deleted. Historical execution and current auditor commits are
+separate identities and require both the original execution compatibility
+receipt and a current producer-to-auditor compatibility receipt. New
+compatibility receipts also freeze
+`recovery_prune_contract=scientific_anchor_aware_two_phase_v2`; future runs
+may use scientific-anchor-aware prune evidence only when their execution
+commit is bound to that capability:
+
+```bash
+"$RWWPO_PYTHON" tools/h20/audit_rwwpo2_attempt.py \
+  --attempt-root "$RWWPO_ATTEMPT_ROOT" \
+  --output-root "$RWWPO_OUTPUT" \
+  --resolved-contract "$RWWPO_RESOLVED_CONTRACT" \
+  --resolved-contract-sha256 "$RWWPO_RESOLVED_CONTRACT_SHA256" \
+  --preflight "$RWWPO_PREFLIGHT" \
+  --expected-commit "$RWWPO_EXPECTED_COMMIT" \
+  --segment-producer-commit "$RWWPO_CONTRACT_PRODUCER_COMMIT" \
+  --segment-execution-commit "$RWWPO_EXECUTION_COMMIT" \
+  --cross-commit-compatibility "$RWWPO_AUDITOR_COMPATIBILITY" \
+  --execution-cross-commit-compatibility "$RWWPO_EXECUTION_COMPATIBILITY" \
+  --allow-postsave-housekeeping-interruption \
+  --cell "$RWWPO_CELL" \
+  --experiment-seed "$RWWPO_EXPERIMENT_SEED" \
+  --target-round 50 \
+  --output "$RWWPO_ATTEMPT_AUDIT"
+```
+
+The auditor never creates an anchor, deletes a recovery root, appends a ledger
+event, or edits the historical attempt. Any started prune, missing extra root,
+inventory drift, nonterminal checkpoint event, additional missing anchor, or
+algorithm-compatibility drift remains `NO_GO`.
 
 Any transaction failure file makes the **full attempted endpoint** NO_GO.
 Preserve the complete failed root; do not delete the failure receipt or append a

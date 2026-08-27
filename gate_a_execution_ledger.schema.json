@@ -68,6 +68,7 @@
     "checkpoint_inventory_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "scientific_anchor_inventory_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "prune_intent_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "scientific_anchor_required": {"type": "boolean"},
     "scientific_anchor_preserved": {"type": "boolean"},
     "pruned_root_absent": {"type": "boolean"}
   },
@@ -94,11 +95,21 @@
     },
     {
       "if": {"properties": {"record_type": {"const": "rwwpo2_recovery_prune_intent"}}},
-      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_inventory_record_sha256", "scientific_anchor_preserved"]}
+      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_required", "scientific_anchor_preserved"]}
     },
     {
       "if": {"properties": {"record_type": {"const": "rwwpo2_recovery_pruned"}}},
-      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_inventory_record_sha256", "prune_intent_record_sha256", "scientific_anchor_preserved", "pruned_root_absent"]}
+      "then": {"required": ["global_step", "pruned_round", "pruned_root", "checkpoint_inventory_record_sha256", "scientific_anchor_required", "prune_intent_record_sha256", "scientific_anchor_preserved", "pruned_root_absent"]}
+    },
+    {
+      "if": {
+        "required": ["record_type", "scientific_anchor_required"],
+        "properties": {
+          "record_type": {"enum": ["rwwpo2_recovery_prune_intent", "rwwpo2_recovery_pruned"]},
+          "scientific_anchor_required": {"const": true}
+        }
+      },
+      "then": {"required": ["scientific_anchor_inventory_record_sha256"]}
     }
   ],
   "additionalProperties": true

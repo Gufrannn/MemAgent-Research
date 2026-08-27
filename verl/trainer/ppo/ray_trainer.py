@@ -1410,6 +1410,8 @@ class RayPPOTrainer:
         anchor_authenticated={int(row["global_step"]):row for row in events
                               if row.get("record_type")==
                               "rwwpo2_actor_anchor_inventory"}
+        scientific_anchor_rounds={int(value) for value in self.config.trainer.get(
+            "rwwpo2_scientific_anchors",[])}
         for step,path in sorted(candidates):
             if step in keep:
                 continue
@@ -1420,17 +1422,28 @@ class RayPPOTrainer:
             anchored=authenticated[step]
             anchor_event=anchor_authenticated.get(step)
             anchor_root=os.path.join(output_root,"scientific_anchors",f"round_{step}")
-            if anchor_event is None or not os.path.isdir(anchor_root) \
-                    or anchor_event.get("inventory") != checkpoint_inventory(anchor_root):
-                raise RuntimeError(f"RWWPO2_RECOVERY_PRUNE_ANCHOR_MISSING:{anchor_root}")
+            scientific_anchor_required=step in scientific_anchor_rounds
+            if scientific_anchor_required:
+                if anchor_event is None or not os.path.isdir(anchor_root) \
+                        or anchor_event.get("inventory") != checkpoint_inventory(anchor_root):
+                    raise RuntimeError(
+                        f"RWWPO2_RECOVERY_PRUNE_ANCHOR_MISSING:{anchor_root}")
+            elif anchor_event is not None or os.path.lexists(anchor_root):
+                raise RuntimeError(
+                    f"RWWPO2_UNDECLARED_SCIENTIFIC_ANCHOR:{anchor_root}")
             resolved_path=os.path.realpath(path)
+            anchor_binding={
+                "scientific_anchor_required":scientific_anchor_required,
+                "scientific_anchor_preserved":scientific_anchor_required,
+            }
+            if scientific_anchor_required:
+                anchor_binding["scientific_anchor_inventory_record_sha256"]=\
+                    anchor_event["record_sha256"]
             intent=append_gate_a_record(
                 "rwwpo2_recovery_prune_intent",global_step=int(self.global_steps),
                 pruned_round=int(step),pruned_root=resolved_path,
                 checkpoint_inventory_record_sha256=anchored["record_sha256"],
-                scientific_anchor_inventory_record_sha256=
-                    anchor_event["record_sha256"],
-                scientific_anchor_preserved=True)
+                **anchor_binding)
             if not isinstance(intent,dict) or re.fullmatch(
                     r"[0-9a-f]{64}",str(intent.get("record_sha256",""))) is None:
                 raise RuntimeError("RWWPO2_RECOVERY_PRUNE_INTENT_NOT_RECORDED")
@@ -1441,10 +1454,8 @@ class RayPPOTrainer:
                 "rwwpo2_recovery_pruned",global_step=int(self.global_steps),
                 pruned_round=int(step),pruned_root=resolved_path,
                 checkpoint_inventory_record_sha256=anchored["record_sha256"],
-                scientific_anchor_inventory_record_sha256=
-                    anchor_event["record_sha256"],
                 prune_intent_record_sha256=intent["record_sha256"],
-                pruned_root_absent=True,scientific_anchor_preserved=True)
+                pruned_root_absent=True,**anchor_binding)
             if not isinstance(complete,dict):
                 raise RuntimeError("RWWPO2_RECOVERY_PRUNE_COMPLETE_NOT_RECORDED")
 

@@ -425,7 +425,9 @@ def main():
         "rwwpo2_recovery_prune_intent",
         "rwwpo2_recovery_pruned",
         "prune_intent_record_sha256",
+        "scientific_anchor_required",
         "scientific_anchor_inventory_record_sha256",
+        "RWWPO2_UNDECLARED_SCIENTIFIC_ANCHOR",
         "RWWPO2_RECOVERY_PRUNE_INTENT_NOT_RECORDED",
         "RWWPO2_RECOVERY_PRUNE_COMPLETE_NOT_RECORDED",
     ):
@@ -433,8 +435,15 @@ def main():
             violations.append("two-phase recovery prune producer:"+token)
     for token in (
         "validate_recovery_prune_evidence(",
+        "validate_postsave_target_anchor_substitution(",
         "recovery prune intent/complete closure",
         "recovery prune semantic closure",
+        "postsave_housekeeping_interruption_before_delete",
+        "immutable_target_recovery_checkpoint",
+        "scientific_anchor_aware_two_phase_v2",
+        '"--allow-postsave-housekeeping-interruption"',
+        '"--segment-execution-commit"',
+        '"--execution-cross-commit-compatibility"',
         '"two_phase_evidence": True',
     ):
         if token not in attempt:

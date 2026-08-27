@@ -65,6 +65,7 @@ ALLOWED_RECURRENT_CHANGES = {
 }
 LAUNCHER_WIRING_BEGIN = "# BEGIN RWWPO2_CROSS_COMMIT_COMPATIBILITY_WIRING"
 LAUNCHER_WIRING_END = "# END RWWPO2_CROSS_COMMIT_COMPATIBILITY_WIRING"
+RECOVERY_PRUNE_CONTRACT = "scientific_anchor_aware_two_phase_v2"
 
 
 def sha256_bytes(payload: bytes) -> str:
@@ -255,6 +256,7 @@ def main() -> None:
         '"rwwpo2_recovery_prune_intent"',
         '"rwwpo2_recovery_pruned"',
         "prune_intent_record_sha256",
+        "scientific_anchor_required",
     ):
         if token not in consumer_trainer_text:
             raise SystemExit(
@@ -322,6 +324,7 @@ def main() -> None:
         "launcher_projection_markers": [
             LAUNCHER_WIRING_BEGIN, LAUNCHER_WIRING_END,
         ],
+        "recovery_prune_contract": RECOVERY_PRUNE_CONTRACT,
         "producer_launcher_projection_sha256":
             producer_launcher_projection,
         "consumer_launcher_projection_sha256":
