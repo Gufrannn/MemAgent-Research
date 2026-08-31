@@ -67,7 +67,7 @@ run_metric() {
     --feature-set stats_text \
     --hash-dim 256 \
     --alphas 0.01,0.1,1,10,100,1000 \
-    --thresholds -0.025,0,0.025,0.05,0.1 \
+    --thresholds=-0.025,0,0.025,0.05,0.1 \
     --inner-folds 5 \
     --eps 0.1 \
     --tie-eps 0.01 \
