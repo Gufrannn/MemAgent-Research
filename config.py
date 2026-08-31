@@ -1,0 +1,111 @@
+import importlib
+
+from data.EvalDataset import BENCHMARK_REGISTRY
+from data.EvalDataset import load_hotpotqa, load_longmemeval, load_synth
+import uuid
+from functools import partial
+
+from dotenv import load_dotenv
+load_dotenv(".env") # default to .env in project root
+import os
+
+# Version for pyproject.toml
+VERSION = "0.1.0"
+
+# Configuration - API endpoints are configured via environment variables
+API_CONFIG_REMOTE = {
+    "base_url": os.getenv("REMOTE_API_BASE", "http://localhost:8000/v1"),
+    "api_key": "sk-",
+    "default_headers": {
+        "BCS-APIHub-RequestId": str(uuid.uuid4()),
+        "X-CHJ-GWToken": os.getenv("X_CHJ_GWTOKEN")
+    },
+    "max_retries": 100
+}
+
+API_CONFIG_LOCAL = {
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key": "EMPTY",
+    "max_retries": 100,
+}
+MODEL_NAME = "Qwen/Qwen3-8B"
+
+load_hotpotqa_10_3_5 = partial(load_hotpotqa, num_docs=10)
+load_hotpotqa_200_1_128 = partial(load_hotpotqa, num_docs=200)
+_DATASET_LOADERS = BENCHMARK_REGISTRY.copy()
+_DATASET_LOADERS['hotpotqa'] = load_hotpotqa_200_1_128
+_DATASET_LOADERS['longmemeval_oracle'] = partial(load_longmemeval, oracle=True)
+
+class DatasetLoaders:
+    def __getitem__(self, key):
+        if key in _DATASET_LOADERS:
+            return _DATASET_LOADERS[key]
+        if key.startswith("hotpotqa_"):
+            parts = key.split('_')
+            return partial(load_hotpotqa, num_docs=int(parts[1]))
+        if key.startswith("synth-"):
+            parts = key.split('-')
+            return partial(load_synth,
+                           suf=parts[1])
+        raise KeyError(key)
+    
+    def get(self, key, default=None):
+        return self.__getitem__(key) or default
+    
+    def __contains__(self, key):
+        return self.__getitem__(key) is not None
+
+DATASET_LOADERS = DatasetLoaders()
+
+class AgentRegistry:
+    _AGENT_SPECS = {
+        'concat': ('agents.concat_agent', 'ConcatAgent'),
+        'concat_single': ('agents.concat_agent', 'ConcatSingleAgent'),
+        'memagent': ('agents.mem_agent', 'MemAgent'),
+        'filememory': ('agents.file_memory_agent', 'FileMemoryAgent'),
+        'emergence': ('agents.emergence_agent', 'EmergenceAgent'),
+        'rag': ('agents.rag_agent', 'RAGAgent'),
+        'no_memory': ('agents.no_memory_agent', 'NoMemoryAgent'),
+        'budgeted_evidence': ('agents.budgeted_evidence_agent', 'BudgetedEvidenceAgent'),
+        'adaptive_memory': ('agents.adaptive_memory_agent', 'AdaptiveMemoryAgent'),
+        'progressive_depth': ('agents.progressive_depth_agent', 'ProgressiveDepthAgent'),
+        'memory_sequence': ('agents.memory_sequence_agent', 'MemorySequenceAgent'),
+        'memalpha': ('agents.memalpha_agent', 'MemAlphaUnifiedAgent'),
+        'toolmem': ('agents.verl_agent', 'VerlMemoryAgent'),
+        'mem1': ('agents.mem1_agent', 'Mem1Agent'),
+        'gam': ('agents.gam_agent', 'GAMAgent'),
+        'rlm': ('agents.rlm_agent', 'RLMAgent'),
+        'amem': ('agents.amem_agent', 'AmemAgent'),
+        'memt': ('agents.memt_agent', 'MemTAgent'),
+    }
+
+    def __init__(self) -> None:
+        self._cache = {}
+
+    def __getitem__(self, key):
+        if key in self._cache:
+            return self._cache[key]
+        spec = self._AGENT_SPECS.get(key)
+        if spec is None:
+            raise KeyError(key)
+        module_name, class_name = spec
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as e:
+            breakpoint()
+            raise e
+        agent_cls = getattr(module, class_name)
+        self._cache[key] = agent_cls
+        return agent_cls
+
+    def get(self, key, default=None):
+        try:
+            return self.__getitem__(key)
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        return key in self._AGENT_SPECS
+
+
+AGENT_CLASS = AgentRegistry()

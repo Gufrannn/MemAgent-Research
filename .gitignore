@@ -1,0 +1,70 @@
+__pycache__/
+processed*
+.env
+.venv/
+.venv.bak/
+*.parquet
+data/raw/*
+!data/raw/KnowMeBench/
+results/
+tmp/
+*.log
+
+# External dependencies
+external/*/.venv/
+external/*/__pycache__/
+external/*/tmp/
+external/*/.pytest_cache/
+
+# Backup files
+agents.backup.*
+*.backup
+.claude/
+diagnose_*.py
+deduplicate_*.py
+test_*.py
+!external/A-mem/test_advanced.py
+!test_verl_agent.py
+stats.txt
+check_*.py
+TODO
+nanobanana*
+tool_stats*
+analyze_tool_stats.py
+run_evaluation_full.sh
+run_generation.sh
+run_test.sh
+
+# Abandoned solutions
+agents/file_memory_agent/
+
+# Python cache and build files
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Large data files
+*.jsonl
+*.txt
+!requirements.txt
+!README.md
+!CONTRIBUTING.md
+!LICENSE
+demo.ipynb
+data/raw/longmemeval_s.json
+data/train/
+flash_attn*.whl*
+outputs/
+ANALYSIS.md
+prompt_results.tsv
+.codex

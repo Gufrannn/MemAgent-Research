@@ -1,0 +1,594 @@
+{
+  "split": "p21_h2_dev80",
+  "parent_manifest": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/runs/longmemeval_manifests_p11/longmemeval_locked_confirm_manifest.json",
+  "parent_manifest_sha256_canonical_payload": "4b0a75fec3f9606733ca1ab1393268b33fc647761e041fe81434d4850ed4e3ea",
+  "raw_metadata": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/data/raw/longmemeval_s_cleaned.json",
+  "raw_metadata_sha256_file": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "seed": 20260831,
+  "summary": {
+    "n": 80,
+    "type_counts": {
+      "abstention": 4,
+      "knowledge-update": 12,
+      "multi-session": 21,
+      "single-session-assistant": 8,
+      "single-session-preference": 3,
+      "single-session-user": 10,
+      "temporal-reasoning": 22
+    }
+  },
+  "question_ids": [
+    "longmemeval_gpt4_d31cdae3",
+    "longmemeval_311778f1",
+    "longmemeval_gpt4_cd90e484",
+    "longmemeval_603deb26",
+    "longmemeval_2c63a862",
+    "longmemeval_91b15a6e",
+    "longmemeval_gpt4_372c3eed",
+    "longmemeval_41698283",
+    "longmemeval_d23cf73b",
+    "longmemeval_28bcfaac",
+    "longmemeval_gpt4_2ba83207",
+    "longmemeval_0100672e",
+    "longmemeval_gpt4_21adecb5",
+    "longmemeval_51a45a95",
+    "longmemeval_gpt4_74aed68e",
+    "longmemeval_gpt4_5438fa52",
+    "longmemeval_6613b389",
+    "longmemeval_6ae235be",
+    "longmemeval_ef66a6e5",
+    "longmemeval_gpt4_213fd887",
+    "longmemeval_dfde3500",
+    "longmemeval_0862e8bf",
+    "longmemeval_0977f2af",
+    "longmemeval_60159905",
+    "longmemeval_c8090214",
+    "longmemeval_6b7dfb22",
+    "longmemeval_89941a93",
+    "longmemeval_6c49646a",
+    "longmemeval_b0479f84",
+    "longmemeval_bb7c3b45",
+    "longmemeval_a96c20ee_abs",
+    "longmemeval_aae3761f",
+    "longmemeval_ba61f0b9",
+    "longmemeval_a3332713",
+    "longmemeval_gpt4_2c50253f",
+    "longmemeval_d7c942c3",
+    "longmemeval_6a27ffc2",
+    "longmemeval_0ddfec37_abs",
+    "longmemeval_eac54adc",
+    "longmemeval_80ec1f4f",
+    "longmemeval_71017276",
+    "longmemeval_6e984301",
+    "longmemeval_28dc39ac",
+    "longmemeval_0a995998",
+    "longmemeval_gpt4_2487a7cb",
+    "longmemeval_a3838d2b",
+    "longmemeval_c9f37c46",
+    "longmemeval_778164c6",
+    "longmemeval_9ea5eabc",
+    "longmemeval_88432d0a_abs",
+    "longmemeval_2311e44b",
+    "longmemeval_gpt4_98f46fc6",
+    "longmemeval_gpt4_fa19884d",
+    "longmemeval_06db6396",
+    "longmemeval_16c90bf4",
+    "longmemeval_c8c3f81d",
+    "longmemeval_09d032c9",
+    "longmemeval_ad7109d1",
+    "longmemeval_c4f10528",
+    "longmemeval_4388e9dd",
+    "longmemeval_545bd2b5",
+    "longmemeval_681a1674",
+    "longmemeval_gpt4_385a5000",
+    "longmemeval_2698e78f_abs",
+    "longmemeval_0e4e4c46",
+    "longmemeval_2ce6a0f2",
+    "longmemeval_faba32e5",
+    "longmemeval_e9327a54",
+    "longmemeval_21436231",
+    "longmemeval_73d42213",
+    "longmemeval_gpt4_0a05b494",
+    "longmemeval_f523d9fe",
+    "longmemeval_8c18457d",
+    "longmemeval_gpt4_65aabe59",
+    "longmemeval_f0e564bc",
+    "longmemeval_ec81a493",
+    "longmemeval_08e075c7",
+    "longmemeval_2b8f3739",
+    "longmemeval_bc149d6b",
+    "longmemeval_15745da0"
+  ],
+  "raw_question_ids": [
+    "gpt4_d31cdae3",
+    "311778f1",
+    "gpt4_cd90e484",
+    "603deb26",
+    "2c63a862",
+    "91b15a6e",
+    "gpt4_372c3eed",
+    "41698283",
+    "d23cf73b",
+    "28bcfaac",
+    "gpt4_2ba83207",
+    "0100672e",
+    "gpt4_21adecb5",
+    "51a45a95",
+    "gpt4_74aed68e",
+    "gpt4_5438fa52",
+    "6613b389",
+    "6ae235be",
+    "ef66a6e5",
+    "gpt4_213fd887",
+    "dfde3500",
+    "0862e8bf",
+    "0977f2af",
+    "60159905",
+    "c8090214",
+    "6b7dfb22",
+    "89941a93",
+    "6c49646a",
+    "b0479f84",
+    "bb7c3b45",
+    "a96c20ee_abs",
+    "aae3761f",
+    "ba61f0b9",
+    "a3332713",
+    "gpt4_2c50253f",
+    "d7c942c3",
+    "6a27ffc2",
+    "0ddfec37_abs",
+    "eac54adc",
+    "80ec1f4f",
+    "71017276",
+    "6e984301",
+    "28dc39ac",
+    "0a995998",
+    "gpt4_2487a7cb",
+    "a3838d2b",
+    "c9f37c46",
+    "778164c6",
+    "9ea5eabc",
+    "88432d0a_abs",
+    "2311e44b",
+    "gpt4_98f46fc6",
+    "gpt4_fa19884d",
+    "06db6396",
+    "16c90bf4",
+    "c8c3f81d",
+    "09d032c9",
+    "ad7109d1",
+    "c4f10528",
+    "4388e9dd",
+    "545bd2b5",
+    "681a1674",
+    "gpt4_385a5000",
+    "2698e78f_abs",
+    "0e4e4c46",
+    "2ce6a0f2",
+    "faba32e5",
+    "e9327a54",
+    "21436231",
+    "73d42213",
+    "gpt4_0a05b494",
+    "f523d9fe",
+    "8c18457d",
+    "gpt4_65aabe59",
+    "f0e564bc",
+    "ec81a493",
+    "08e075c7",
+    "2b8f3739",
+    "bc149d6b",
+    "15745da0"
+  ],
+  "items": [
+    {
+      "question_id": "longmemeval_gpt4_d31cdae3",
+      "raw_question_id": "gpt4_d31cdae3",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_311778f1",
+      "raw_question_id": "311778f1",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_gpt4_cd90e484",
+      "raw_question_id": "gpt4_cd90e484",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_603deb26",
+      "raw_question_id": "603deb26",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_2c63a862",
+      "raw_question_id": "2c63a862",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_91b15a6e",
+      "raw_question_id": "91b15a6e",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_372c3eed",
+      "raw_question_id": "gpt4_372c3eed",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_41698283",
+      "raw_question_id": "41698283",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_d23cf73b",
+      "raw_question_id": "d23cf73b",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_28bcfaac",
+      "raw_question_id": "28bcfaac",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_gpt4_2ba83207",
+      "raw_question_id": "gpt4_2ba83207",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_0100672e",
+      "raw_question_id": "0100672e",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_21adecb5",
+      "raw_question_id": "gpt4_21adecb5",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_51a45a95",
+      "raw_question_id": "51a45a95",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_gpt4_74aed68e",
+      "raw_question_id": "gpt4_74aed68e",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_gpt4_5438fa52",
+      "raw_question_id": "gpt4_5438fa52",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_6613b389",
+      "raw_question_id": "6613b389",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_6ae235be",
+      "raw_question_id": "6ae235be",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_ef66a6e5",
+      "raw_question_id": "ef66a6e5",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_213fd887",
+      "raw_question_id": "gpt4_213fd887",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_dfde3500",
+      "raw_question_id": "dfde3500",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_0862e8bf",
+      "raw_question_id": "0862e8bf",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_0977f2af",
+      "raw_question_id": "0977f2af",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_60159905",
+      "raw_question_id": "60159905",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_c8090214",
+      "raw_question_id": "c8090214",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_6b7dfb22",
+      "raw_question_id": "6b7dfb22",
+      "question_type": "single-session-preference"
+    },
+    {
+      "question_id": "longmemeval_89941a93",
+      "raw_question_id": "89941a93",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_6c49646a",
+      "raw_question_id": "6c49646a",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_b0479f84",
+      "raw_question_id": "b0479f84",
+      "question_type": "single-session-preference"
+    },
+    {
+      "question_id": "longmemeval_bb7c3b45",
+      "raw_question_id": "bb7c3b45",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_a96c20ee_abs",
+      "raw_question_id": "a96c20ee_abs",
+      "question_type": "abstention"
+    },
+    {
+      "question_id": "longmemeval_aae3761f",
+      "raw_question_id": "aae3761f",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_ba61f0b9",
+      "raw_question_id": "ba61f0b9",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_a3332713",
+      "raw_question_id": "a3332713",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_2c50253f",
+      "raw_question_id": "gpt4_2c50253f",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_d7c942c3",
+      "raw_question_id": "d7c942c3",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_6a27ffc2",
+      "raw_question_id": "6a27ffc2",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_0ddfec37_abs",
+      "raw_question_id": "0ddfec37_abs",
+      "question_type": "abstention"
+    },
+    {
+      "question_id": "longmemeval_eac54adc",
+      "raw_question_id": "eac54adc",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_80ec1f4f",
+      "raw_question_id": "80ec1f4f",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_71017276",
+      "raw_question_id": "71017276",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_6e984301",
+      "raw_question_id": "6e984301",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_28dc39ac",
+      "raw_question_id": "28dc39ac",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_0a995998",
+      "raw_question_id": "0a995998",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_2487a7cb",
+      "raw_question_id": "gpt4_2487a7cb",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_a3838d2b",
+      "raw_question_id": "a3838d2b",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_c9f37c46",
+      "raw_question_id": "c9f37c46",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_778164c6",
+      "raw_question_id": "778164c6",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_9ea5eabc",
+      "raw_question_id": "9ea5eabc",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_88432d0a_abs",
+      "raw_question_id": "88432d0a_abs",
+      "question_type": "abstention"
+    },
+    {
+      "question_id": "longmemeval_2311e44b",
+      "raw_question_id": "2311e44b",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_98f46fc6",
+      "raw_question_id": "gpt4_98f46fc6",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_gpt4_fa19884d",
+      "raw_question_id": "gpt4_fa19884d",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_06db6396",
+      "raw_question_id": "06db6396",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_16c90bf4",
+      "raw_question_id": "16c90bf4",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_c8c3f81d",
+      "raw_question_id": "c8c3f81d",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_09d032c9",
+      "raw_question_id": "09d032c9",
+      "question_type": "single-session-preference"
+    },
+    {
+      "question_id": "longmemeval_ad7109d1",
+      "raw_question_id": "ad7109d1",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_c4f10528",
+      "raw_question_id": "c4f10528",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_4388e9dd",
+      "raw_question_id": "4388e9dd",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_545bd2b5",
+      "raw_question_id": "545bd2b5",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_681a1674",
+      "raw_question_id": "681a1674",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_385a5000",
+      "raw_question_id": "gpt4_385a5000",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_2698e78f_abs",
+      "raw_question_id": "2698e78f_abs",
+      "question_type": "abstention"
+    },
+    {
+      "question_id": "longmemeval_0e4e4c46",
+      "raw_question_id": "0e4e4c46",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_2ce6a0f2",
+      "raw_question_id": "2ce6a0f2",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_faba32e5",
+      "raw_question_id": "faba32e5",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_e9327a54",
+      "raw_question_id": "e9327a54",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_21436231",
+      "raw_question_id": "21436231",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_73d42213",
+      "raw_question_id": "73d42213",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_gpt4_0a05b494",
+      "raw_question_id": "gpt4_0a05b494",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_f523d9fe",
+      "raw_question_id": "f523d9fe",
+      "question_type": "single-session-assistant"
+    },
+    {
+      "question_id": "longmemeval_8c18457d",
+      "raw_question_id": "8c18457d",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_gpt4_65aabe59",
+      "raw_question_id": "gpt4_65aabe59",
+      "question_type": "temporal-reasoning"
+    },
+    {
+      "question_id": "longmemeval_f0e564bc",
+      "raw_question_id": "f0e564bc",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_ec81a493",
+      "raw_question_id": "ec81a493",
+      "question_type": "single-session-user"
+    },
+    {
+      "question_id": "longmemeval_08e075c7",
+      "raw_question_id": "08e075c7",
+      "question_type": "knowledge-update"
+    },
+    {
+      "question_id": "longmemeval_2b8f3739",
+      "raw_question_id": "2b8f3739",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_bc149d6b",
+      "raw_question_id": "bc149d6b",
+      "question_type": "multi-session"
+    },
+    {
+      "question_id": "longmemeval_15745da0",
+      "raw_question_id": "15745da0",
+      "question_type": "single-session-user"
+    }
+  ],
+  "notes": [
+    "P21 H2 split is built from the previously locked LongMemEval confirm manifest.",
+    "The split is metadata-only: it uses question_id and question_type for stratification.",
+    "Gold answers, generated answers, rewards, operation values, judge labels, and traces are not copied into these manifests.",
+    "question_type remains offline metadata and must not be used as an online policy feature.",
+    "This dev split may be used for H2 representation/model selection before method freeze."
+  ],
+  "sha256_canonical_payload": "722a49db963fcfde8662d9e0ed31c7c05f22b898f647c6d6324c35559d59d772"
+}
