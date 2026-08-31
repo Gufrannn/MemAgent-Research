@@ -187,11 +187,32 @@ def latest_op_record(trace_row: dict[str, Any], allowed_ops: set[str]) -> dict[s
     return None
 
 
+def first_op_record(trace_row: dict[str, Any], allowed_ops: set[str]) -> dict[str, Any] | None:
+    records = trace_row.get("op_records") or []
+    for record in records:
+        if record.get("operation") in allowed_ops:
+            return record
+    return None
+
+
+def session_ids_from_indices(indices: Any, raw_row: dict[str, Any]) -> set[str]:
+    session_ids = nonempty_session_ids(raw_row)
+    return {
+        session_ids[int(idx)]
+        for idx in (indices or [])
+        if isinstance(idx, int) or (isinstance(idx, str) and idx.isdigit())
+        for _ in [None]
+        if 0 <= int(idx) < len(session_ids)
+    }
+
+
 def admitted_session_ids(trace_row: dict[str, Any] | None, raw_row: dict[str, Any]) -> tuple[set[str], str]:
     if not trace_row:
         return set(), "missing_trace"
-    session_ids = nonempty_session_ids(raw_row)
-    record = latest_op_record(trace_row, {"FILTER", "REFINE", "RETRIEVE_MORE", "EXPAND"}) or latest_op_record(trace_row, {"RETRIEVE", "RETRIEVE_RECENT"})
+    record = latest_op_record(
+        trace_row,
+        {"FILTER", "REFINE", "SHRINK_VISIBLE", "REPACK_CANDIDATES", "RETRIEVE_MORE", "EXPAND"},
+    ) or latest_op_record(trace_row, {"RETRIEVE", "RETRIEVE_RECENT"})
     if not record:
         return set(), "missing_record"
     indices = record.get("admitted_source_indices")
@@ -199,14 +220,28 @@ def admitted_session_ids(trace_row: dict[str, Any] | None, raw_row: dict[str, An
     if indices is None:
         indices = record.get("selected_indices") or []
         source = "selected_indices_legacy_fallback"
-    out = {
-        session_ids[int(idx)]
-        for idx in indices
-        if isinstance(idx, int) or (isinstance(idx, str) and idx.isdigit())
-        for _ in [None]
-        if 0 <= int(idx) < len(session_ids)
-    }
-    return out, source
+    return session_ids_from_indices(indices, raw_row), source
+
+
+def retrieved_session_ids(trace_row: dict[str, Any] | None, raw_row: dict[str, Any]) -> tuple[set[str], str]:
+    """Return C0 session ids from the first retrieval record.
+
+    This intentionally uses ``retrieved_source_indices`` rather than final
+    admitted indices.  It supports P26's separation of retrieval availability
+    (gold in C0) from working-memory admission (gold in W0).
+    """
+
+    if not trace_row:
+        return set(), "missing_trace"
+    record = first_op_record(trace_row, {"RETRIEVE", "RETRIEVE_RECENT"})
+    if not record:
+        return set(), "missing_initial_retrieve_record"
+    indices = record.get("retrieved_source_indices")
+    source = "retrieved_source_indices"
+    if indices is None:
+        indices = record.get("selected_indices") or []
+        source = "selected_indices_legacy_fallback"
+    return session_ids_from_indices(indices, raw_row), source
 
 
 def evidence_scores(admitted: set[str], raw_row: dict[str, Any]) -> dict[str, float | int | str]:
@@ -329,7 +364,9 @@ def main() -> None:
             query = str(response_row.get("query") or f"[{raw_row.get('question_date')}] {raw_row.get('question')}")
             trace_row = traces.get(sha1_text(query))
             admitted, evidence_source = admitted_session_ids(trace_row, evidence_raw_row)
+            retrieved, retrieved_evidence_source = retrieved_session_ids(trace_row, evidence_raw_row)
             ev = evidence_scores(admitted, evidence_raw_row)
+            retrieved_ev = evidence_scores(retrieved, evidence_raw_row)
             surrogate_f1 = answer_f1(str(response_row.get("response") or ""), str(raw_row.get("answer") or ""))
             operation_judge_scores = payload.get("judge_scores") or {}
             judge_correct = operation_judge_scores.get(qid, judge_scores.get(qid, math.nan))
@@ -352,10 +389,14 @@ def main() -> None:
                 "utility": reward - args.lambda_cost * cost if not math.isnan(reward) else math.nan,
                 "evidence_session_recall": ev["evidence_session_recall"],
                 "all_evidence_present": ev["all_evidence_present"],
+                "retrieved_evidence_session_recall": retrieved_ev["evidence_session_recall"],
+                "retrieved_all_evidence_present": retrieved_ev["all_evidence_present"],
+                "retrieved_evidence_sessions": retrieved_ev["admitted_evidence_sessions"],
                 "gold_evidence_sessions": ev["gold_evidence_sessions"],
                 "admitted_evidence_sessions": ev["admitted_evidence_sessions"],
                 "admitted_session_count": len(admitted),
                 "evidence_source": evidence_source,
+                "retrieved_evidence_source": retrieved_evidence_source,
                 "trace_found": int(trace_row is not None),
                 "final_context_chars": trace_row.get("final_context_chars") if trace_row else math.nan,
                 "n_operations": len(trace_row.get("operations") or []) if trace_row else math.nan,
@@ -383,6 +424,8 @@ def main() -> None:
             wide[f"{prefix}_utility"] = row["utility"]
             wide[f"{prefix}_evidence_recall"] = row["evidence_session_recall"]
             wide[f"{prefix}_all_evidence_present"] = row["all_evidence_present"]
+            wide[f"{prefix}_retrieved_evidence_recall"] = row["retrieved_evidence_session_recall"]
+            wide[f"{prefix}_retrieved_all_evidence_present"] = row["retrieved_all_evidence_present"]
             wide[f"{prefix}_delta_reward_vs_{args.baseline_operation}"] = row["reward"] - base["reward"]
             wide[f"{prefix}_delta_utility_vs_{args.baseline_operation}"] = row["utility"] - base["utility"]
         wide_rows.append(wide)

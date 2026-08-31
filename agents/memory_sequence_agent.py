@@ -10,14 +10,25 @@ Every query first builds the same initial retrieved evidence state:
 Then ``AMC_SEQUENCE`` chooses optional memory operations before answering:
 
     stop              : ANSWER(E_0)
-    refine            : REFINE(E_0) -> ANSWER
+    refine            : legacy candidate-pool REFINE(C_0) -> ANSWER
+    shrink_visible    : strict SHRINK(W_0) -> ANSWER
+    repack_candidates : explicit REPACK(C_0) -> ANSWER
     expand            : EXPAND(E_0) -> ANSWER
     refine_expand     : REFINE(E_0) -> EXPAND -> ANSWER
     expand_refine     : EXPAND(E_0) -> REFINE -> ANSWER
 
-The operations use only online-visible state: question text/date, retrieved
-memory text, session DATE headers, and the long-term memory itself.  Gold
-answer/evidence labels remain offline-only diagnostics.
+State contract:
+
+    C_t = retrieved candidate pool before context-budget admission.
+    W_t = admitted working-memory state actually visible in the answer prompt.
+
+``shrink_visible`` is the clean ablation for transformation over W_0 only:
+its output sources must be a subset of the previous admitted W_0 sources.
+``repack_candidates`` names the earlier REFINE semantics explicitly: fixed
+C_0, new admission into W_1.  The legacy ``refine`` alias is preserved for
+backward comparability and is tagged in traces as a candidate-pool operation.
+
+Gold answer/evidence labels remain offline-only diagnostics.
 """
 
 from __future__ import annotations
@@ -41,6 +52,15 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
         "none": "stop",
         "r": "refine",
         "refine": "refine",
+        "sv": "shrink_visible",
+        "shrink_visible": "shrink_visible",
+        "shrink-visible": "shrink_visible",
+        "shrinkvisible": "shrink_visible",
+        "repack": "repack_candidates",
+        "repack_candidates": "repack_candidates",
+        "repack-candidates": "repack_candidates",
+        "candidate_repack": "repack_candidates",
+        "candidate-repack": "repack_candidates",
         "e": "expand",
         "expand": "expand",
         "re": "refine_expand",
@@ -59,7 +79,8 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
         self.sequence = self._ALIASES.get(raw_sequence)
         if self.sequence is None:
             raise ValueError(
-                "AMC_SEQUENCE must be one of stop/refine/expand/refine_expand/expand_refine, "
+                "AMC_SEQUENCE must be one of "
+                "stop/refine/shrink_visible/repack_candidates/expand/refine_expand/expand_refine, "
                 f"got {raw_sequence}"
             )
         self.expand_k = int(os.getenv("AMC_EXPAND_K", "20"))
@@ -74,6 +95,8 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
         operations: list[str] = ["RETRIEVE"]
         op_records: list[dict] = []
         context = "No previous memory"
+        candidate_items: list[MemoryItem] = []
+        visible_items: list[MemoryItem] = []
         working_items: list[MemoryItem] = []
         working_admitted_indices: set[int] = set()
         seen_indices: set[int] = set()
@@ -82,14 +105,16 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
             if not self.items:
                 operations = ["ANSWER"]
             else:
-                working_items = self._retrieve_k(query_tokens, self.top_k)
-                seen_indices.update(item.idx for item in working_items)
-                context, admitted_items = self._pack_items_to_budget_with_items(working_items, budget_chars)
+                candidate_items = self._retrieve_k(query_tokens, self.top_k)
+                working_items = list(candidate_items)
+                seen_indices.update(item.idx for item in candidate_items)
+                context, admitted_items = self._pack_items_to_budget_with_items(candidate_items, budget_chars)
+                visible_items = list(admitted_items)
                 working_admitted_indices = {item.idx for item in admitted_items}
                 op_records.append(
                     self._op_record(
                         "RETRIEVE",
-                        working_items,
+                        candidate_items,
                         context,
                         budget_chars,
                         {
@@ -97,36 +122,73 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                             "sequence": self.sequence,
                             "filter_mode": self.filter_mode,
                             "expand_mode": self.expand_mode,
+                            "operator_contract": "retrieve_candidates_then_greedy_admit_to_working_memory",
+                            "candidate_state": "C0_retrieved_candidates",
+                            "visible_state": "W0_admitted_working_memory",
                         },
                         admitted_items=admitted_items,
-                        retrieved_items=working_items,
+                        retrieved_items=candidate_items,
                     )
                 )
 
                 for action in self._sequence_actions():
-                    if action == "REFINE":
+                    if action in {"REFINE", "SHRINK_VISIBLE", "REPACK_CANDIDATES"}:
+                        previous_visible_indices = sorted(working_admitted_indices)
+                        if action == "SHRINK_VISIBLE":
+                            input_items = list(visible_items)
+                            operation_name = "SHRINK_VISIBLE"
+                            operator_contract = "strict_visible_transformation_Wt_to_Wt_plus_1_no_new_sources"
+                            input_state = "Wt_admitted_visible_working_memory"
+                        elif action == "REPACK_CANDIDATES":
+                            input_items = list(candidate_items)
+                            operation_name = "REPACK_CANDIDATES"
+                            operator_contract = "candidate_repacking_C0_to_new_working_memory_admission"
+                            input_state = "C0_retrieved_candidate_pool"
+                        else:
+                            input_items = list(working_items)
+                            operation_name = "REFINE"
+                            operator_contract = "legacy_candidate_pool_refine_preserved_for_backward_comparability"
+                            input_state = "legacy_working_items_candidate_pool"
+
                         context, count, stats = self._filter_by_mode(
-                            working_items,
+                            input_items,
                             query,
                             query_tokens,
                             budget_chars,
                         )
                         admitted = set(stats.get("admitted_source_indices") or [])
                         if admitted:
-                            working_items = [item for item in working_items if item.idx in admitted]
+                            visible_items = [item for item in input_items if item.idx in admitted]
+                            if action in {"REFINE", "SHRINK_VISIBLE"}:
+                                working_items = [item for item in working_items if item.idx in admitted]
+                            else:
+                                working_items = [item for item in candidate_items if item.idx in admitted]
                             working_admitted_indices = admitted
-                        operations.append("REFINE")
+                        contract_violation = False
+                        if action == "SHRINK_VISIBLE":
+                            contract_violation = not admitted.issubset(set(previous_visible_indices))
+                        newly_admitted = sorted(admitted - set(previous_visible_indices))
+                        dropped_visible = sorted(set(previous_visible_indices) - admitted)
+                        operations.append(operation_name)
                         op_records.append(
                             self._op_record(
-                                "REFINE",
-                                working_items,
+                                operation_name,
+                                visible_items,
                                 context,
                                 budget_chars,
                                 {
                                     "filtered_sentence_count": count,
                                     "filter_mode": self.filter_mode,
+                                    "operator_contract": operator_contract,
+                                    "input_state": input_state,
+                                    "previous_visible_source_indices": previous_visible_indices,
+                                    "newly_admitted_source_indices": newly_admitted,
+                                    "dropped_visible_source_indices": dropped_visible,
+                                    "contract_violation": contract_violation,
                                     **stats,
                                 },
+                                admitted_items=visible_items,
+                                retrieved_items=input_items,
                             )
                         )
                     elif action == "EXPAND":
@@ -190,6 +252,10 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
             return []
         if self.sequence == "refine":
             return ["REFINE"]
+        if self.sequence == "shrink_visible":
+            return ["SHRINK_VISIBLE"]
+        if self.sequence == "repack_candidates":
+            return ["REPACK_CANDIDATES"]
         if self.sequence == "expand":
             return ["EXPAND"]
         if self.sequence == "refine_expand":
