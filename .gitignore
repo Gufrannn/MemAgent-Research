@@ -1,0 +1,15 @@
+.env
+*.log
+__pycache__/
+.pytest_cache/
+wandb/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.parquet
+data/raw/*.json
+data/raw/*.jsonl
+runs/longmemeval_p22_sequence36_*
