@@ -712,6 +712,7 @@ def summarize_method(
     policies: list[str],
     metric: str,
     method: str,
+    full_best_fixed_policy: str,
     eps: float,
     tie_eps: float,
     seed: int,
@@ -720,9 +721,12 @@ def summarize_method(
 ) -> dict[str, Any]:
     chosen_values: list[float] = []
     stop_values: list[float] = []
-    best_fixed_values: list[float] = []
-    group_b_gaps: list[float] = []
-    group_c_gaps: list[float] = []
+    fold_default_values: list[float] = []
+    full_best_fixed_values: list[float] = []
+    group_b_fold_gaps: list[float] = []
+    group_c_fold_gaps: list[float] = []
+    group_b_full_gaps: list[float] = []
+    group_c_full_gaps: list[float] = []
     chosen_minus_default_for_overrides: list[float] = []
     choice_counts: Counter[str] = Counter()
     default_counts: Counter[str] = Counter()
@@ -736,22 +740,29 @@ def summarize_method(
         if item.get("fold_default_policy"):
             default_counts[str(item["fold_default_policy"])] += 1
         chosen_val = value(row, chosen, metric)
-        best_val = value(row, fold_best, metric)
+        fold_default_val = value(row, fold_best, metric)
+        full_best_val = value(row, full_best_fixed_policy, metric)
         chosen_values.append(chosen_val)
         stop_values.append(value(row, "stop", metric))
-        best_fixed_values.append(best_val)
+        fold_default_values.append(fold_default_val)
+        full_best_fixed_values.append(full_best_val)
         group = row.get("evidence_bottleneck_group", "")
-        gap = chosen_val - best_val
+        fold_gap = chosen_val - fold_default_val
+        full_gap = chosen_val - full_best_val
         if group.startswith("B_"):
-            group_b_gaps.append(gap)
+            group_b_fold_gaps.append(fold_gap)
+            group_b_full_gaps.append(full_gap)
         if group.startswith("C_"):
-            group_c_gaps.append(gap)
+            group_c_fold_gaps.append(fold_gap)
+            group_c_full_gaps.append(full_gap)
         if str(item.get("overrode_default")) == "1":
             default_policy = str(item["fold_default_policy"])
             chosen_minus_default_for_overrides.append(chosen_val - value(row, default_policy, metric))
 
-    deltas_best = [a - b for a, b in zip(chosen_values, best_fixed_values)]
-    ci = bootstrap_ci(deltas_best, bootstrap_samples, seed)
+    deltas_fold = [a - b for a, b in zip(chosen_values, fold_default_values)]
+    deltas_full = [a - b for a, b in zip(chosen_values, full_best_fixed_values)]
+    ci_fold = bootstrap_ci(deltas_fold, bootstrap_samples, seed)
+    ci_full = bootstrap_ci(deltas_full, bootstrap_samples, seed + 777)
     override_values = [
         delta for delta in chosen_minus_default_for_overrides if not math.isnan(delta)
     ]
@@ -766,12 +777,19 @@ def summarize_method(
         "Metric": metric,
         "Mean": mean(chosen_values),
         "Delta_Stop": mean([a - b for a, b in zip(chosen_values, stop_values)]),
-        "Delta_Best_Fixed": mean(deltas_best),
-        "CI_vs_Best_Fixed": f"[{ci['ci_low']:.6f}, {ci['ci_high']:.6f}]",
+        "Fold_Default_Mean": mean(fold_default_values),
+        "Delta_Fold_Default": mean(deltas_fold),
+        "CI_vs_Fold_Default": f"[{ci_fold['ci_low']:.6f}, {ci_fold['ci_high']:.6f}]",
+        "Full_Best_Fixed_Policy": full_best_fixed_policy,
+        "Full_Best_Fixed_Mean": mean(full_best_fixed_values),
+        "Delta_Full_Best_Fixed": mean(deltas_full),
+        "CI_vs_Full_Best_Fixed": f"[{ci_full['ci_low']:.6f}, {ci_full['ci_high']:.6f}]",
         "Override_Rate": override_rate,
         "Exception_Precision": exception_precision,
-        "B_Delta_Best_Fixed": mean(group_b_gaps),
-        "C_Delta_Best_Fixed": mean(group_c_gaps),
+        "B_Delta_Fold_Default": mean(group_b_fold_gaps),
+        "C_Delta_Fold_Default": mean(group_c_fold_gaps),
+        "B_Delta_Full_Best_Fixed": mean(group_b_full_gaps),
+        "C_Delta_Full_Best_Fixed": mean(group_c_full_gaps),
         "Choices": json.dumps(dict(sorted(choice_counts.items())), sort_keys=True),
         "Fold_Defaults": json.dumps(dict(sorted(default_counts.items())), sort_keys=True),
         "Context": context,
@@ -923,6 +941,7 @@ def main() -> None:
     method_rows.extend(margin_oracle_rows(qids, qid_to_row, rows, policies, args.metric, args.margin_eps, args.tie_eps))
 
     summary_rows = []
+    full_best_fixed_policy = choose_best_fixed_fold(rows, list(range(len(rows))), policies, args.metric, args.tie_eps)
     for method in sorted(set(str(row["method"]) for row in method_rows)):
         selected = [row for row in method_rows if str(row["method"]) == method]
         summary_rows.append(
@@ -933,6 +952,7 @@ def main() -> None:
                 policies,
                 args.metric,
                 method,
+                full_best_fixed_policy,
                 args.eps,
                 args.tie_eps,
                 args.seed + len(summary_rows),
@@ -959,6 +979,7 @@ def main() -> None:
         "metric": args.metric,
         "n": len(rows),
         "policies": policies,
+        "full_best_fixed_policy_descriptive": full_best_fixed_policy,
         "encoder_model": args.encoder_model,
         "encoder_backend": args.encoder_backend,
         "encoder_max_length": args.encoder_max_length,
