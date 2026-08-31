@@ -198,7 +198,7 @@ def admitted_session_ids(trace_row: dict[str, Any] | None, raw_row: dict[str, An
     source = "admitted_source_indices"
     if indices is None:
         indices = record.get("selected_indices") or []
-        source = "selected_indices_fallback"
+        source = "selected_indices_legacy_fallback"
     out = {
         session_ids[int(idx)]
         for idx in indices

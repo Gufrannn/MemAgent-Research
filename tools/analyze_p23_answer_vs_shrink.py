@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -187,16 +187,40 @@ def nonempty_session_ids(raw_row: dict[str, Any]) -> list[str]:
     return out
 
 
-def load_response_query_hashes(path: Path | None) -> dict[str, str]:
+def load_response_query_hashes(path: Path | None) -> tuple[dict[str, str], dict[str, Any]]:
     out: dict[str, str] = {}
+    duplicate_qids: set[str] = set()
+    duplicate_hashes: set[str] = set()
+    seen_hashes: set[str] = set()
     if path is None or not path.exists():
-        return out
+        return out, {
+            "response_path": str(path) if path else None,
+            "response_rows": 0,
+            "duplicate_qid_count": 0,
+            "duplicate_query_hash_count": 0,
+        }
+    n_rows = 0
     for row in iter_jsonl(path):
+        n_rows += 1
         qid = normalize_qid(str(row.get("qid") or row.get("question_id") or ""))
         query = str(row.get("query") or "")
         if qid and query:
-            out[qid] = sha1_text(query)
-    return out
+            query_hash = sha1_text(query)
+            if qid in out:
+                duplicate_qids.add(qid)
+            if query_hash in seen_hashes:
+                duplicate_hashes.add(query_hash)
+            out[qid] = query_hash
+            seen_hashes.add(query_hash)
+    return out, {
+        "response_path": str(path),
+        "response_rows": n_rows,
+        "mapped_qids": len(out),
+        "duplicate_qid_count": len(duplicate_qids),
+        "duplicate_qids": sorted(duplicate_qids)[:20],
+        "duplicate_query_hash_count": len(duplicate_hashes),
+        "duplicate_query_hashes": sorted(duplicate_hashes)[:20],
+    }
 
 
 def latest_op_record(trace_row: dict[str, Any], allowed_ops: set[str]) -> dict[str, Any] | None:
@@ -206,14 +230,37 @@ def latest_op_record(trace_row: dict[str, Any], allowed_ops: set[str]) -> dict[s
     return None
 
 
-def load_trace_by_hash(path: Path | None) -> dict[str, dict[str, Any]]:
+def first_op_record(trace_row: dict[str, Any], allowed_ops: set[str]) -> dict[str, Any] | None:
+    for record in trace_row.get("op_records") or []:
+        if record.get("operation") in allowed_ops:
+            return record
+    return None
+
+
+def load_trace_by_hash(path: Path | None) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
+    duplicate_hashes: set[str] = set()
     if path is None or not path.exists():
-        return out
+        return out, {
+            "trace_path": str(path) if path else None,
+            "qa_trace_rows": 0,
+            "duplicate_trace_hash_count": 0,
+        }
+    qa_rows = 0
     for row in iter_jsonl(path):
         if row.get("phase") == "qa" and row.get("query_sha1"):
-            out[str(row["query_sha1"])] = row
-    return out
+            qa_rows += 1
+            query_hash = str(row["query_sha1"])
+            if query_hash in out:
+                duplicate_hashes.add(query_hash)
+            out[query_hash] = row
+    return out, {
+        "trace_path": str(path),
+        "qa_trace_rows": qa_rows,
+        "mapped_query_hashes": len(out),
+        "duplicate_trace_hash_count": len(duplicate_hashes),
+        "duplicate_trace_hashes": sorted(duplicate_hashes)[:20],
+    }
 
 
 def initial_retrieval_features(
@@ -230,6 +277,13 @@ def initial_retrieval_features(
     out: dict[str, Any] = {
         "stop_trace_found": int(trace_row is not None),
         "stop_trace_query_sha1": query_hash or "",
+        "initial_retrieval_record_source": "missing_trace",
+        "initial_index_source": "missing_trace",
+        "initial_legacy_selected_fallback": 0,
+        "initial_retrieved_session_count": math.nan,
+        "initial_admitted_session_count": math.nan,
+        "initial_admitted_gold_count": math.nan,
+        "initial_admitted_distractor_count": math.nan,
         "initial_selected_session_count": math.nan,
         "initial_selected_gold_count": math.nan,
         "initial_selected_distractor_count": math.nan,
@@ -238,25 +292,47 @@ def initial_retrieval_features(
     }
     if not trace_row:
         return out
-    record = latest_op_record(trace_row, {"RETRIEVE", "RETRIEVE_RECENT", "FILTER", "REFINE", "EXPAND", "RETRIEVE_MORE"})
+    record = first_op_record(trace_row, {"RETRIEVE", "RETRIEVE_RECENT"})
     if not record:
+        out["initial_retrieval_record_source"] = "missing_first_retrieve_record"
+        out["initial_index_source"] = "missing_first_retrieve_record"
         return out
-    raw_indices = record.get("selected_indices")
-    if raw_indices is None:
-        raw_indices = record.get("admitted_source_indices") or []
-    selected_ids: set[str] = set()
+    out["initial_retrieval_record_source"] = str(record.get("operation") or "RETRIEVE")
+    retrieved_indices = record.get("retrieved_source_indices")
+    admitted_indices = record.get("admitted_source_indices")
+    if admitted_indices is not None:
+        raw_indices = admitted_indices
+        out["initial_index_source"] = "admitted_source_indices"
+    else:
+        raw_indices = record.get("selected_indices") or []
+        out["initial_index_source"] = "selected_indices_legacy_fallback"
+        out["initial_legacy_selected_fallback"] = 1
+    retrieved_ids: set[str] = set()
+    for idx in retrieved_indices or []:
+        if isinstance(idx, str) and idx.isdigit():
+            idx = int(idx)
+        if isinstance(idx, int) and 0 <= idx < len(session_ids):
+            retrieved_ids.add(session_ids[idx])
+    admitted_ids: set[str] = set()
     for idx in raw_indices:
         if isinstance(idx, str) and idx.isdigit():
             idx = int(idx)
         if isinstance(idx, int) and 0 <= idx < len(session_ids):
-            selected_ids.add(session_ids[idx])
-    gold_hits = selected_ids & gold
-    out["initial_selected_session_count"] = len(selected_ids)
+            admitted_ids.add(session_ids[idx])
+    gold_hits = admitted_ids & gold
+    out["initial_retrieved_session_count"] = len(retrieved_ids) if retrieved_indices is not None else math.nan
+    out["initial_admitted_session_count"] = len(admitted_ids)
+    out["initial_admitted_gold_count"] = len(gold_hits)
+    out["initial_admitted_distractor_count"] = max(0, len(admitted_ids) - len(gold_hits))
+    # Backward-compatible aliases.  After trace_schema_version
+    # retrieved_vs_admitted_v1 these refer to admitted evidence, not all
+    # retrieved candidates.
+    out["initial_selected_session_count"] = len(admitted_ids)
     out["initial_selected_gold_count"] = len(gold_hits)
-    out["initial_selected_distractor_count"] = max(0, len(selected_ids) - len(gold_hits))
+    out["initial_selected_distractor_count"] = max(0, len(admitted_ids) - len(gold_hits))
     if gold:
         out["initial_trace_evidence_recall"] = len(gold_hits) / len(gold)
-        out["initial_trace_all_gold_present"] = 1.0 if gold <= selected_ids else 0.0
+        out["initial_trace_all_gold_present"] = 1.0 if gold <= admitted_ids else 0.0
     return out
 
 
@@ -360,9 +436,12 @@ def attach_rows(
     stop_response: Path | None,
     stop_trace: Path | None,
     eps_primary: float,
-) -> list[dict[str, Any]]:
-    response_hash_by_qid = load_response_query_hashes(stop_response)
-    trace_by_hash = load_trace_by_hash(stop_trace)
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    response_hash_by_qid, response_alignment = load_response_query_hashes(stop_response)
+    trace_by_hash, trace_alignment = load_trace_by_hash(stop_trace)
+    missing_response_qids: list[str] = []
+    missing_trace_qids: list[str] = []
+    missing_first_retrieve_qids: list[str] = []
     out: list[dict[str, Any]] = []
     for row in wide_rows:
         qid = normalize_qid(row.get("qid") or row.get("raw_qid") or "")
@@ -386,8 +465,19 @@ def attach_rows(
             response_hash_by_qid=response_hash_by_qid,
             trace_by_hash=trace_by_hash,
         )
+        if qid not in response_hash_by_qid:
+            missing_response_qids.append(qid)
+        if not retrieval_features["stop_trace_found"]:
+            missing_trace_qids.append(qid)
+        if retrieval_features["initial_retrieval_record_source"] == "missing_first_retrieve_record":
+            missing_first_retrieve_qids.append(qid)
         initial_recall = to_float(row.get(f"{baseline_operation}_evidence_recall"))
         selected_distractors = to_float(retrieval_features.get("initial_selected_distractor_count"))
+        legacy_initial_complete = to_float(retrieval_features.get("initial_trace_all_gold_present"))
+        if math.isnan(legacy_initial_complete):
+            legacy_initial_complete = initial_recall if initial_recall in (0.0, 1.0) else math.nan
+        has_canonical_admitted_e0 = retrieval_features.get("initial_index_source") == "admitted_source_indices"
+        canonical_complete = legacy_initial_complete if has_canonical_admitted_e0 else math.nan
         item: dict[str, Any] = {
             "model_label": model_label,
             "qid": qid,
@@ -416,6 +506,18 @@ def attach_rows(
                 [(0, "recall_0"), (0.5, "recall_0_to_0p5"), (0.999999, "recall_partial")],
                 "recall_complete",
             ),
+            "canonical_initial_complete_e0": canonical_complete,
+            "canonical_initial_complete_e0_bin": (
+                "complete"
+                if canonical_complete == 1.0
+                else "incomplete_or_missing"
+                if canonical_complete == 0.0
+                else "not_available_legacy_trace"
+            ),
+            "legacy_initial_complete_e0": legacy_initial_complete,
+            "legacy_initial_complete_e0_bin": "complete"
+            if legacy_initial_complete == 1.0
+            else "incomplete_or_missing",
             "initial_matrix_all_gold_bin": "complete"
             if to_float(row.get(f"{baseline_operation}_all_evidence_present")) == 1.0
             else "incomplete_or_missing",
@@ -428,7 +530,32 @@ def attach_rows(
             **retrieval_features,
         }
         out.append(item)
-    return sorted(out, key=lambda x: x["qid"])
+    alignment_audit = {
+        "canonical_complete_definition": (
+            "Complete(E0)=1 iff every answer_session_id is present in the first "
+            "RETRIEVE/RETRIEVE_RECENT record admitted to the initial evidence state. "
+            "Matrix-level completeness is reported separately and is not the canonical definition."
+        ),
+        "response_alignment": response_alignment,
+        "trace_alignment": trace_alignment,
+        "analysis_rows": len(out),
+        "missing_response_qid_count": len(missing_response_qids),
+        "missing_response_qids": sorted(missing_response_qids)[:20],
+        "missing_trace_qid_count": len(missing_trace_qids),
+        "missing_trace_qids": sorted(missing_trace_qids)[:20],
+        "missing_first_retrieve_record_count": len(missing_first_retrieve_qids),
+        "missing_first_retrieve_record_qids": sorted(missing_first_retrieve_qids)[:20],
+        "initial_index_source_counts": dict(
+            Counter(str(row.get("initial_index_source") or "missing") for row in out)
+        ),
+        "canonical_initial_complete_available_count": sum(
+            1 for row in out if not math.isnan(to_float(row.get("canonical_initial_complete_e0")))
+        ),
+        "legacy_selected_fallback_count": sum(
+            1 for row in out if str(row.get("initial_legacy_selected_fallback")) in {"1", "1.0"}
+        ),
+    }
+    return sorted(out, key=lambda x: x["qid"]), alignment_audit
 
 
 def main() -> None:
@@ -444,6 +571,11 @@ def main() -> None:
     parser.add_argument("--eps", type=float, nargs="+", default=[0.0, 0.05, 0.1])
     parser.add_argument("--primary-eps", type=float, default=0.1)
     parser.add_argument("--compare", action="append", default=[], help="Optional label=per_qid.csv from another model scale.")
+    parser.add_argument(
+        "--allow-missing-trace",
+        action="store_true",
+        help="Do not fail when stop response/trace alignment is incomplete. Intended only for legacy artifacts.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
@@ -451,7 +583,7 @@ def main() -> None:
     manifest_ids = load_manifest_ids(args.manifest)
     wide_rows = read_csv(args.wide_matrix)
     raw_rows = load_raw_rows(args.raw_longmemeval)
-    rows = attach_rows(
+    rows, alignment_audit = attach_rows(
         wide_rows=wide_rows,
         raw_rows=raw_rows,
         manifest_ids=manifest_ids,
@@ -464,6 +596,25 @@ def main() -> None:
     )
     if not rows:
         raise ValueError("No rows available for P23 analysis")
+    fail_closed_errors: list[str] = []
+    if alignment_audit["response_alignment"].get("duplicate_qid_count", 0):
+        fail_closed_errors.append("duplicate qids in stop response")
+    if alignment_audit["response_alignment"].get("duplicate_query_hash_count", 0):
+        fail_closed_errors.append("duplicate query hashes in stop response")
+    if alignment_audit["trace_alignment"].get("duplicate_trace_hash_count", 0):
+        fail_closed_errors.append("duplicate query hashes in stop trace")
+    if alignment_audit["missing_response_qid_count"]:
+        fail_closed_errors.append("missing stop response qids")
+    if alignment_audit["missing_trace_qid_count"]:
+        fail_closed_errors.append("missing stop trace qids")
+    if alignment_audit["missing_first_retrieve_record_count"]:
+        fail_closed_errors.append("missing first RETRIEVE/RETRIEVE_RECENT records")
+    if fail_closed_errors and not args.allow_missing_trace:
+        raise ValueError(
+            "P23 trace/response alignment failed closed: "
+            + "; ".join(fail_closed_errors)
+            + ". Use --allow-missing-trace only for explicitly legacy analysis."
+        )
 
     per_qid_path = args.output_dir / "p23_answer_vs_shrink_per_qid.csv"
     write_csv(per_qid_path, rows)
@@ -471,6 +622,7 @@ def main() -> None:
     write_csv(args.output_dir / "p23_answer_vs_shrink_by_type.csv", by_type)
 
     mechanism_fields = [
+        "canonical_initial_complete_e0_bin",
         "initial_matrix_all_gold_bin",
         "initial_evidence_recall_bin",
         "gold_relevant_count_bin",
@@ -505,6 +657,13 @@ def main() -> None:
         "mean_delta_utility": mean([float(row["delta_utility"]) for row in rows]),
         "stop_all_evidence_present_rate": mean([to_float(row["stop_all_evidence_present"]) for row in rows]),
         "shrink_all_evidence_present_rate": mean([to_float(row["shrink_all_evidence_present"]) for row in rows]),
+        "canonical_initial_complete_e0_rate": (
+            mean([to_float(row["canonical_initial_complete_e0"]) for row in rows])
+            if alignment_audit["canonical_initial_complete_available_count"]
+            else math.nan
+        ),
+        "legacy_initial_complete_e0_rate": mean([to_float(row["legacy_initial_complete_e0"]) for row in rows]),
+        "alignment_audit": alignment_audit,
         "trace_alignment": {
             "stop_response": str(args.stop_response) if args.stop_response else None,
             "stop_trace": str(args.stop_trace) if args.stop_trace else None,

@@ -75,6 +75,7 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
         op_records: list[dict] = []
         context = "No previous memory"
         working_items: list[MemoryItem] = []
+        working_admitted_indices: set[int] = set()
         seen_indices: set[int] = set()
 
         try:
@@ -83,7 +84,8 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
             else:
                 working_items = self._retrieve_k(query_tokens, self.top_k)
                 seen_indices.update(item.idx for item in working_items)
-                context = self._pack_items_to_budget(working_items, budget_chars)
+                context, admitted_items = self._pack_items_to_budget_with_items(working_items, budget_chars)
+                working_admitted_indices = {item.idx for item in admitted_items}
                 op_records.append(
                     self._op_record(
                         "RETRIEVE",
@@ -96,6 +98,8 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                             "filter_mode": self.filter_mode,
                             "expand_mode": self.expand_mode,
                         },
+                        admitted_items=admitted_items,
+                        retrieved_items=working_items,
                     )
                 )
 
@@ -110,6 +114,7 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                         admitted = set(stats.get("admitted_source_indices") or [])
                         if admitted:
                             working_items = [item for item in working_items if item.idx in admitted]
+                            working_admitted_indices = admitted
                         operations.append("REFINE")
                         op_records.append(
                             self._op_record(
@@ -135,6 +140,9 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                         )
                         seen_indices.update(item.idx for item in more_items)
                         context, merge_stats = self._merge_filtered_and_more(context, more_items, budget_chars)
+                        working_admitted_indices = working_admitted_indices | set(
+                            merge_stats.get("admitted_more_indices") or []
+                        )
                         working_items = self._items_by_indices(
                             [item.idx for item in working_items] + [item.idx for item in more_items]
                         )
@@ -148,9 +156,12 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                                 {
                                     "expand_k": self.expand_k,
                                     "expand_mode": self.expand_mode,
+                                    "admitted_source_indices": sorted(working_admitted_indices),
+                                    "n_admitted_sources": len(working_admitted_indices),
                                     **expand_stats,
                                     **merge_stats,
                                 },
+                                retrieved_items=working_items,
                             )
                         )
 

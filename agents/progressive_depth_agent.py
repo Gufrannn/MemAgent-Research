@@ -74,7 +74,7 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
             elif self.depth == 1:
                 operations = ["RETRIEVE", "ANSWER"]
                 selected_items = self._retrieve_k(query_tokens, self.top_k)
-                context = self._pack_items_to_budget(selected_items, budget_chars)
+                context, admitted_items = self._pack_items_to_budget_with_items(selected_items, budget_chars)
                 op_records.append(
                     self._op_record(
                         "RETRIEVE",
@@ -86,12 +86,14 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                             "d3_protocol": self.d3_protocol,
                             "filter_mode": self.filter_mode,
                         },
+                        admitted_items=admitted_items,
+                        retrieved_items=selected_items,
                     )
                 )
             elif self.depth == 2:
                 operations = ["RETRIEVE", "FILTER", "ANSWER"]
                 selected_items = self._retrieve_k(query_tokens, self.top_k)
-                retrieved_context = "\n\n".join(item.text for item in selected_items)
+                retrieved_context, admitted_items = self._pack_items_to_budget_with_items(selected_items, budget_chars)
                 op_records.append(
                     self._op_record(
                         "RETRIEVE",
@@ -103,6 +105,8 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                             "d3_protocol": self.d3_protocol,
                             "filter_mode": self.filter_mode,
                         },
+                        admitted_items=admitted_items,
+                        retrieved_items=selected_items,
                     )
                 )
                 context, filtered_sentence_count, filter_stats = self._filter_by_mode(selected_items, query, query_tokens, budget_chars)
@@ -126,7 +130,7 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                     first_items = self._retrieve_k(query_tokens, self.k1)
                 else:
                     first_items = self._retrieve_k(query_tokens, self.top_k)
-                first_context = "\n\n".join(item.text for item in first_items)
+                first_context, first_admitted_items = self._pack_items_to_budget_with_items(first_items, budget_chars)
                 op_records.append(
                     self._op_record(
                         "RETRIEVE",
@@ -138,6 +142,8 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                             "d3_protocol": self.d3_protocol,
                             "filter_mode": self.filter_mode,
                         },
+                        admitted_items=first_admitted_items,
+                        retrieved_items=first_items,
                     )
                 )
                 filtered_context, filtered_sentence_count, filter_stats = self._filter_by_mode(first_items, query, query_tokens, budget_chars)
@@ -161,6 +167,10 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                     exclude={item.idx for item in first_items},
                 )
                 context, merge_stats = self._merge_filtered_and_more(filtered_context, more_items, budget_chars)
+                final_admitted_indices = sorted(
+                    set(filter_stats.get("admitted_source_indices") or [])
+                    | set(merge_stats.get("admitted_more_indices") or [])
+                )
                 selected_items = first_items + more_items
                 op_records.append(
                     self._op_record(
@@ -175,8 +185,11 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
                             "n_more_retrieved": len(more_items),
                             "more_chars_retrieved": sum(item.n_chars + 2 for item in more_items),
                             "filter_mode": self.filter_mode,
+                            "admitted_source_indices": final_admitted_indices,
+                            "n_admitted_sources": len(final_admitted_indices),
                             **merge_stats,
                         },
+                        retrieved_items=selected_items,
                     )
                 )
 
@@ -236,13 +249,13 @@ class ProgressiveDepthAgent(AdaptiveMemoryAgent):
             return self._filter_graph_bridge(items, query_tokens, budget_chars)
         if self.filter_mode == "temporal_session":
             return self._filter_temporal_session(items, query, query_tokens, budget_chars)
-        context, count = self._filter(items, query_tokens, budget_chars)
+        context, count, admitted_source_indices = self._filter_with_source_indices(items, query_tokens, budget_chars)
         return context, count, {
             "operator_family": "lexical_extract",
             "requires_query_overlap": True,
             "zero_query_overlap_sentences_admitted": 0,
-            "admitted_source_indices": [item.idx for item in items],
-            "n_admitted_sources": len(items),
+            "admitted_source_indices": admitted_source_indices,
+            "n_admitted_sources": len(admitted_source_indices),
         }
 
     def _filter_tfidf_jaccard(

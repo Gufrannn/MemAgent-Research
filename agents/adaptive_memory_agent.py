@@ -176,32 +176,60 @@ class AdaptiveMemoryAgent(BaseAgent):
             for operation in operations:
                 if operation == "RETRIEVE":
                     selected_items = self._retrieve(query_tokens)
-                    context = "\n\n".join(item.text for item in selected_items)
-                    op_records.append(
-                        self._op_record(operation, selected_items, context, budget_chars)
-                    )
-                elif operation == "RETRIEVE_RECENT":
-                    selected_items = self._retrieve_recent(budget_chars)
-                    context = "\n\n".join(item.text for item in selected_items)
-                    op_records.append(
-                        self._op_record(operation, selected_items, context, budget_chars)
-                    )
-                elif operation in {"FILTER", "COMPRESS"}:
-                    did_filter = self.force_filter or len(context) > budget_chars
-                    filtered_sentence_count = 0
-                    if did_filter:
-                        context, filtered_sentence_count = self._filter(selected_items, query_tokens, budget_chars)
+                    context, admitted_items = self._pack_items_to_budget_with_items(selected_items, budget_chars)
                     op_records.append(
                         self._op_record(
                             operation,
                             selected_items,
                             context,
                             budget_chars,
+                            admitted_items=admitted_items,
+                            retrieved_items=selected_items,
+                        )
+                    )
+                elif operation == "RETRIEVE_RECENT":
+                    selected_items = self._retrieve_recent(budget_chars)
+                    context, admitted_items = self._pack_items_to_budget_with_items(selected_items, budget_chars)
+                    op_records.append(
+                        self._op_record(
+                            operation,
+                            selected_items,
+                            context,
+                            budget_chars,
+                            admitted_items=admitted_items,
+                            retrieved_items=selected_items,
+                        )
+                    )
+                elif operation in {"FILTER", "COMPRESS"}:
+                    did_filter = self.force_filter or len(context) > budget_chars
+                    filtered_sentence_count = 0
+                    filter_extra = {
+                        "did_filter": did_filter,
+                        "filtered_sentence_count": filtered_sentence_count,
+                        "force_filter": self.force_filter,
+                        "admitted_source_indices": [item.idx for item in selected_items],
+                        "n_admitted_sources": len(selected_items),
+                    }
+                    if did_filter:
+                        context, filtered_sentence_count, admitted_source_indices = self._filter_with_source_indices(
+                            selected_items,
+                            query_tokens,
+                            budget_chars,
+                        )
+                        filter_extra.update(
                             {
-                                "did_filter": did_filter,
                                 "filtered_sentence_count": filtered_sentence_count,
-                                "force_filter": self.force_filter,
-                            },
+                                "admitted_source_indices": admitted_source_indices,
+                                "n_admitted_sources": len(admitted_source_indices),
+                            }
+                        )
+                    op_records.append(
+                        self._op_record(
+                            operation,
+                            selected_items,
+                            context,
+                            budget_chars,
+                            filter_extra,
                         )
                     )
                 elif operation == "ANSWER":
@@ -249,6 +277,15 @@ class AdaptiveMemoryAgent(BaseAgent):
         return list(reversed(selected))
 
     def _filter(self, items: list[MemoryItem], query_tokens: set[str], budget_chars: int) -> tuple[str, int]:
+        context, count, _ = self._filter_with_source_indices(items, query_tokens, budget_chars)
+        return context, count
+
+    def _filter_with_source_indices(
+        self,
+        items: list[MemoryItem],
+        query_tokens: set[str],
+        budget_chars: int,
+    ) -> tuple[str, int, list[int]]:
         sentence_records: list[tuple[float, int, str]] = []
         for item in items:
             for sentence_idx, sentence in enumerate(self._sentences(item.text)):
@@ -258,7 +295,8 @@ class AdaptiveMemoryAgent(BaseAgent):
                     sentence_records.append((score, item.idx * 10000 + sentence_idx, sentence))
 
         if not sentence_records:
-            return self._pack_items_to_budget(items, budget_chars), 0
+            context, admitted_items = self._pack_items_to_budget_with_items(items, budget_chars)
+            return context, 0, [item.idx for item in admitted_items]
 
         sentence_records.sort(key=lambda row: (-row[0], row[1]))
         selected: list[tuple[int, str]] = []
@@ -270,9 +308,18 @@ class AdaptiveMemoryAgent(BaseAgent):
             selected.append((order, sentence))
             used += sent_len
         selected.sort(key=lambda row: row[0])
-        return "\n".join(sentence for _, sentence in selected), len(selected)
+        admitted_source_indices = sorted({order // 10000 for order, _ in selected})
+        return "\n".join(sentence for _, sentence in selected), len(selected), admitted_source_indices
 
     def _pack_items_to_budget(self, items: list[MemoryItem], budget_chars: int) -> str:
+        context, _ = self._pack_items_to_budget_with_items(items, budget_chars)
+        return context
+
+    def _pack_items_to_budget_with_items(
+        self,
+        items: list[MemoryItem],
+        budget_chars: int,
+    ) -> tuple[str, list[MemoryItem]]:
         selected: list[MemoryItem] = []
         used = 0
         for item in items:
@@ -281,13 +328,30 @@ class AdaptiveMemoryAgent(BaseAgent):
                 continue
             selected.append(item)
             used += item_len
-        return "\n\n".join(item.text for item in selected) or "No previous memory"
+        return "\n\n".join(item.text for item in selected) or "No previous memory", selected
 
-    def _op_record(self, operation: str, selected_items: list[MemoryItem], context: str, budget_chars: int, extra: dict | None = None) -> dict:
+    def _op_record(
+        self,
+        operation: str,
+        selected_items: list[MemoryItem],
+        context: str,
+        budget_chars: int,
+        extra: dict | None = None,
+        *,
+        admitted_items: list[MemoryItem] | None = None,
+        retrieved_items: list[MemoryItem] | None = None,
+    ) -> dict:
+        admitted_items = selected_items if admitted_items is None else admitted_items
+        retrieved_items = selected_items if retrieved_items is None else retrieved_items
         record = {
             "operation": operation,
             "selected_indices": [item.idx for item in selected_items],
             "n_selected": len(selected_items),
+            "retrieved_source_indices": [item.idx for item in retrieved_items],
+            "n_retrieved_sources": len(retrieved_items),
+            "admitted_source_indices": [item.idx for item in admitted_items],
+            "n_admitted_sources": len(admitted_items),
+            "trace_schema_version": "retrieved_vs_admitted_v1",
             "context_chars": len(context),
             "context_sha1": hashlib.sha1(context.encode("utf-8")).hexdigest(),
             "budget_chars": budget_chars,
@@ -322,7 +386,14 @@ class AdaptiveMemoryAgent(BaseAgent):
                 "budget_chars": budget_chars,
                 "final_context_chars": len(context),
                 "final_context_sha1": hashlib.sha1(context.encode("utf-8")).hexdigest(),
+                "prompt_sha1": hashlib.sha1(
+                    f"Your memory:\n{context}\n\n{QA_PROMPT.format(query)}".encode("utf-8")
+                ).hexdigest(),
                 "total_memory_chars": sum(item.n_chars + 2 for item in self.items),
+                "model": self.model_name,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "max_tokens": self.answer_max_tokens,
                 "top_k": self.top_k,
                 "force_filter": self.force_filter,
                 "disable_write_skip": self.disable_write_skip,
