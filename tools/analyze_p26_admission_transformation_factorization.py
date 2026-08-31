@@ -113,21 +113,31 @@ def summarize(rows: list[dict[str, Any]], group_key: str, operations: list[str],
     out: list[dict[str, Any]] = []
     for (group, op), items in sorted(grouped.items()):
         deltas = [parse_float(item.get(f"{op}_delta_reward_vs_stop")) for item in items]
-        utility_deltas = [parse_float(item.get(f"{op}_delta_utility_vs_stop")) for item in items]
+        proxy_utility_key = f"{op}_delta_proxy_utility_context_vs_stop"
+        if proxy_utility_key not in items[0]:
+            proxy_utility_key = f"{op}_delta_utility_vs_stop"
+        utility_deltas = [parse_float(item.get(proxy_utility_key)) for item in items]
+        stop_costs = [parse_float(item.get("stop_cost")) for item in items]
+        op_costs = [parse_float(item.get(f"{op}_cost")) for item in items]
         stop_complete = [bool01(item.get("stop_all_evidence_present")) for item in items]
         op_complete = [bool01(item.get(f"{op}_all_evidence_present")) for item in items]
         c0_complete = [bool01(item.get("_c0_all_evidence_present")) for item in items]
 
-        admission_rescue = [
-            s == 0 and o == 1 and c == 1
-            for s, o, c in zip(stop_complete, op_complete, c0_complete)
-            if s is not None and o is not None and c is not None
-        ]
-        preservation_loss = [
-            s == 1 and o == 0
-            for s, o in zip(stop_complete, op_complete)
-            if s is not None and o is not None
-        ]
+        admission_rescue: list[bool] = []
+        admission_rescue_deltas: list[float] = []
+        preservation_loss: list[bool] = []
+        admitted_complete_deltas: list[float] = []
+        for delta, s, o, c in zip(deltas, stop_complete, op_complete, c0_complete):
+            if s is not None and o is not None and c is not None:
+                rescued = s == 0 and o == 1 and c == 1
+                admission_rescue.append(rescued)
+                if rescued:
+                    admission_rescue_deltas.append(delta)
+            if s is not None and o is not None:
+                lost = s == 1 and o == 0
+                preservation_loss.append(lost)
+                if s == 1:
+                    admitted_complete_deltas.append(delta)
         wins = sum(1 for delta in deltas if wtl(delta, eps) == "win")
         ties = sum(1 for delta in deltas if wtl(delta, eps) == "tie")
         losses = sum(1 for delta in deltas if wtl(delta, eps) == "loss")
@@ -138,14 +148,25 @@ def summarize(rows: list[dict[str, Any]], group_key: str, operations: list[str],
                 "operation": op,
                 "n": len(items),
                 "mean_delta_reward_vs_stop": mean(deltas),
-                "mean_delta_utility_vs_stop": mean(utility_deltas),
+                "mean_delta_proxy_utility_context_vs_stop": mean(utility_deltas),
+                "mean_stop_context_cost": mean(stop_costs),
+                "mean_op_context_cost": mean(op_costs),
+                "mean_delta_context_cost": mean(
+                    [op_cost - stop_cost for op_cost, stop_cost in zip(op_costs, stop_costs)]
+                ),
                 "wins_eps": wins,
                 "ties_eps": ties,
                 "losses_eps": losses,
                 "admission_rescue_count": sum(admission_rescue),
                 "admission_rescue_rate": mean([float(x) for x in admission_rescue]),
+                "gold_session_rescue_precision_eps": mean(
+                    [float(delta > eps) for delta in admission_rescue_deltas]
+                ),
                 "preservation_loss_count": sum(preservation_loss),
                 "preservation_loss_rate": mean([float(x) for x in preservation_loss]),
+                "admitted_complete_disruption_risk_eps": mean(
+                    [float(delta < -eps) for delta in admitted_complete_deltas]
+                ),
                 "mean_stop_all_evidence_present": mean(
                     [float(x) for x in stop_complete if x is not None]
                 ),
@@ -207,6 +228,12 @@ def main() -> None:
             c0_complete = bool01(out.get("_c0_all_evidence_present"))
             out[f"{op}_admission_rescue"] = int(stop_complete == 0 and op_complete == 1 and c0_complete == 1)
             out[f"{op}_preservation_loss"] = int(stop_complete == 1 and op_complete == 0)
+            out[f"{op}_gold_session_rescue_win_eps_{args.eps}"] = int(
+                out[f"{op}_admission_rescue"] == 1 and delta > args.eps
+            )
+            out[f"{op}_admitted_complete_disruption_eps_{args.eps}"] = int(
+                stop_complete == 1 and delta < -args.eps
+            )
         enriched.append(out)
 
     group_counts = Counter(row["evidence_bottleneck_group"] for row in enriched)

@@ -76,6 +76,7 @@ def main() -> None:
             retrieved = retrieve.get("retrieved_source_indices")
             admitted = retrieve.get("admitted_source_indices")
             final_admitted = final_record.get("admitted_source_indices")
+            final_n_admitted = final_record.get("n_admitted_sources", "")
             rows.append(
                 {
                     "operation": name,
@@ -90,7 +91,17 @@ def main() -> None:
                     ),
                     "n_retrieved_sources": retrieve.get("n_retrieved_sources", ""),
                     "n_admitted_sources": retrieve.get("n_admitted_sources", ""),
-                    "n_final_admitted_sources": final_record.get("n_admitted_sources", ""),
+                    "n_final_admitted_sources": final_n_admitted,
+                    "final_admitted_empty": int(final_n_admitted == 0),
+                    "final_operator_contract": final_record.get("operator_contract", ""),
+                    "final_input_state": final_record.get("input_state", ""),
+                    "final_contract_violation": final_record.get("contract_violation", ""),
+                    "final_admitted_content_sha1_by_source": sha1_obj(
+                        final_record.get("admitted_content_sha1_by_source") or {}
+                    ),
+                    "final_unassigned_admitted_content_line_count": final_record.get(
+                        "unassigned_admitted_content_line_count", ""
+                    ),
                     "prompt_sha1": trace.get("prompt_sha1", ""),
                     "model": trace.get("model", ""),
                     "temperature": trace.get("temperature", ""),
@@ -116,6 +127,12 @@ def main() -> None:
         "n_retrieved_sources",
         "n_admitted_sources",
         "n_final_admitted_sources",
+        "final_admitted_empty",
+        "final_operator_contract",
+        "final_input_state",
+        "final_contract_violation",
+        "final_admitted_content_sha1_by_source",
+        "final_unassigned_admitted_content_line_count",
         "prompt_sha1",
         "model",
         "temperature",
@@ -139,6 +156,17 @@ def main() -> None:
                 "missing_qid_rows": sum(1 for row in rows if not row["qid"]),
                 "missing_prompt_sha1_rows": sum(1 for row in rows if not row["prompt_sha1"]),
                 "missing_trace_schema_rows": sum(1 for row in rows if not row["trace_schema_version"]),
+                "final_admitted_empty_rows_by_operation": {
+                    operation: sum(
+                        1
+                        for row in rows
+                        if row["operation"] == operation and row["final_admitted_empty"] == 1
+                    )
+                    for operation in sorted({row["operation"] for row in rows})
+                },
+                "final_contract_violation_rows": sum(
+                    1 for row in rows if str(row["final_contract_violation"]).lower() == "true"
+                ),
             },
             ensure_ascii=False,
             indent=2,

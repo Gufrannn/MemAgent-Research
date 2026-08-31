@@ -33,6 +33,7 @@ Gold answer/evidence labels remain offline-only diagnostics.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import time
@@ -156,41 +157,69 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
                             query_tokens,
                             budget_chars,
                         )
-                        admitted = set(stats.get("admitted_source_indices") or [])
-                        if admitted:
-                            visible_items = [item for item in input_items if item.idx in admitted]
-                            if action in {"REFINE", "SHRINK_VISIBLE"}:
-                                working_items = [item for item in working_items if item.idx in admitted]
-                            else:
-                                working_items = [item for item in candidate_items if item.idx in admitted]
-                            working_admitted_indices = admitted
+                        if not context.strip():
+                            context = "No previous memory"
+                        admitted = self._coerce_source_indices(stats.get("admitted_source_indices") or [])
+                        visible_items = [item for item in input_items if item.idx in admitted]
+                        if action in {"REFINE", "SHRINK_VISIBLE"}:
+                            working_items = [item for item in working_items if item.idx in admitted]
+                        else:
+                            working_items = [item for item in candidate_items if item.idx in admitted]
+                        working_admitted_indices = set(admitted)
+                        visible_idx_set = {item.idx for item in visible_items}
+                        if visible_idx_set != admitted:
+                            raise RuntimeError(
+                                f"{operation_name} state mismatch: visible_items={sorted(visible_idx_set)} "
+                                f"admitted={sorted(admitted)}"
+                            )
                         contract_violation = False
                         if action == "SHRINK_VISIBLE":
                             contract_violation = not admitted.issubset(set(previous_visible_indices))
+                            if contract_violation:
+                                raise RuntimeError(
+                                    "SHRINK_VISIBLE contract violation: admitted sources are not a subset of "
+                                    f"previous visible sources. previous={previous_visible_indices}, "
+                                    f"admitted={sorted(admitted)}"
+                                )
                         newly_admitted = sorted(admitted - set(previous_visible_indices))
                         dropped_visible = sorted(set(previous_visible_indices) - admitted)
-                        operations.append(operation_name)
-                        op_records.append(
-                            self._op_record(
-                                operation_name,
-                                visible_items,
-                                context,
-                                budget_chars,
-                                {
-                                    "filtered_sentence_count": count,
-                                    "filter_mode": self.filter_mode,
-                                    "operator_contract": operator_contract,
-                                    "input_state": input_state,
-                                    "previous_visible_source_indices": previous_visible_indices,
-                                    "newly_admitted_source_indices": newly_admitted,
-                                    "dropped_visible_source_indices": dropped_visible,
-                                    "contract_violation": contract_violation,
-                                    **stats,
-                                },
-                                admitted_items=visible_items,
-                                retrieved_items=input_items,
-                            )
+                        input_source_indices = [item.idx for item in input_items]
+                        admitted_content_hashes, unassigned_lines = self._admitted_content_hashes_by_source(
+                            context,
+                            input_items,
+                            admitted,
                         )
+                        operations.append(operation_name)
+                        record = self._op_record(
+                            operation_name,
+                            visible_items,
+                            context,
+                            budget_chars,
+                            {
+                                "filtered_sentence_count": count,
+                                "filter_mode": self.filter_mode,
+                                "operator_contract": operator_contract,
+                                "input_state": input_state,
+                                "input_source_indices": input_source_indices,
+                                "previous_visible_source_indices": previous_visible_indices,
+                                "newly_admitted_source_indices": newly_admitted,
+                                "dropped_visible_source_indices": dropped_visible,
+                                "dropped_source_indices": dropped_visible,
+                                "contract_violation": contract_violation,
+                                "admitted_content_sha1_by_source": admitted_content_hashes,
+                                "admitted_content_hash_scope": "best_effort_visible_text_lines_by_source",
+                                "unassigned_admitted_content_line_count": unassigned_lines,
+                                **stats,
+                            },
+                            admitted_items=visible_items,
+                            retrieved_items=input_items,
+                        )
+                        if set(record["admitted_source_indices"]) != admitted:
+                            raise RuntimeError(
+                                f"{operation_name} trace mismatch: record admitted="
+                                f"{record['admitted_source_indices']} admitted={sorted(admitted)}"
+                            )
+                        op_records.append(record)
                     elif action == "EXPAND":
                         more_items, expand_stats = self._expand_items(
                             query,
@@ -263,6 +292,62 @@ class MemorySequenceAgent(ProgressiveDepthAgent):
         if self.sequence == "expand_refine":
             return ["EXPAND", "REFINE"]
         raise AssertionError(self.sequence)
+
+    @staticmethod
+    def _coerce_source_indices(values: list[int] | list[str]) -> set[int]:
+        out: set[int] = set()
+        for value in values:
+            if isinstance(value, int):
+                out.add(value)
+            elif isinstance(value, str) and value.isdigit():
+                out.add(int(value))
+        return out
+
+    @staticmethod
+    def _sha1_text(text: str) -> str:
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+    def _admitted_content_hashes_by_source(
+        self,
+        context: str,
+        input_items: list[MemoryItem],
+        admitted: set[int],
+    ) -> tuple[dict[str, str], int]:
+        """Best-effort hashes for source-specific visible content.
+
+        The current operators often admit sentence-level snippets but report
+        source ids at session granularity.  This helper does not turn the
+        diagnostic into answer-bearing span evidence.  It only records hashes
+        of the visible text lines that can be mapped back to each admitted
+        source, so audits can distinguish source-level presence from exact
+        visible-content identity.
+        """
+
+        if not admitted or not context.strip() or context.strip() == "No previous memory":
+            return {}, 0
+        by_idx = {item.idx: item for item in input_items if item.idx in admitted}
+        pieces: dict[int, list[str]] = {idx: [] for idx in admitted}
+        unassigned = 0
+        for line in [part.strip() for part in context.splitlines() if part.strip()]:
+            matched_idx: int | None = None
+            for idx, item in by_idx.items():
+                if line in item.text:
+                    matched_idx = idx
+                    break
+            if matched_idx is None:
+                unassigned += 1
+                continue
+            pieces.setdefault(matched_idx, []).append(line)
+
+        for idx, item in by_idx.items():
+            if not pieces.get(idx) and item.text in context:
+                pieces[idx] = [item.text]
+
+        return {
+            str(idx): self._sha1_text("\n".join(source_pieces))
+            for idx, source_pieces in sorted(pieces.items())
+            if source_pieces
+        }, unassigned
 
     def _expand_items(
         self,

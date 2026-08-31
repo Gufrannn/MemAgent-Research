@@ -375,6 +375,7 @@ def main() -> None:
             else:
                 reward = surrogate_f1
             cost = cost_value(response_row, trace_row, args.cost_field)
+            proxy_utility_context = reward - args.lambda_cost * cost if not math.isnan(reward) else math.nan
             row = {
                 "qid": qid,
                 "raw_qid": raw_qid(qid),
@@ -386,7 +387,9 @@ def main() -> None:
                 "judge_correct": judge_correct,
                 "cost": cost,
                 "cost_field": args.cost_field,
-                "utility": reward - args.lambda_cost * cost if not math.isnan(reward) else math.nan,
+                "proxy_utility_context": proxy_utility_context,
+                "utility": proxy_utility_context,
+                "utility_deprecated_alias": "proxy_utility_context",
                 "evidence_session_recall": ev["evidence_session_recall"],
                 "all_evidence_present": ev["all_evidence_present"],
                 "retrieved_evidence_session_recall": retrieved_ev["evidence_session_recall"],
@@ -421,11 +424,15 @@ def main() -> None:
             prefix = op_name
             wide[f"{prefix}_reward"] = row["reward"]
             wide[f"{prefix}_cost"] = row["cost"]
+            wide[f"{prefix}_proxy_utility_context"] = row["proxy_utility_context"]
             wide[f"{prefix}_utility"] = row["utility"]
             wide[f"{prefix}_evidence_recall"] = row["evidence_session_recall"]
             wide[f"{prefix}_all_evidence_present"] = row["all_evidence_present"]
             wide[f"{prefix}_retrieved_evidence_recall"] = row["retrieved_evidence_session_recall"]
             wide[f"{prefix}_retrieved_all_evidence_present"] = row["retrieved_all_evidence_present"]
+            wide[f"{prefix}_delta_proxy_utility_context_vs_{args.baseline_operation}"] = (
+                row["proxy_utility_context"] - base["proxy_utility_context"]
+            )
             wide[f"{prefix}_delta_reward_vs_{args.baseline_operation}"] = row["reward"] - base["reward"]
             wide[f"{prefix}_delta_utility_vs_{args.baseline_operation}"] = row["utility"] - base["utility"]
         wide_rows.append(wide)
@@ -444,12 +451,19 @@ def main() -> None:
                 "n": len(rows),
                 "mean_reward": mean([float(row["reward"]) for row in rows]),
                 "mean_cost": mean([float(row["cost"]) for row in rows]),
+                "mean_proxy_utility_context": mean([float(row["proxy_utility_context"]) for row in rows]),
                 "mean_utility": mean([float(row["utility"]) for row in rows]),
                 "mean_delta_reward_vs_baseline": mean(
                     [float(row["reward"]) - float(base["reward"]) for row, base in zip(rows, base_rows)]
                 ),
                 "mean_delta_utility_vs_baseline": mean(
                     [float(row["utility"]) - float(base["utility"]) for row, base in zip(rows, base_rows)]
+                ),
+                "mean_delta_proxy_utility_context_vs_baseline": mean(
+                    [
+                        float(row["proxy_utility_context"]) - float(base["proxy_utility_context"])
+                        for row, base in zip(rows, base_rows)
+                    ]
                 ),
                 "mean_evidence_session_recall": mean([float(row["evidence_session_recall"]) for row in rows]),
                 "mean_all_evidence_present": mean([float(row["all_evidence_present"]) for row in rows]),
