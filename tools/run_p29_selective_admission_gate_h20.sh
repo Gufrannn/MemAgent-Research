@@ -40,6 +40,13 @@ fi
 
 mkdir -p "${OUTPUT_ROOT}"
 
+"${PYTHON_BIN}" tools/verify_trace_state_text_contract.py \
+  --responses "${STOP_RESPONSES}" \
+  --trace "${STOP_TRACE}" \
+  --output-csv "${OUTPUT_ROOT}/p29_stop_trace_state_text_contract.csv" \
+  --output-json "${OUTPUT_ROOT}/p29_stop_trace_state_text_contract.json" \
+  --fail-on-violation
+
 POLICIES=(
   "repack_lexical_bm25"
   "repack_tfidf_jaccard"
@@ -80,6 +87,8 @@ run_metric reward
 run_metric proxy_utility_context
 
 sha256sum \
+  "${OUTPUT_ROOT}/p29_stop_trace_state_text_contract.json" \
+  "${OUTPUT_ROOT}/p29_stop_trace_state_text_contract.csv" \
   "${OUTPUT_ROOT}/reward/p29_selector_report_reward.json" \
   "${OUTPUT_ROOT}/reward/p29_selector_summary_reward.csv" \
   "${OUTPUT_ROOT}/reward/p29_selector_per_qid_reward.csv" \

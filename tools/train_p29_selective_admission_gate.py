@@ -10,9 +10,10 @@ to use a fixed READMIT policy over the already retrieved candidate pool C0.
 Leakage boundary:
     Default features are query text, first-retrieval/admitted trace statistics,
     and optionally the initial visible working-memory text W0.  Gold evidence,
-    answers, judge labels, question_type, and operation outcomes are never used
-    as online features.  ``--include-question-type`` is a privileged diagnostic
-    control and is marked as such in the report.
+    answers, judge labels, question_type, raw source-index statistics, and
+    operation outcomes are never used as formal online features.
+    ``--include-question-type`` and ``--include-source-index-features`` are
+    diagnostic controls and are marked as such in the report.
 
 Evaluation boundary:
     All models are evaluated by outer LOOCV.  Hyperparameters and thresholds
@@ -221,6 +222,7 @@ def build_online_features(
     feature_set: str,
     hash_dim: int,
     include_question_type: bool,
+    include_source_index_features: bool,
     allow_missing_trace: bool,
 ) -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
     numeric_dicts: list[dict[str, float]] = []
@@ -281,8 +283,17 @@ def build_online_features(
             numeric["trace_top_k"] = 0.0
         if math.isnan(numeric["trace_total_memory_kchars"]):
             numeric["trace_total_memory_kchars"] = 0.0
-        numeric.update(numeric_summary([float(x) for x in retrieved_indices], "retrieved_source_index"))
-        numeric.update(numeric_summary([float(x) for x in admitted_indices], "admitted_source_index"))
+        # Raw source indices are dataset-order artifacts, not semantic memory
+        # state.  Exclude them from the formal online feature set by default.
+        # If enabled, their names are prefixed as diagnostics so downstream
+        # audits can separate them from deployable state features.
+        if include_source_index_features:
+            numeric.update(
+                numeric_summary([float(x) for x in retrieved_indices], "diagnostic_source_index_retrieved")
+            )
+            numeric.update(
+                numeric_summary([float(x) for x in admitted_indices], "diagnostic_source_index_admitted")
+            )
 
         if include_question_type:
             # Privileged control only.  Wide matrix carries question_type from
@@ -312,6 +323,7 @@ def build_online_features(
                 "first_retrieve_found": int(retrieve is not None),
                 "feature_set": feature_set,
                 "include_question_type": int(include_question_type),
+                "include_source_index_features": int(include_source_index_features),
                 "query_chars": len(query),
                 "w0_state_text_available": int(bool(state_text)),
                 "retrieved_source_count": len(retrieved_indices),
@@ -321,7 +333,15 @@ def build_online_features(
                     if feature_set == "stats_text"
                     else feature_set
                 ),
-                "forbidden_online_features": "none" if not include_question_type else "question_type_privileged_control",
+                "forbidden_online_features": ";".join(
+                    item
+                    for item in [
+                        "question_type_privileged_control" if include_question_type else "",
+                        "raw_source_index_diagnostic" if include_source_index_features else "",
+                    ]
+                    if item
+                )
+                or "none",
             }
         )
 
@@ -663,6 +683,11 @@ def main() -> None:
     parser.add_argument("--feature-set", choices=["stats", "text", "stats_text"], default="stats_text")
     parser.add_argument("--hash-dim", type=int, default=256)
     parser.add_argument("--include-question-type", action="store_true")
+    parser.add_argument(
+        "--include-source-index-features",
+        action="store_true",
+        help="Diagnostic only. Raw source-index statistics are excluded from formal online features by default.",
+    )
     parser.add_argument("--allow-missing-trace", action="store_true")
     parser.add_argument("--alphas", default="0.01,0.1,1,10,100,1000")
     parser.add_argument("--thresholds", default="-0.025,0,0.025,0.05,0.1")
@@ -712,6 +737,7 @@ def main() -> None:
         feature_set=args.feature_set,
         hash_dim=args.hash_dim,
         include_question_type=args.include_question_type,
+        include_source_index_features=args.include_source_index_features,
         allow_missing_trace=args.allow_missing_trace,
     )
 
@@ -763,6 +789,7 @@ def main() -> None:
                 "metric": args.metric,
                 "feature_set": args.feature_set,
                 "include_question_type": int(args.include_question_type),
+                "include_source_index_features": int(args.include_source_index_features),
                 "question_type_offline": row.get("question_type", ""),
                 "evidence_bottleneck_group_offline": row.get("evidence_bottleneck_group", ""),
                 "stop_value": value(row, "stop", args.metric),
@@ -846,6 +873,7 @@ def main() -> None:
         "feature_set": args.feature_set,
         "hash_dim": args.hash_dim,
         "include_question_type": args.include_question_type,
+        "include_source_index_features": args.include_source_index_features,
         "alphas": alphas,
         "thresholds": thresholds,
         "inner_folds": args.inner_folds,
@@ -861,8 +889,9 @@ def main() -> None:
         "selector_summary": summary_rows,
         "guardrails": [
             "Read-only over frozen generation matrix and stop trace; no prompt/operator/protocol changes.",
-            "Default online features exclude question_type, gold evidence, answer text, judge labels, and response text.",
+            "Default online features exclude question_type, gold evidence, answer text, judge labels, response text, and raw source-index statistics.",
             "--include-question-type is a privileged control, not a legal online policy.",
+            "--include-source-index-features is a dataset-order diagnostic control, not a formal online policy feature.",
             "Outer LOOCV evaluates each qid once; alpha and binary threshold are chosen only inside the train fold.",
             "Static oracle is an offline upper bound and not a deployable policy.",
             "Evidence bottleneck groups use gold-session labels only for post-hoc audit.",
