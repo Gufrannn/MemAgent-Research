@@ -25,6 +25,7 @@ import argparse
 import csv
 import json
 import math
+import random
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -106,15 +107,89 @@ def value(row: dict[str, str], policy: str, metric: str) -> float:
     raise ValueError(f"Unsupported metric: {metric}")
 
 
-def choose_best_policy(row: dict[str, str], policies: list[str], metric: str) -> tuple[str, float]:
-    candidates = [(policy, value(row, policy, metric), parse_float(row.get(f"{policy}_cost"))) for policy in policies]
-    valid = [(policy, val, cost) for policy, val, cost in candidates if not math.isnan(val)]
-    if not valid:
-        return "", math.nan
-    # Tie-break by higher value, then lower final context cost, then policy order.
+def policy_cost(row: dict[str, str], policy: str) -> float:
+    return parse_float(row.get(f"{policy}_cost"))
+
+
+def validate_policy_columns(rows: list[dict[str, str]], policies: list[str], metric: str) -> None:
+    missing: list[str] = []
+    for policy in policies:
+        value_key = f"{policy}_reward" if metric == "reward" else f"{policy}_proxy_utility_context"
+        if metric == "proxy_utility_context" and value_key not in rows[0]:
+            value_key = f"{policy}_utility"
+        required = [value_key, f"{policy}_cost", f"{policy}_all_evidence_present"]
+        for key in required:
+            if key not in rows[0]:
+                missing.append(key)
+    if missing:
+        raise ValueError(f"Missing required P28 columns: {sorted(set(missing))}")
+
+    for row in rows:
+        qid = row.get("qid", "")
+        for policy in policies:
+            val = value(row, policy, metric)
+            cost = policy_cost(row, policy)
+            if math.isnan(val):
+                raise ValueError(f"Missing value for policy={policy}, metric={metric}, qid={qid}")
+            if math.isnan(cost):
+                raise ValueError(
+                    f"Missing cost for policy={policy}, qid={qid}. "
+                    "P28 tie-break is fail-closed; missing cost cannot receive an oracle advantage."
+                )
+
+
+def choose_best_policy(
+    row: dict[str, str],
+    policies: list[str],
+    metric: str,
+    tie_eps: float,
+) -> tuple[str, float, float]:
+    candidates = [(policy, value(row, policy, metric), policy_cost(row, policy)) for policy in policies]
+    if not candidates:
+        return "", math.nan, math.nan
+    max_value = max(val for _, val, _ in candidates)
+    tied = [(policy, val, cost) for policy, val, cost in candidates if max_value - val <= tie_eps]
+    # Tie-break by task-equivalent value, then lower final context cost, then policy order.
     order = {policy: idx for idx, policy in enumerate(policies)}
-    best = max(valid, key=lambda item: (item[1], -item[2] if not math.isnan(item[2]) else 0.0, -order[item[0]]))
-    return best[0], best[1]
+    best = min(tied, key=lambda item: (item[2], order[item[0]]))
+    return best[0], best[1], best[2]
+
+
+def choose_best_summary(summaries: list[dict[str, Any]], policies: list[str], tie_eps: float) -> dict[str, Any]:
+    max_value = max(float(item["mean_value"]) for item in summaries)
+    tied = [item for item in summaries if max_value - float(item["mean_value"]) <= tie_eps]
+    order = {policy: idx for idx, policy in enumerate(policies)}
+    return min(tied, key=lambda item: (float(item["mean_cost"]), order[str(item["policy"])]))
+
+
+def entropy(counts: Counter[str]) -> float:
+    total = sum(counts.values())
+    if total <= 0:
+        return math.nan
+    out = 0.0
+    for count in counts.values():
+        if count <= 0:
+            continue
+        p = count / total
+        out -= p * math.log(p + 1e-12)
+    return max(0.0, out)
+
+
+def bootstrap_ci(values: list[float], samples: int, seed: int) -> dict[str, float]:
+    clean = [value for value in values if not math.isnan(value)]
+    if not clean:
+        return {"mean": math.nan, "ci_low": math.nan, "ci_high": math.nan, "n": 0}
+    if samples <= 0:
+        return {"mean": mean(clean), "ci_low": math.nan, "ci_high": math.nan, "n": len(clean)}
+    rng = random.Random(seed)
+    means: list[float] = []
+    for _ in range(samples):
+        draw = [clean[rng.randrange(len(clean))] for _ in clean]
+        means.append(sum(draw) / len(draw))
+    means.sort()
+    lo = means[max(0, int(0.025 * samples) - 1)]
+    hi = means[min(samples - 1, int(0.975 * samples))]
+    return {"mean": mean(clean), "ci_low": lo, "ci_high": hi, "n": len(clean)}
 
 
 def summarize_policy(rows: list[dict[str, Any]], policy: str, metric: str, eps: float) -> dict[str, Any]:
@@ -169,6 +244,21 @@ def main() -> None:
     parser.add_argument("--metric", choices=["reward", "proxy_utility_context"], default="reward")
     parser.add_argument("--c0-complete-column", default="stop_retrieved_all_evidence_present")
     parser.add_argument("--eps", type=float, default=0.1)
+    parser.add_argument(
+        "--margin-eps",
+        action="append",
+        type=float,
+        default=None,
+        help="Margin-aware oracle thresholds against global best fixed. Defaults to 0.05 and 0.10.",
+    )
+    parser.add_argument(
+        "--tie-eps",
+        type=float,
+        default=0.01,
+        help="Task-equivalence tolerance for oracle/fixed tie-breaks before choosing lower cost.",
+    )
+    parser.add_argument("--bootstrap-samples", type=int, default=2000)
+    parser.add_argument("--seed", type=int, default=20260831)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
@@ -181,83 +271,183 @@ def main() -> None:
         raise ValueError(f"Missing C0 completeness column: {args.c0_complete_column}")
 
     policies = [args.baseline_policy] + [policy for policy in args.policy if policy != args.baseline_policy]
+    margin_eps_values = args.margin_eps if args.margin_eps is not None else [0.05, 0.10]
+    validate_policy_columns(rows, policies, args.metric)
     for row in rows:
         row["_c0_all_evidence_present"] = row.get(args.c0_complete_column, "")
         row["evidence_bottleneck_group"] = group_label(row, args.c0_complete_column)
 
     baseline_values = [value(row, args.baseline_policy, args.metric) for row in rows]
     fixed_summaries = [summarize_policy(rows, policy, args.metric, args.eps) for policy in policies]
-    best_fixed = max(fixed_summaries, key=lambda item: (item["mean_value"], -item["mean_cost"]))
+    best_fixed = choose_best_summary(fixed_summaries, policies, args.tie_eps)
 
     per_qid: list[dict[str, Any]] = []
-    oracle_values: list[float] = []
+    raw_oracle_values: list[float] = []
     best_fixed_values: list[float] = []
+    margin_oracle_values: dict[float, list[float]] = {eps: [] for eps in margin_eps_values}
+    margin_oracle_policies: dict[float, Counter[str]] = {eps: Counter() for eps in margin_eps_values}
     group_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in rows:
         group_rows[row["evidence_bottleneck_group"]].append(row)
-        oracle_policy, oracle_value = choose_best_policy(row, policies, args.metric)
+        oracle_policy, oracle_value, oracle_cost = choose_best_policy(row, policies, args.metric, args.tie_eps)
         best_fixed_value = value(row, best_fixed["policy"], args.metric)
         base_value = value(row, args.baseline_policy, args.metric)
-        oracle_values.append(oracle_value)
+        raw_oracle_values.append(oracle_value)
         best_fixed_values.append(best_fixed_value)
-        per_qid.append(
-            {
-                "qid": row.get("qid"),
-                "question_type": row.get("question_type"),
-                "evidence_bottleneck_group": row["evidence_bottleneck_group"],
-                "metric": args.metric,
-                "baseline_policy": args.baseline_policy,
-                "best_fixed_policy": best_fixed["policy"],
-                "oracle_static_policy": oracle_policy,
-                "baseline_value": base_value,
-                "best_fixed_value": best_fixed_value,
-                "oracle_static_value": oracle_value,
-                "oracle_minus_best_fixed": oracle_value - best_fixed_value,
-                "oracle_minus_stop": oracle_value - base_value,
-            }
-        )
+        out_row = {
+            "qid": row.get("qid"),
+            "question_type": row.get("question_type"),
+            "evidence_bottleneck_group": row["evidence_bottleneck_group"],
+            "metric": args.metric,
+            "baseline_policy": args.baseline_policy,
+            "best_fixed_policy": best_fixed["policy"],
+            "raw_oracle_static_policy": oracle_policy,
+            "raw_oracle_static_cost": oracle_cost,
+            "baseline_value": base_value,
+            "best_fixed_value": best_fixed_value,
+            "raw_oracle_static_value": oracle_value,
+            "raw_oracle_minus_best_fixed": oracle_value - best_fixed_value,
+            "raw_oracle_minus_stop": oracle_value - base_value,
+        }
+        for margin_eps in margin_eps_values:
+            if oracle_value - best_fixed_value > margin_eps:
+                margin_policy = oracle_policy
+                margin_value = oracle_value
+            else:
+                margin_policy = str(best_fixed["policy"])
+                margin_value = best_fixed_value
+            margin_oracle_values[margin_eps].append(margin_value)
+            margin_oracle_policies[margin_eps][margin_policy] += 1
+            suffix = str(margin_eps).replace(".", "p")
+            out_row[f"margin_{suffix}_oracle_policy"] = margin_policy
+            out_row[f"margin_{suffix}_oracle_value"] = margin_value
+            out_row[f"margin_{suffix}_positive_sample"] = int(margin_value - best_fixed_value > 0)
+            out_row[f"margin_{suffix}_oracle_minus_best_fixed"] = margin_value - best_fixed_value
+            out_row[f"margin_{suffix}_oracle_minus_stop"] = margin_value - base_value
+        per_qid.append(out_row)
 
     group_summaries: list[dict[str, Any]] = []
     for group, items in sorted(group_rows.items()):
         group_fixed = [summarize_policy(items, policy, args.metric, args.eps) for policy in policies]
-        group_best = max(group_fixed, key=lambda item: (item["mean_value"], -item["mean_cost"]))
-        group_oracle = [choose_best_policy(row, policies, args.metric)[1] for row in items]
+        group_best = choose_best_summary(group_fixed, policies, args.tie_eps)
+        group_oracle_pairs = [choose_best_policy(row, policies, args.metric, args.tie_eps) for row in items]
+        group_oracle = [item[1] for item in group_oracle_pairs]
         group_best_values = [value(row, group_best["policy"], args.metric) for row in items]
+        global_best_fixed_values = [value(row, best_fixed["policy"], args.metric) for row in items]
         group_base = [value(row, args.baseline_policy, args.metric) for row in items]
-        group_summaries.append(
+        row_out: dict[str, Any] = {
+            "group": group,
+            "metric": args.metric,
+            "n": len(items),
+            "best_fixed_policy_in_group": group_best["policy"],
+            "global_best_fixed_policy": best_fixed["policy"],
+            "mean_stop": mean(group_base),
+            "mean_group_best_fixed": mean(group_best_values),
+            "mean_global_best_fixed": mean(global_best_fixed_values),
+            "mean_raw_static_oracle": mean(group_oracle),
+            "raw_oracle_minus_group_best_fixed": mean(
+                [o - b for o, b in zip(group_oracle, group_best_values)]
+            ),
+            "raw_oracle_minus_global_best_fixed": mean(
+                [o - b for o, b in zip(group_oracle, global_best_fixed_values)]
+            ),
+            "raw_oracle_minus_stop": mean([o - b for o, b in zip(group_oracle, group_base)]),
+            "raw_positive_margin_sample_count_vs_global_best": sum(
+                1 for o, b in zip(group_oracle, global_best_fixed_values) if o - b > 0
+            ),
+            "raw_oracle_policy_counts": json.dumps(
+                dict(sorted(Counter(item[0] for item in group_oracle_pairs).items())),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        }
+        for margin_eps in margin_eps_values:
+            suffix = str(margin_eps).replace(".", "p")
+            margin_values: list[float] = []
+            margin_policy_counts: Counter[str] = Counter()
+            positive = 0
+            for oracle_pair, row_item in zip(group_oracle_pairs, items):
+                oracle_policy, oracle_value, _ = oracle_pair
+                global_best = value(row_item, best_fixed["policy"], args.metric)
+                if oracle_value - global_best > margin_eps:
+                    margin_policy_counts[oracle_policy] += 1
+                    margin_values.append(oracle_value)
+                    positive += 1
+                else:
+                    margin_policy_counts[str(best_fixed["policy"])] += 1
+                    margin_values.append(global_best)
+            row_out[f"margin_{suffix}_mean_static_oracle"] = mean(margin_values)
+            row_out[f"margin_{suffix}_oracle_minus_global_best_fixed"] = mean(
+                [o - b for o, b in zip(margin_values, global_best_fixed_values)]
+            )
+            row_out[f"margin_{suffix}_oracle_minus_stop"] = mean(
+                [o - b for o, b in zip(margin_values, group_base)]
+            )
+            row_out[f"margin_{suffix}_positive_sample_count"] = positive
+            row_out[f"margin_{suffix}_oracle_policy_counts"] = json.dumps(
+                dict(sorted(margin_policy_counts.items())), ensure_ascii=False, sort_keys=True
+            )
+        group_summaries.append(row_out)
+
+    policy_choice_counts = Counter(row["raw_oracle_static_policy"] for row in per_qid)
+    group_counts = Counter(row["evidence_bottleneck_group"] for row in rows)
+    raw_gaps = [o - b for o, b in zip(raw_oracle_values, best_fixed_values)]
+    margin_reports: list[dict[str, Any]] = []
+    for margin_eps in margin_eps_values:
+        margin_values = margin_oracle_values[margin_eps]
+        margin_gaps = [o - b for o, b in zip(margin_values, best_fixed_values)]
+        margin_stop_gaps = [o - b for o, b in zip(margin_values, baseline_values)]
+        ci = bootstrap_ci(margin_gaps, args.bootstrap_samples, args.seed + int(margin_eps * 10000))
+        margin_reports.append(
             {
-                "group": group,
+                "margin_eps": margin_eps,
                 "metric": args.metric,
-                "n": len(items),
-                "best_fixed_policy_in_group": group_best["policy"],
-                "mean_stop": mean(group_base),
-                "mean_group_best_fixed": mean(group_best_values),
-                "mean_static_oracle": mean(group_oracle),
-                "oracle_minus_group_best_fixed": mean(
-                    [o - b for o, b in zip(group_oracle, group_best_values)]
+                "mean_margin_static_oracle": mean(margin_values),
+                "margin_oracle_minus_best_fixed": mean(margin_gaps),
+                "margin_oracle_minus_best_fixed_ci_low": ci["ci_low"],
+                "margin_oracle_minus_best_fixed_ci_high": ci["ci_high"],
+                "margin_oracle_minus_stop": mean(margin_stop_gaps),
+                "positive_margin_sample_count": sum(1 for gap in margin_gaps if gap > 0),
+                "positive_margin_sample_rate": mean([float(gap > 0) for gap in margin_gaps]),
+                "oracle_policy_entropy": entropy(margin_oracle_policies[margin_eps]),
+                "oracle_policy_counts": json.dumps(
+                    dict(sorted(margin_oracle_policies[margin_eps].items())),
+                    ensure_ascii=False,
+                    sort_keys=True,
                 ),
-                "oracle_minus_stop": mean([o - b for o, b in zip(group_oracle, group_base)]),
             }
         )
 
-    policy_choice_counts = Counter(row["oracle_static_policy"] for row in per_qid)
-    group_counts = Counter(row["evidence_bottleneck_group"] for row in rows)
+    raw_ci = bootstrap_ci(raw_gaps, args.bootstrap_samples, args.seed)
     report = {
-        "status": "EXPLORATORY_SESSION_LEVEL_STATIC_ORACLE_UPPER_BOUND",
+        "status": "EXPLORATORY_SESSION_LEVEL_MARGIN_AWARE_STATIC_ORACLE_UPPER_BOUND",
         "wide_matrix": str(args.wide_matrix),
         "metric": args.metric,
         "n": len(rows),
         "policies": policies,
+        "tie_eps": args.tie_eps,
+        "margin_eps_values": margin_eps_values,
+        "bootstrap_samples": args.bootstrap_samples,
+        "seed": args.seed,
         "best_fixed_policy": best_fixed["policy"],
         "mean_stop": mean(baseline_values),
         "mean_best_fixed": best_fixed["mean_value"],
-        "mean_static_oracle": mean(oracle_values),
-        "oracle_minus_best_fixed": mean([o - b for o, b in zip(oracle_values, best_fixed_values)]),
-        "oracle_minus_stop": mean([o - b for o, b in zip(oracle_values, baseline_values)]),
-        "oracle_policy_counts": dict(sorted(policy_choice_counts.items())),
+        "mean_raw_static_oracle": mean(raw_oracle_values),
+        "raw_oracle_minus_best_fixed": mean(raw_gaps),
+        "raw_oracle_minus_best_fixed_ci_low": raw_ci["ci_low"],
+        "raw_oracle_minus_best_fixed_ci_high": raw_ci["ci_high"],
+        "raw_oracle_minus_stop": mean([o - b for o, b in zip(raw_oracle_values, baseline_values)]),
+        "raw_positive_margin_sample_count_vs_best_fixed": sum(1 for gap in raw_gaps if gap > 0),
+        "raw_oracle_policy_entropy": entropy(policy_choice_counts),
+        "raw_oracle_policy_counts": dict(sorted(policy_choice_counts.items())),
+        "margin_oracle_reports": margin_reports,
         "group_counts": dict(sorted(group_counts.items())),
         "guardrails": [
             "Static oracle is an offline upper bound, not an online policy.",
+            "Raw per-example max can overstate learnable headroom under noisy surrogate F1.",
+            "Margin-aware oracle reports are the gate-relevant quantities.",
+            "Tie-equivalent values are resolved by lower final context cost and then fixed policy order.",
+            "Missing policy costs fail closed before oracle selection.",
             "Evidence groups are gold-session-level, not answer-bearing span-level.",
             "Surrogate F1 is exploratory and must not be reported as official LongMemEval performance.",
             "A nonzero oracle gap supports conditional admission headroom, not RL necessity.",
@@ -267,6 +457,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.output_dir / "p28_static_admission_fixed_policy_summary.csv", fixed_summaries)
     write_csv(args.output_dir / "p28_static_admission_group_oracle_summary.csv", group_summaries)
+    write_csv(args.output_dir / "p28_static_admission_margin_oracle_summary.csv", margin_reports)
     write_csv(args.output_dir / "p28_static_admission_oracle_per_qid.csv", per_qid)
     (args.output_dir / "p28_static_admission_oracle_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
