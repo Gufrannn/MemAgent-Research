@@ -515,6 +515,23 @@ def choose_best_fixed_fold(rows: list[dict[str, str]], indices: list[int], polic
     return min(tied, key=lambda policy: (costs[policy], order[policy]))
 
 
+def choose_raw_best_fixed_fold(rows: list[dict[str, str]], indices: list[int], policies: list[str], metric: str) -> str:
+    """Return the fixed policy with the highest raw mean metric.
+
+    This intentionally ignores tie_eps/cost-aware preference.  It is reported
+    separately from the tie/cost-aware default so that method tables do not call
+    a lower-mean cheaper policy the raw "best fixed" policy.
+    """
+    means = {
+        policy: mean([value(rows[idx], policy, metric) for idx in indices])
+        for policy in policies
+    }
+    order = {policy: pos for pos, policy in enumerate(policies)}
+    best_val = max(means.values())
+    tied = [policy for policy in policies if abs(means[policy] - best_val) <= 1e-12]
+    return min(tied, key=lambda policy: order[policy])
+
+
 def stratified_folds(indices: list[int], labels: dict[int, int], folds: int, seed: int) -> list[list[int]]:
     rng = random.Random(seed)
     buckets: dict[int, list[int]] = {0: [], 1: []}
@@ -712,7 +729,8 @@ def summarize_method(
     policies: list[str],
     metric: str,
     method: str,
-    full_best_fixed_policy: str,
+    full_tie_cost_fixed_policy: str,
+    raw_best_fixed_policy: str,
     eps: float,
     tie_eps: float,
     seed: int,
@@ -722,7 +740,8 @@ def summarize_method(
     chosen_values: list[float] = []
     stop_values: list[float] = []
     fold_default_values: list[float] = []
-    full_best_fixed_values: list[float] = []
+    full_tie_cost_fixed_values: list[float] = []
+    raw_best_fixed_values: list[float] = []
     group_b_fold_gaps: list[float] = []
     group_c_fold_gaps: list[float] = []
     group_b_full_gaps: list[float] = []
@@ -741,14 +760,16 @@ def summarize_method(
             default_counts[str(item["fold_default_policy"])] += 1
         chosen_val = value(row, chosen, metric)
         fold_default_val = value(row, fold_best, metric)
-        full_best_val = value(row, full_best_fixed_policy, metric)
+        full_tie_cost_val = value(row, full_tie_cost_fixed_policy, metric)
+        raw_best_val = value(row, raw_best_fixed_policy, metric)
         chosen_values.append(chosen_val)
         stop_values.append(value(row, "stop", metric))
         fold_default_values.append(fold_default_val)
-        full_best_fixed_values.append(full_best_val)
+        full_tie_cost_fixed_values.append(full_tie_cost_val)
+        raw_best_fixed_values.append(raw_best_val)
         group = row.get("evidence_bottleneck_group", "")
         fold_gap = chosen_val - fold_default_val
-        full_gap = chosen_val - full_best_val
+        full_gap = chosen_val - full_tie_cost_val
         if group.startswith("B_"):
             group_b_fold_gaps.append(fold_gap)
             group_b_full_gaps.append(full_gap)
@@ -760,9 +781,11 @@ def summarize_method(
             chosen_minus_default_for_overrides.append(chosen_val - value(row, default_policy, metric))
 
     deltas_fold = [a - b for a, b in zip(chosen_values, fold_default_values)]
-    deltas_full = [a - b for a, b in zip(chosen_values, full_best_fixed_values)]
+    deltas_full_tie_cost = [a - b for a, b in zip(chosen_values, full_tie_cost_fixed_values)]
+    deltas_raw_best = [a - b for a, b in zip(chosen_values, raw_best_fixed_values)]
     ci_fold = bootstrap_ci(deltas_fold, bootstrap_samples, seed)
-    ci_full = bootstrap_ci(deltas_full, bootstrap_samples, seed + 777)
+    ci_full_tie_cost = bootstrap_ci(deltas_full_tie_cost, bootstrap_samples, seed + 777)
+    ci_raw_best = bootstrap_ci(deltas_raw_best, bootstrap_samples, seed + 1777)
     override_values = [
         delta for delta in chosen_minus_default_for_overrides if not math.isnan(delta)
     ]
@@ -780,16 +803,20 @@ def summarize_method(
         "Fold_Default_Mean": mean(fold_default_values),
         "Delta_Fold_Default": mean(deltas_fold),
         "CI_vs_Fold_Default": f"[{ci_fold['ci_low']:.6f}, {ci_fold['ci_high']:.6f}]",
-        "Full_Best_Fixed_Policy": full_best_fixed_policy,
-        "Full_Best_Fixed_Mean": mean(full_best_fixed_values),
-        "Delta_Full_Best_Fixed": mean(deltas_full),
-        "CI_vs_Full_Best_Fixed": f"[{ci_full['ci_low']:.6f}, {ci_full['ci_high']:.6f}]",
+        "Full_TieCost_Fixed_Policy": full_tie_cost_fixed_policy,
+        "Full_TieCost_Fixed_Mean": mean(full_tie_cost_fixed_values),
+        "Delta_Full_TieCost_Fixed": mean(deltas_full_tie_cost),
+        "CI_vs_Full_TieCost_Fixed": f"[{ci_full_tie_cost['ci_low']:.6f}, {ci_full_tie_cost['ci_high']:.6f}]",
+        "Raw_Best_Fixed_Policy": raw_best_fixed_policy,
+        "Raw_Best_Fixed_Mean": mean(raw_best_fixed_values),
+        "Delta_Raw_Best_Fixed": mean(deltas_raw_best),
+        "CI_vs_Raw_Best_Fixed": f"[{ci_raw_best['ci_low']:.6f}, {ci_raw_best['ci_high']:.6f}]",
         "Override_Rate": override_rate,
         "Exception_Precision": exception_precision,
         "B_Delta_Fold_Default": mean(group_b_fold_gaps),
         "C_Delta_Fold_Default": mean(group_c_fold_gaps),
-        "B_Delta_Full_Best_Fixed": mean(group_b_full_gaps),
-        "C_Delta_Full_Best_Fixed": mean(group_c_full_gaps),
+        "B_Delta_Full_TieCost_Fixed": mean(group_b_full_gaps),
+        "C_Delta_Full_TieCost_Fixed": mean(group_c_full_gaps),
         "Choices": json.dumps(dict(sorted(choice_counts.items())), sort_keys=True),
         "Fold_Defaults": json.dumps(dict(sorted(default_counts.items())), sort_keys=True),
         "Context": context,
@@ -941,7 +968,8 @@ def main() -> None:
     method_rows.extend(margin_oracle_rows(qids, qid_to_row, rows, policies, args.metric, args.margin_eps, args.tie_eps))
 
     summary_rows = []
-    full_best_fixed_policy = choose_best_fixed_fold(rows, list(range(len(rows))), policies, args.metric, args.tie_eps)
+    full_tie_cost_fixed_policy = choose_best_fixed_fold(rows, list(range(len(rows))), policies, args.metric, args.tie_eps)
+    raw_best_fixed_policy = choose_raw_best_fixed_fold(rows, list(range(len(rows))), policies, args.metric)
     for method in sorted(set(str(row["method"]) for row in method_rows)):
         selected = [row for row in method_rows if str(row["method"]) == method]
         summary_rows.append(
@@ -952,7 +980,8 @@ def main() -> None:
                 policies,
                 args.metric,
                 method,
-                full_best_fixed_policy,
+                full_tie_cost_fixed_policy,
+                raw_best_fixed_policy,
                 args.eps,
                 args.tie_eps,
                 args.seed + len(summary_rows),
@@ -979,7 +1008,8 @@ def main() -> None:
         "metric": args.metric,
         "n": len(rows),
         "policies": policies,
-        "full_best_fixed_policy_descriptive": full_best_fixed_policy,
+        "full_tie_cost_fixed_policy_descriptive": full_tie_cost_fixed_policy,
+        "raw_best_fixed_policy_descriptive": raw_best_fixed_policy,
         "encoder_model": args.encoder_model,
         "encoder_backend": args.encoder_backend,
         "encoder_max_length": args.encoder_max_length,
@@ -997,6 +1027,7 @@ def main() -> None:
         "guardrails": [
             "Read-only over frozen generation artifacts; no prompt/operator/split/metric/generation changes.",
             "SSA chooses a fold-local default inside each outer train fold; no full-dev best-fixed leakage.",
+            "Reports raw best fixed and tie/cost-aware fixed separately; tie/cost-aware policies must not be described as raw reward-best if their mean is lower.",
             "SSA overrides the default only when predicted semantic margin exceeds threshold.",
             "Source indices are pointers to reconstruct C0/W0 texts, not raw numeric features.",
             "Semantic features use query/C0/W0 text available at inference time; no question_type/gold/answer/judge/outcome features.",
