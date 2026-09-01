@@ -35,6 +35,7 @@ from train_p29_selective_admission_gate import (
     mean,
     normalize_qid,
     read_csv,
+    sha1_text,
     value,
     write_csv,
 )
@@ -81,6 +82,8 @@ def load_responses_qid_to_query_sha1(path: Path) -> dict[str, str]:
     for row in iter_jsonl(path):
         qid = normalize_qid(str(row.get("qid") or row.get("question_id") or ""))
         qhash = str(row.get("query_sha1") or "")
+        if not qhash and row.get("query") is not None:
+            qhash = sha1_text(str(row.get("query") or ""))
         if not qid or not qhash:
             continue
         if qid in out:
