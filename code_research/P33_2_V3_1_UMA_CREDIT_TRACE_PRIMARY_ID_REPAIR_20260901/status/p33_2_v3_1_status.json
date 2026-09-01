@@ -1,0 +1,68 @@
+{
+  "status_label": "CODE_REPAIRED_LOCAL_SMOKE_PASSED_INSTRUMENTATION_DIFF_UNCHANGED_H20_NOT_RUN",
+  "date": "2026-09-01",
+  "official_uma_commit": "768f9620231bae11264771f59e43a4839506cf94",
+  "scope": "P33.2-v3.1 summarizer-only primary identity repair",
+  "files_changed": [
+    "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/tools/summarize_p33_2_credit_trace.py"
+  ],
+  "files_unchanged": [
+    "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/tools/prepare_p33_2_uma_credit_instrumentation.py",
+    "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/instrumented_worktree_p33_2_v3/p33_2_uma_credit_instrumentation.diff"
+  ],
+  "forbidden_changes_not_made": [
+    "prompt",
+    "operator",
+    "split",
+    "metric",
+    "generation_protocol",
+    "reward_formula",
+    "trainer_objective",
+    "optimizer_behavior"
+  ],
+  "repair_details": [
+    "trajectory_id is required and used as the primary trajectory grouping key",
+    "trajectory_key remains required as provenance/cross-check only",
+    "one trajectory_id must map to exactly one trajectory_key; otherwise fail closed",
+    "multiple trajectory_id values may share one trajectory_key and are reported, not treated as failure",
+    "reward rank within GRPO group is now tie-aware dense rank",
+    "added reward_dense_rank_within_grpo_group, reward_tie_size_within_grpo_group, n_unique_rewards_in_grpo_group"
+  ],
+  "sha256": {
+    "prepare_script": "f38307e60ddc124aa11787e1372489d417b507b8399de210847f978542144e71",
+    "summarizer_v3_1": "87a1d4ff2587e41abd07d4b75bc101cc0e89e3ce0167eec3b5845af5c67c776e",
+    "instrumentation_diff_unchanged": "611da8810a7153d00fd402e6d1d117938f31c95ff278612adeaee74b78d9e13e"
+  },
+  "local_smoke": {
+    "ast_parse": "PASS",
+    "valid_synthetic_trace": "PASS",
+    "uuid_primary_grouping": "PASS",
+    "trajectory_key_multiple_ids_allowed_and_reported": "PASS",
+    "trajectory_id_multiple_keys_fail_closed": "PASS",
+    "missing_trajectory_id_fail_closed": "PASS",
+    "tie_aware_dense_rank": "PASS",
+    "synthetic_summary": {
+      "n_trajectory_ids": 2,
+      "n_trajectory_keys": 1,
+      "trajectory_keys_with_multiple_trajectory_ids": 1,
+      "n_memory_rows": 6
+    }
+  },
+  "h20": {
+    "status": "NOT_RUN_FOR_P33_2_V3_1",
+    "next_required": "Push exact commit containing this summarizer repair, then run official UMA 4B real rollout trace anatomy."
+  },
+  "interpretation": {
+    "supported": [
+      "Primary trajectory identity grouping is repaired before H20.",
+      "Derived trajectory key is demoted to provenance/collision cross-check.",
+      "Reward rank is tie-aware."
+    ],
+    "not_supported": [
+      "UMA credit assignment is wrong",
+      "RL necessity",
+      "H20 real rollout anatomy",
+      "P33.3 intervention evidence"
+    ]
+  }
+}

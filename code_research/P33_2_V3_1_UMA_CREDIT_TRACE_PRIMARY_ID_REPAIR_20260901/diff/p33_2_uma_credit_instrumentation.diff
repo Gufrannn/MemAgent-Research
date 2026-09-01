@@ -1,0 +1,339 @@
+diff --git a/external/verl/verl/experimental/agent_loop/agent_loop.py b/external/verl/verl/experimental/agent_loop/agent_loop.py
+index f922e09..e231196 100644
+--- a/external/verl/verl/experimental/agent_loop/agent_loop.py
++++ b/external/verl/verl/experimental/agent_loop/agent_loop.py
+@@ -41,6 +41,9 @@ from verl.utils.fs import copy_to_local
+ from verl.utils.model import compute_position_id_with_mask
+ from verl.utils.rollout_trace import RolloutTraceConfig, rollout_trace_attr, rollout_trace_op
+ from verl.workers.rollout.replica import TokenOutput, get_rollout_replica_class
++from verl.utils.uma_credit_trace import credit_trace_enabled as uma_credit_trace_enabled
++from verl.utils.uma_credit_trace import stable_hash_payload as uma_credit_stable_hash_payload
++from verl.utils.uma_credit_trace import trace_event as uma_credit_trace_event
+ 
+ logger = logging.getLogger(__file__)
+ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+@@ -465,6 +468,19 @@ class AgentLoopWorker:
+             for o in outputs[i]:
+                 o.data_source = batch.non_tensor_batch['data_source'][i]
+                 o.uid = batch.non_tensor_batch['uid'][i]
++                if uma_credit_trace_enabled():
++                    p33_2_info = trajectory_info[i]
++                    p33_2_trajectory_key = f"step={p33_2_info.get('step')}|sample={p33_2_info.get('sample_index')}|rollout={p33_2_info.get('rollout_n')}|validate={p33_2_info.get('validate')}"
++                    o.extra_fields['p33_2_trajectory_key'] = p33_2_trajectory_key
++                    o.extra_fields['p33_2_trajectory_step'] = p33_2_info.get('step')
++                    o.extra_fields['p33_2_sample_index'] = p33_2_info.get('sample_index')
++                    o.extra_fields['p33_2_rollout_n'] = p33_2_info.get('rollout_n')
++                    o.extra_fields['p33_2_validate'] = p33_2_info.get('validate')
++                    o.extra_fields['p33_2_batch_row_index'] = int(i)
++                    if 'index' in batch.non_tensor_batch:
++                        o.extra_fields['p33_2_original_index'] = str(batch.non_tensor_batch['index'][i])
++                    if 'agent_name' in batch.non_tensor_batch:
++                        o.extra_fields['p33_2_agent_name'] = str(batch.non_tensor_batch['agent_name'][i])
+         outputs = sum(outputs, start=[])
+         output = self._postprocess(outputs)
+         return output
+@@ -642,6 +658,35 @@ class AgentLoopWorker:
+                         reward_score = (outcome_reward / num_finals) + result["reward_extra_info"].get('tool_reward', 0.0)
+                         result["reward_extra_info"]['score'] = reward_score
+                     output.reward_score = reward_score
++                    if uma_credit_trace_enabled():
++                        reward_extra_info = result.get("reward_extra_info", {})
++                        output_extra = output.extra_fields or {}
++                        uma_credit_trace_event("p33_2_reward_postprocess", {
++                            "uid": output.uid,
++                            "data_source": output.data_source,
++                            "trajectory_id": output_extra.get("trajectory_id"),
++                            "trajectory_key": output_extra.get("p33_2_trajectory_key"),
++                            "trajectory_step": output_extra.get("p33_2_trajectory_step"),
++                            "sample_index": output_extra.get("p33_2_sample_index"),
++                            "rollout_n": output_extra.get("p33_2_rollout_n"),
++                            "validate": output_extra.get("p33_2_validate"),
++                            "conversation_index": output_extra.get("p33_2_conversation_index"),
++                            "memory_step_index": output_extra.get("p33_2_memory_step_index"),
++                            "final_query_index": output_extra.get("p33_2_final_query_index"),
++                            "is_final": output_extra.get("is_final"),
++                            "num_finals": num_finals,
++                            "reward_score": reward_score,
++                            "outcome_reward_accumulator": outcome_reward,
++                            "qa_outcome_component_assigned": reward_extra_info.get("outcome_reward"),
++                            "tool_reward": reward_extra_info.get("tool_reward"),
++                            "format_reward": reward_extra_info.get("format_reward"),
++                            "num_tools": output_extra.get("num_tools"),
++                            "tool_rewards": output_extra.get("tool_rewards"),
++                            "tool_counts": output_extra.get("tool_counts"),
++                            "prompt_sha1": uma_credit_stable_hash_payload(output.prompt_ids),
++                            "response_sha1": uma_credit_stable_hash_payload(output.response_ids),
++                            "response_mask_sum": int(output.response_mask.sum().item()) if hasattr(output.response_mask, "sum") else None,
++                        })
+                     output.extra_fields["reward_extra_info"] = result["reward_extra_info"]
+                 internal_ouputs.append(_InternalAgentLoopOutput(
+                     prompt_ids=prompt_output["input_ids"],
+@@ -872,6 +917,16 @@ class AgentLoopManager:
+             worker.generate_sequences.remote(chunk, verbose=(verbose and idx==0))
+             for idx, (worker, chunk) in enumerate(zip(self.agent_loop_workers, chunkes, strict=True))
+         ]
++        if uma_credit_trace_enabled():
++            uma_credit_task_order = {task: idx for idx, task in enumerate(tasks)}
++            uma_credit_completion_submission_indices = []
++            uma_credit_trace_event("p33_2_ray_tasks_submitted", {
++                "num_tasks": len(tasks),
++                "task_refs": [str(task) for task in tasks],
++            })
++        else:
++            uma_credit_task_order = {}
++            uma_credit_completion_submission_indices = []
+         # 监控进度
+         outputs = []
+         remaining_tasks = tasks.copy()
+@@ -889,6 +944,15 @@ class AgentLoopManager:
+             for task in ready:
+                 result = ray.get(task)
+                 outputs.append(result)
++                if uma_credit_trace_enabled():
++                    uma_credit_completion_submission_indices.append(uma_credit_task_order.get(task))
++                    uma_credit_trace_event("p33_2_ray_task_completed", {
++                        "completion_position": completed,
++                        "submission_index": uma_credit_task_order.get(task),
++                        "task_ref": str(task),
++                        "result_type": type(result).__name__,
++                        "result_len": len(result) if hasattr(result, "__len__") else None,
++                    })
+                 completed += 1
+                 
+                 if verbose:
+@@ -900,6 +964,13 @@ class AgentLoopManager:
+                         f"Elapsed: {elapsed:.1f}s - ETA: {eta:.1f}s")
+         
+         # 按原始顺序排序
++        if uma_credit_trace_enabled():
++            uma_credit_trace_event("p33_2_ray_reorder_precheck", {
++                "task_refs": [str(task) for task in tasks],
++                "completion_submission_indices": uma_credit_completion_submission_indices,
++                "completion_matches_submission_order": uma_credit_completion_submission_indices == list(range(len(uma_credit_completion_submission_indices))),
++                "num_outputs": len(outputs),
++            })
+         task_to_result = {task: result for task, result in zip(tasks, outputs)}
+         outputs = [task_to_result[task] for task in tasks]
+ 
+diff --git a/external/verl/verl/experimental/agent_loop/tool_mem_agent_loop.py b/external/verl/verl/experimental/agent_loop/tool_mem_agent_loop.py
+index c628ac0..0e490aa 100644
+--- a/external/verl/verl/experimental/agent_loop/tool_mem_agent_loop.py
++++ b/external/verl/verl/experimental/agent_loop/tool_mem_agent_loop.py
+@@ -26,6 +26,7 @@ import yaml
+ from pathlib import Path
+ 
+ from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
++from verl.utils.uma_credit_trace import credit_trace_enabled as uma_credit_trace_enabled
+ from verl.experimental.agent_loop.tool_parser import FunctionCall, ToolParser
+ from verl.tools.schemas import ToolResponse
+ from verl.tools.utils.tool_registry import initialize_tools_from_config
+@@ -342,6 +343,21 @@ class ToolMemoryAgentLoop(AgentLoopBase):
+         # Create a list of AgentLoopOutput objects, one for each conversation
+         outputs = []
+         for i, conversation in enumerate(agent_data.conversations):
++            extra_fields = {
++                'trajectory_id': trajectory_id,
++                'is_final': conversation.is_final,
++                'tool_rewards': conversation.tool_rewards,
++                'num_tools': conversation.num_tools,
++                'tool_counts': conversation.tool_counts,  # Add tool counts to extra_fields
++            }
++            if uma_credit_trace_enabled():
++                extra_fields['p33_2_conversation_index'] = i
++                if conversation.is_final:
++                    extra_fields['p33_2_memory_step_index'] = None
++                    extra_fields['p33_2_final_query_index'] = conversation.is_final
++                else:
++                    extra_fields['p33_2_memory_step_index'] = i
++                    extra_fields['p33_2_final_query_index'] = None
+             output = AgentLoopOutput(
+                 prompt_ids=conversation.prompt_ids,
+                 response_ids=conversation.response_ids[: self.response_length],
+@@ -352,13 +368,7 @@ class ToolMemoryAgentLoop(AgentLoopBase):
+                 else None,
+                 num_turns=conversation.user_turns + conversation.assistant_turns + 1,
+                 metrics=agent_data.metrics,
+-                extra_fields={
+-                    'trajectory_id': trajectory_id,
+-                    'is_final': conversation.is_final,
+-                    'tool_rewards': conversation.tool_rewards,
+-                    'num_tools': conversation.num_tools,
+-                    'tool_counts': conversation.tool_counts,  # Add tool counts to extra_fields
+-                },
++                extra_fields=extra_fields,
+             )
+             outputs.append(output)
+         
+diff --git a/external/verl/verl/trainer/ppo/ray_trainer.py b/external/verl/verl/trainer/ppo/ray_trainer.py
+index 58488ae..f64e6a1 100644
+--- a/external/verl/verl/trainer/ppo/ray_trainer.py
++++ b/external/verl/verl/trainer/ppo/ray_trainer.py
+@@ -59,6 +59,8 @@ from verl.utils.rollout_skip import RolloutSkip
+ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
+ from verl.utils.torch_functional import masked_mean
+ from verl.utils.tracking import ValidationGenerationsLogger
++from verl.utils.uma_credit_trace import credit_trace_enabled as uma_credit_trace_enabled
++from verl.utils.uma_credit_trace import trace_event as uma_credit_trace_event
+ 
+ 
+ @dataclass
+@@ -231,6 +233,24 @@ def compute_advantage(
+         grpo_calculation_mask = data.batch["response_mask"]
+         # Call compute_grpo_outcome_advantage with parameters matching its definition
+         index_list = np.array([f"{x}_{y}" for x, y in zip(data.non_tensor_batch["uid"], data.non_tensor_batch["is_final"])], dtype=object)
++        if uma_credit_trace_enabled():
++            raw_scores = data.batch["token_level_rewards"].sum(dim=-1).detach().cpu()
++            group_values = defaultdict(list)
++            for row_idx, group_id in enumerate(index_list):
++                group_values[group_id].append(raw_scores[row_idx])
++            group_mean_std = {}
++            for group_id, vals in group_values.items():
++                vals_tensor = torch.stack(vals)
++                group_mean_std[group_id] = {
++                    "mean": vals_tensor.mean().item() if len(vals) > 1 else 0.0,
++                    "std": vals_tensor.std().item() if len(vals) > 1 else 1.0,
++                    "n": len(vals),
++                }
++            uma_credit_trace_event("p33_2_grpo_grouping_summary", {
++                "n_rows": len(index_list),
++                "n_groups": len(group_values),
++                "groups": group_mean_std,
++            })
+         advantages, returns = core_algos.compute_grpo_outcome_advantage(
+             token_level_rewards=data.batch["token_level_rewards"],
+             response_mask=grpo_calculation_mask,
+@@ -238,6 +258,46 @@ def compute_advantage(
+             index=index_list,
+             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+         )
++        if uma_credit_trace_enabled():
++            raw_scores = data.batch["token_level_rewards"].sum(dim=-1).detach().cpu()
++            adv_cpu = advantages.detach().cpu()
++            mask_cpu = grpo_calculation_mask.detach().cpu()
++            for row_idx, group_id in enumerate(index_list):
++                mask = mask_cpu[row_idx].bool()
++                valid_adv = adv_cpu[row_idx][mask]
++                unique_count = int(torch.unique(valid_adv).numel()) if valid_adv.numel() else 0
++                payload = {
++                    "row_index": row_idx,
++                    "uid": data.non_tensor_batch.get("uid", [None] * len(index_list))[row_idx],
++                    "is_final": data.non_tensor_batch.get("is_final", [None] * len(index_list))[row_idx],
++                    "trajectory_id": data.non_tensor_batch.get("trajectory_id", [None] * len(index_list))[row_idx],
++                    "trajectory_key": data.non_tensor_batch.get("p33_2_trajectory_key", [None] * len(index_list))[row_idx],
++                    "trajectory_step": data.non_tensor_batch.get("p33_2_trajectory_step", [None] * len(index_list))[row_idx],
++                    "sample_index": data.non_tensor_batch.get("p33_2_sample_index", [None] * len(index_list))[row_idx],
++                    "rollout_n": data.non_tensor_batch.get("p33_2_rollout_n", [None] * len(index_list))[row_idx],
++                    "validate": data.non_tensor_batch.get("p33_2_validate", [None] * len(index_list))[row_idx],
++                    "conversation_index": data.non_tensor_batch.get("p33_2_conversation_index", [None] * len(index_list))[row_idx],
++                    "memory_step_index": data.non_tensor_batch.get("p33_2_memory_step_index", [None] * len(index_list))[row_idx],
++                    "final_query_index": data.non_tensor_batch.get("p33_2_final_query_index", [None] * len(index_list))[row_idx],
++                    "data_source": data.non_tensor_batch.get("data_source", [None] * len(index_list))[row_idx],
++                    "original_index": data.non_tensor_batch.get("p33_2_original_index", [None] * len(index_list))[row_idx],
++                    "batch_row_index": data.non_tensor_batch.get("p33_2_batch_row_index", [None] * len(index_list))[row_idx],
++                    "agent_name": data.non_tensor_batch.get("p33_2_agent_name", [None] * len(index_list))[row_idx],
++                    "grpo_group": group_id,
++                    "raw_score": raw_scores[row_idx],
++                    "grpo_group_mean": group_mean_std[group_id]["mean"],
++                    "grpo_group_std": group_mean_std[group_id]["std"],
++                    "grpo_group_n": group_mean_std[group_id]["n"],
++                    "advantage_scalar": valid_adv[0] if valid_adv.numel() else None,
++                    "advantage_unique_values_on_generated_tokens": unique_count,
++                    "response_mask_tokens": int(mask.sum().item()),
++                    "reward_score": data.non_tensor_batch.get("score", [None] * len(index_list))[row_idx],
++                    "qa_outcome_component": data.non_tensor_batch.get("outcome_reward", [None] * len(index_list))[row_idx],
++                    "tool_reward": data.non_tensor_batch.get("tool_reward", [None] * len(index_list))[row_idx],
++                    "num_tools": data.non_tensor_batch.get("num_tools", [None] * len(index_list))[row_idx],
++                    "tool_counts": data.non_tensor_batch.get("tool_counts", [None] * len(index_list))[row_idx],
++                }
++                uma_credit_trace_event("p33_2_grpo_advantage_row", payload)
+         data.batch["advantages"] = advantages
+         data.batch["returns"] = returns
+     else:
+diff --git a/external/verl/verl/utils/uma_credit_trace.py b/external/verl/verl/utils/uma_credit_trace.py
+new file mode 100644
+index 0000000..ae7a8d5
+--- /dev/null
++++ b/external/verl/verl/utils/uma_credit_trace.py
+@@ -0,0 +1,82 @@
++"""Default-off JSONL tracing for UMA credit-flow anatomy.
++
++This module is intentionally dependency-light and side-effect-free when
++``UMA_CREDIT_TRACE`` is unset.  It is for P33.2 instrumentation only.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import socket
++import time
++from pathlib import Path
++from typing import Any
++
++
++TRUE_VALUES = {"1", "true", "yes", "on", "y"}
++
++
++def credit_trace_enabled() -> bool:
++    return str(os.getenv("UMA_CREDIT_TRACE", "")).strip().lower() in TRUE_VALUES
++
++
++def credit_trace_path() -> Path:
++    base = Path(os.getenv("UMA_CREDIT_TRACE_PATH", "uma_credit_trace.jsonl")).expanduser()
++    host = socket.gethostname().replace("/", "_")
++    pid = os.getpid()
++    if base.exists() and base.is_dir():
++        return base / f"uma_credit_trace.{host}.{pid}.jsonl"
++    suffix = base.suffix or ".jsonl"
++    return base.with_name(f"{base.stem}.{host}.{pid}{suffix}")
++
++
++def _json_safe(value: Any) -> Any:
++    if value is None or isinstance(value, (str, int, float, bool)):
++        return value
++    if isinstance(value, dict):
++        return {str(k): _json_safe(v) for k, v in value.items()}
++    if isinstance(value, (list, tuple, set)):
++        return [_json_safe(v) for v in value]
++    try:
++        import numpy as np  # type: ignore
++
++        if isinstance(value, np.ndarray):
++            return [_json_safe(v) for v in value.tolist()]
++        if isinstance(value, np.generic):
++            return value.item()
++    except Exception:
++        pass
++    try:
++        import torch  # type: ignore
++
++        if isinstance(value, torch.Tensor):
++            if value.numel() == 1:
++                return value.detach().cpu().item()
++            return value.detach().cpu().tolist()
++    except Exception:
++        pass
++    return str(value)
++
++
++def stable_hash_payload(value: Any) -> str:
++    payload = json.dumps(_json_safe(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
++    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
++
++
++def trace_event(event: str, payload: dict[str, Any]) -> None:
++    if not credit_trace_enabled():
++        return
++    path = credit_trace_path()
++    path.parent.mkdir(parents=True, exist_ok=True)
++    row = {
++        "time": time.time(),
++        "pid": os.getpid(),
++        "host": socket.gethostname(),
++        "event": event,
++        "payload": _json_safe(payload),
++    }
++    line = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(line)
