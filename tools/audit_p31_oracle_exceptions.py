@@ -4,14 +4,14 @@
 Read-only diagnostic over frozen operation-value artifacts.  It asks why the
 offline oracle beats a default policy on substantive eps-margin examples:
 
-    1. answer-bearing admission deficit:
-       answer-bearing session is in C0 but absent from W0/default and admitted
-       by the winning policy.
-    2. organization/interface:
-       answer-bearing sessions are already admitted by the base policy, so the
-       oracle win is not explained by simple session-level recall rescue.
-    3. no candidate opportunity:
-       answer-bearing sessions are absent from C0, so admission cannot rescue.
+    1. retrieval/candidate missing:
+       not all gold answer sessions are present in C0.
+    2. admission incomplete:
+       C0 contains all gold sessions, but the base working memory does not.
+       This is further split into no rescue, partial rescue, and complete rescue.
+    3. gold-session complete organization/interface candidate:
+       the base working memory already contains all gold sessions, so a
+       substantive oracle win is not explained by session-level recall.
 
 This script uses gold answer_session_ids only for offline audit labels.  It
 does not train, generate, score, or alter any protocol.
@@ -165,23 +165,37 @@ def winning_policy(row: dict[str, str], base_policy: str, policies: list[str], m
     return best_policy, best_delta, int(best_delta > eps)
 
 
+def gold_stats(gold: set[int], selected: set[int]) -> dict[str, Any]:
+    overlap = gold & selected
+    denom = max(1, len(gold))
+    return {
+        "any": bool(overlap),
+        "all": bool(gold) and gold.issubset(selected),
+        "recall": len(overlap) / denom,
+        "n_overlap": len(overlap),
+        "overlap_json": json.dumps(sorted(overlap)),
+    }
+
+
 def classify_failure(
-    c0_has_answer: bool,
-    base_has_answer: bool,
-    winner_has_answer: bool,
+    c0_recall: float,
+    base_recall: float,
+    winner_recall: float,
     winner_delta: float,
     eps: float,
 ) -> str:
     if winner_delta <= eps:
         return "default_safe_no_substantive_exception"
-    if not c0_has_answer:
-        return "no_candidate_opportunity_answer_not_in_C0"
-    if not base_has_answer and winner_has_answer:
-        return "answer_bearing_admission_deficit_rescued"
-    if not base_has_answer and not winner_has_answer:
-        return "answer_bearing_admission_deficit_not_rescued"
-    if base_has_answer:
-        return "organization_or_reader_interface_or_surrogate"
+    if c0_recall < 1.0:
+        return "retrieval_or_candidate_missing_gold_sessions"
+    if base_recall < 1.0:
+        if winner_recall <= base_recall:
+            return "admission_incomplete_not_rescued"
+        if winner_recall >= 1.0:
+            return "admission_incomplete_complete_rescue"
+        return "admission_incomplete_partial_rescue"
+    if base_recall >= 1.0:
+        return "gold_session_complete_organization_interface_or_surrogate_candidate"
     return "unclassified"
 
 
@@ -274,12 +288,12 @@ def main() -> None:
         raw_winner_indices = admitted(raw_winner)
         tie_winner_indices = admitted(tie_winner)
 
-        c0_has = bool(answer_indices & c0_indices)
-        w0_has = bool(answer_indices & w0_indices)
-        raw_base_has = bool(answer_indices & raw_base_indices)
-        tie_base_has = bool(answer_indices & tie_base_indices)
-        raw_winner_has = bool(answer_indices & raw_winner_indices)
-        tie_winner_has = bool(answer_indices & tie_winner_indices)
+        c0_gold = gold_stats(answer_indices, c0_indices)
+        w0_gold = gold_stats(answer_indices, w0_indices)
+        raw_base_gold = gold_stats(answer_indices, raw_base_indices)
+        tie_base_gold = gold_stats(answer_indices, tie_base_indices)
+        raw_winner_gold = gold_stats(answer_indices, raw_winner_indices)
+        tie_winner_gold = gold_stats(answer_indices, tie_winner_indices)
 
         out_rows.append(
             {
@@ -288,8 +302,18 @@ def main() -> None:
                 "metric": args.metric,
                 "answer_session_count": len(answer_indices),
                 "answer_source_indices_json": json.dumps(sorted(answer_indices)),
-                "C0_has_answer_session": bool_str(c0_has),
-                "W0_stop_has_answer_session": bool_str(w0_has),
+                "C0_any_gold_session": bool_str(c0_gold["any"]),
+                "C0_all_gold_sessions": bool_str(c0_gold["all"]),
+                "C0_gold_session_recall": c0_gold["recall"],
+                "C0_gold_session_overlap_n": c0_gold["n_overlap"],
+                "C0_gold_session_overlap_json": c0_gold["overlap_json"],
+                "W0_any_gold_session": bool_str(w0_gold["any"]),
+                "W0_all_gold_sessions": bool_str(w0_gold["all"]),
+                "W0_gold_session_recall": w0_gold["recall"],
+                "W0_gold_session_overlap_n": w0_gold["n_overlap"],
+                "W0_gold_session_overlap_json": w0_gold["overlap_json"],
+                "legacy_C0_has_answer_session_any": bool_str(c0_gold["any"]),
+                "legacy_W0_stop_has_answer_session_any": bool_str(w0_gold["any"]),
                 "raw_best_global_policy": raw_best_global,
                 "tiecost_global_policy": tiecost_global,
                 "raw_best_fold_policy": raw_best_fold,
@@ -297,15 +321,31 @@ def main() -> None:
                 "raw_exception_winner": raw_winner,
                 "raw_exception_delta": raw_delta,
                 "raw_exception_gt_eps": raw_exception,
-                "raw_base_has_answer_session": bool_str(raw_base_has),
-                "raw_winner_has_answer_session": bool_str(raw_winner_has),
-                "raw_exception_class": classify_failure(c0_has, raw_base_has, raw_winner_has, raw_delta, args.eps),
+                "raw_base_any_gold_session": bool_str(raw_base_gold["any"]),
+                "raw_base_all_gold_sessions": bool_str(raw_base_gold["all"]),
+                "raw_base_gold_session_recall": raw_base_gold["recall"],
+                "raw_base_gold_session_overlap_n": raw_base_gold["n_overlap"],
+                "raw_base_gold_session_overlap_json": raw_base_gold["overlap_json"],
+                "raw_winner_any_gold_session": bool_str(raw_winner_gold["any"]),
+                "raw_winner_all_gold_sessions": bool_str(raw_winner_gold["all"]),
+                "raw_winner_gold_session_recall": raw_winner_gold["recall"],
+                "raw_winner_gold_session_overlap_n": raw_winner_gold["n_overlap"],
+                "raw_winner_gold_session_overlap_json": raw_winner_gold["overlap_json"],
+                "raw_exception_class": classify_failure(c0_gold["recall"], raw_base_gold["recall"], raw_winner_gold["recall"], raw_delta, args.eps),
                 "tiecost_exception_winner": tie_winner,
                 "tiecost_exception_delta": tie_delta,
                 "tiecost_exception_gt_eps": tie_exception,
-                "tiecost_base_has_answer_session": bool_str(tie_base_has),
-                "tiecost_winner_has_answer_session": bool_str(tie_winner_has),
-                "tiecost_exception_class": classify_failure(c0_has, tie_base_has, tie_winner_has, tie_delta, args.eps),
+                "tiecost_base_any_gold_session": bool_str(tie_base_gold["any"]),
+                "tiecost_base_all_gold_sessions": bool_str(tie_base_gold["all"]),
+                "tiecost_base_gold_session_recall": tie_base_gold["recall"],
+                "tiecost_base_gold_session_overlap_n": tie_base_gold["n_overlap"],
+                "tiecost_base_gold_session_overlap_json": tie_base_gold["overlap_json"],
+                "tiecost_winner_any_gold_session": bool_str(tie_winner_gold["any"]),
+                "tiecost_winner_all_gold_sessions": bool_str(tie_winner_gold["all"]),
+                "tiecost_winner_gold_session_recall": tie_winner_gold["recall"],
+                "tiecost_winner_gold_session_overlap_n": tie_winner_gold["n_overlap"],
+                "tiecost_winner_gold_session_overlap_json": tie_winner_gold["overlap_json"],
+                "tiecost_exception_class": classify_failure(c0_gold["recall"], tie_base_gold["recall"], tie_winner_gold["recall"], tie_delta, args.eps),
                 "stop_reward": value(row, "stop", args.metric),
                 "raw_fold_base_value": value(row, raw_best_fold, args.metric),
                 "raw_winner_value": value(row, raw_winner, args.metric),
@@ -331,8 +371,21 @@ def main() -> None:
                 "n": total,
                 "n_exceptions_gt_eps": len(exceptions),
                 "exception_rate": len(exceptions) / max(1, total),
-                "C0_answer_present_rate": mean([int(r["C0_has_answer_session"]) for r in out_rows]),
-                "W0_answer_present_rate": mean([int(r["W0_stop_has_answer_session"]) for r in out_rows]),
+                "C0_any_gold_session_rate": mean([int(r["C0_any_gold_session"]) for r in out_rows]),
+                "C0_all_gold_sessions_rate": mean([int(r["C0_all_gold_sessions"]) for r in out_rows]),
+                "C0_mean_gold_session_recall": mean([float(r["C0_gold_session_recall"]) for r in out_rows]),
+                "W0_any_gold_session_rate": mean([int(r["W0_any_gold_session"]) for r in out_rows]),
+                "W0_all_gold_sessions_rate": mean([int(r["W0_all_gold_sessions"]) for r in out_rows]),
+                "W0_mean_gold_session_recall": mean([float(r["W0_gold_session_recall"]) for r in out_rows]),
+                "exception_C0_all_gold_sessions_rate": mean([int(r["C0_all_gold_sessions"]) for r in exceptions]),
+                "exception_base_all_gold_sessions_rate": mean([
+                    int(r["raw_base_all_gold_sessions"] if base_name == "raw_fold_best" else r["tiecost_base_all_gold_sessions"])
+                    for r in exceptions
+                ]),
+                "exception_winner_all_gold_sessions_rate": mean([
+                    int(r["raw_winner_all_gold_sessions"] if base_name == "raw_fold_best" else r["tiecost_winner_all_gold_sessions"])
+                    for r in exceptions
+                ]),
                 "class_counts_json": json.dumps(dict(sorted(class_counts.items())), sort_keys=True),
                 "exception_class_counts_json": json.dumps(dict(sorted(exception_class_counts.items())), sort_keys=True),
             }
@@ -352,8 +405,12 @@ def main() -> None:
                 "question_type": qtype,
                 "n": len(items),
                 "n_exceptions_gt_eps": sum(int(r[exception_key]) for r in items),
-                "C0_answer_present_rate": mean([int(r["C0_has_answer_session"]) for r in items]),
-                "W0_answer_present_rate": mean([int(r["W0_stop_has_answer_session"]) for r in items]),
+                "C0_any_gold_session_rate": mean([int(r["C0_any_gold_session"]) for r in items]),
+                "C0_all_gold_sessions_rate": mean([int(r["C0_all_gold_sessions"]) for r in items]),
+                "C0_mean_gold_session_recall": mean([float(r["C0_gold_session_recall"]) for r in items]),
+                "W0_any_gold_session_rate": mean([int(r["W0_any_gold_session"]) for r in items]),
+                "W0_all_gold_sessions_rate": mean([int(r["W0_all_gold_sessions"]) for r in items]),
+                "W0_mean_gold_session_recall": mean([float(r["W0_gold_session_recall"]) for r in items]),
                 "exception_class_counts_json": json.dumps(
                     dict(sorted(Counter(str(r[class_key]) for r in items if int(r[exception_key]) == 1).items())),
                     sort_keys=True,
@@ -381,7 +438,8 @@ def main() -> None:
         "summary": summary,
         "guardrails": [
             "answer_session_ids are used only as offline_labels for mechanism audit.",
-            "This audit identifies session-level answer-bearing admission opportunity; it does not prove span-level sufficiency.",
+            "Canonical session-level audit reports any/all/recall; legacy has_answer_session fields are any-session only and must not be interpreted as complete evidence availability.",
+            "This audit identifies session-level answer-bearing admission opportunity; it does not prove turn/span-level sufficiency.",
             "Surrogate F1 exception labels remain exploratory until official judge validation.",
             "raw-best, tie/cost-default, and fold-local default exceptions must not be merged without naming them.",
         ],
