@@ -7,10 +7,11 @@ offline oracle beats a default policy on substantive eps-margin examples:
     1. retrieval/candidate missing:
        not all gold answer sessions are present in C0.
     2. admission incomplete:
-       C0 contains all gold sessions, but the base working memory does not.
+       C0 contains all gold sessions, but the base final visible working memory
+       does not.
        This is further split into no rescue, partial rescue, and complete rescue.
     3. gold-session complete organization/interface candidate:
-       the base working memory already contains all gold sessions, so a
+       the base final visible working memory already contains all gold sessions, so a
        substantive oracle win is not explained by session-level recall.
 
 This script uses gold answer_session_ids only for offline audit labels.  It
@@ -92,7 +93,23 @@ def load_responses_qid_to_query_sha1(path: Path) -> dict[str, str]:
     return out
 
 
-def load_trace_query_sha1_to_first_retrieve(path: Path) -> dict[str, dict[str, Any]]:
+def final_visible_record(trace_row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the final reader-visible working-memory record.
+
+    The first RETRIEVE record defines C0 and initial W0.  Repack/admission
+    policies may later replace the reader-visible working memory in
+    REPACK_CANDIDATES.  For base/winner completeness, use the last op record
+    that explicitly carries admitted_source_indices rather than the initial
+    RETRIEVE record.
+    """
+
+    for record in reversed(trace_row.get("op_records") or []):
+        if record.get("admitted_source_indices") is not None:
+            return record
+    return None
+
+
+def load_trace_query_sha1_to_state_records(path: Path) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in iter_jsonl(path):
         if row.get("phase") != "qa":
@@ -100,12 +117,17 @@ def load_trace_query_sha1_to_first_retrieve(path: Path) -> dict[str, dict[str, A
         qhash = str(row.get("query_sha1") or "")
         if not qhash:
             continue
-        record = first_op_record(row, {"RETRIEVE"})
-        if not record:
+        retrieve = first_op_record(row, {"RETRIEVE"})
+        final = final_visible_record(row)
+        if not retrieve or not final:
             continue
         if qhash in out:
             raise ValueError(f"duplicate qa trace query_sha1 in {path}: {qhash}")
-        out[qhash] = record
+        out[qhash] = {
+            "first_retrieve": retrieve,
+            "final_visible": final,
+            "final_visible_operation": str(final.get("operation") or ""),
+        }
     return out
 
 
@@ -244,22 +266,22 @@ def main() -> None:
             missing_trace_files.append(str(response_path))
             continue
         qid_to_hash = load_responses_qid_to_query_sha1(response_path)
-        hash_to_retrieve = load_trace_query_sha1_to_first_retrieve(trace_path)
+        hash_to_state = load_trace_query_sha1_to_state_records(trace_path)
         mapped: dict[str, dict[str, Any]] = {}
         for qid in qids:
             qhash = qid_to_hash.get(qid, "")
             if not qhash:
                 continue
-            record = hash_to_retrieve.get(qhash)
-            if record:
-                mapped[qid] = record
+            state_records = hash_to_state.get(qhash)
+            if state_records:
+                mapped[qid] = state_records
         policy_traces[policy] = mapped
     if missing_trace_files:
         raise ValueError(f"missing trace files: {missing_trace_files}")
     for policy, mapped in policy_traces.items():
         missing_qids = sorted(set(qids) - set(mapped))
         if missing_qids:
-            raise ValueError(f"{policy} missing mapped first RETRIEVE records, first={missing_qids[:5]}")
+            raise ValueError(f"{policy} missing mapped trace state records, first={missing_qids[:5]}")
 
     raw_best_global = choose_raw_best(rows, list(range(len(rows))), policies, args.metric)
     tiecost_global = choose_tiecost_fixed(rows, list(range(len(rows))), policies, args.metric, args.tie_eps)
@@ -275,12 +297,15 @@ def main() -> None:
 
         raw_row = raw_rows[qid]
         answer_indices = set(answer_source_indices(raw_row))
-        stop_record = policy_traces["stop"][qid]
+        stop_record = policy_traces["stop"][qid]["first_retrieve"]
         c0_indices = set(int_list(stop_record.get("retrieved_source_indices")))
 
         def admitted(policy: str) -> set[int]:
-            record = policy_traces[policy][qid]
+            record = policy_traces[policy][qid]["final_visible"]
             return set(int_list(record.get("admitted_source_indices")))
+
+        def final_op(policy: str) -> str:
+            return str(policy_traces[policy][qid].get("final_visible_operation") or "")
 
         w0_indices = admitted("stop")
         raw_base_indices = admitted(raw_best_fold)
@@ -317,8 +342,11 @@ def main() -> None:
                 "raw_best_global_policy": raw_best_global,
                 "tiecost_global_policy": tiecost_global,
                 "raw_best_fold_policy": raw_best_fold,
+                "raw_best_fold_final_visible_operation": final_op(raw_best_fold),
                 "tiecost_fold_policy": tiecost_fold,
+                "tiecost_fold_final_visible_operation": final_op(tiecost_fold),
                 "raw_exception_winner": raw_winner,
+                "raw_exception_winner_final_visible_operation": final_op(raw_winner),
                 "raw_exception_delta": raw_delta,
                 "raw_exception_gt_eps": raw_exception,
                 "raw_base_any_gold_session": bool_str(raw_base_gold["any"]),
@@ -333,6 +361,7 @@ def main() -> None:
                 "raw_winner_gold_session_overlap_json": raw_winner_gold["overlap_json"],
                 "raw_exception_class": classify_failure(c0_gold["recall"], raw_base_gold["recall"], raw_winner_gold["recall"], raw_delta, args.eps),
                 "tiecost_exception_winner": tie_winner,
+                "tiecost_exception_winner_final_visible_operation": final_op(tie_winner),
                 "tiecost_exception_delta": tie_delta,
                 "tiecost_exception_gt_eps": tie_exception,
                 "tiecost_base_any_gold_session": bool_str(tie_base_gold["any"]),
@@ -439,6 +468,7 @@ def main() -> None:
         "guardrails": [
             "answer_session_ids are used only as offline_labels for mechanism audit.",
             "Canonical session-level audit reports any/all/recall; legacy has_answer_session fields are any-session only and must not be interpreted as complete evidence availability.",
+            "C0 is taken from the first RETRIEVE retrieved_source_indices; policy working memory is taken from the final visible op record carrying admitted_source_indices.",
             "This audit identifies session-level answer-bearing admission opportunity; it does not prove turn/span-level sufficiency.",
             "Surrogate F1 exception labels remain exploratory until official judge validation.",
             "raw-best, tie/cost-default, and fold-local default exceptions must not be merged without naming them.",
