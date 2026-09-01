@@ -1,0 +1,74 @@
+{
+  "status_label": "CODE_REPAIRED_LOCAL_SMOKE_PASSED_S05M_SYNC_BLOCKED_H20_NOT_RUN",
+  "date": "2026-09-01",
+  "official_uma_commit": "768f9620231bae11264771f59e43a4839506cf94",
+  "scope": "P33.2-v3 instrumentation and summarizer repair only",
+  "forbidden_changes_not_made": [
+    "prompt",
+    "operator",
+    "split",
+    "metric",
+    "generation_protocol",
+    "reward_formula",
+    "trainer_objective",
+    "optimizer_behavior"
+  ],
+  "repairs": [
+    "derive p33_2_trajectory_key from official get_trajectory_info(step, sample_index, rollout_n, validate)",
+    "write p33_2_conversation_index and p33_2_memory_step_index at AgentLoopOutput construction",
+    "remove summarizer row-order chunk reconstruction",
+    "fail closed on missing trajectory_key, conversation_index, or memory_step_index for memory rows",
+    "switch trace logging to per-host/pid buffered JSONL files",
+    "add reward_rank_within_grpo_group",
+    "add trajectory_mean_memory_advantage"
+  ],
+  "local_paths": {
+    "prepare_script": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/tools/prepare_p33_2_uma_credit_instrumentation.py",
+    "summarizer": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/tools/summarize_p33_2_credit_trace.py",
+    "instrumented_worktree_v3": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/instrumented_worktree_p33_2_v3",
+    "manifest": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/instrumented_worktree_p33_2_v3/p33_2_uma_credit_instrumentation_manifest.json",
+    "diff": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/instrumented_worktree_p33_2_v3/p33_2_uma_credit_instrumentation.diff"
+  },
+  "sha256": {
+    "prepare_script": "f38307e60ddc124aa11787e1372489d417b507b8399de210847f978542144e71",
+    "summarizer": "cc35a956d94346fb51cfe750da422883c095f07142827d559f532d3bf9e531de",
+    "instrumentation_diff": "611da8810a7153d00fd402e6d1d117938f31c95ff278612adeaee74b78d9e13e",
+    "instrumentation_manifest": "adc5c22e59c70b2b7b4277c1728fcfa4be12ca9edd272450b9f5653582ed78f9"
+  },
+  "local_smoke": {
+    "python_compile": "PASS",
+    "git_diff_check": "PASS",
+    "trace_default_off_no_file": "PASS",
+    "trace_enabled_per_process_file": "PASS",
+    "summarizer_valid_synthetic": "PASS",
+    "summarizer_fail_closed_missing_trajectory_key": "PASS",
+    "reward_rank_tie_break": "PASS",
+    "synthetic_summary": {
+      "n_events": 6,
+      "n_memory_rows": 6,
+      "within_trajectory_qa_variance_mean": 0.0,
+      "within_trajectory_advantage_variance_mean": 0.5277777777777778
+    }
+  },
+  "s05m": {
+    "status": "NOT_RUN_FOR_V3",
+    "reason": "Local approval reviewer rejected scp of v3 scripts to s05m without more explicit user authorization.",
+    "old_v2_smoke_status": "PASS_BUT_NOT_V3_EVIDENCE"
+  },
+  "h20": {
+    "status": "NOT_RUN_FOR_P33_2_V3",
+    "next_required": "Push exact branch/commit to GitHub, then run official UMA 4B real rollout trace readout."
+  },
+  "interpretation": {
+    "supported": [
+      "P33.2-v3 repair addresses identity/index/logging risks found in code review.",
+      "Local smoke tests support moving to H20 real rollout precheck."
+    ],
+    "not_supported": [
+      "UMA credit assignment is wrong",
+      "RL necessity",
+      "P33.3 intervention result",
+      "H20 real rollout anatomy"
+    ]
+  }
+}

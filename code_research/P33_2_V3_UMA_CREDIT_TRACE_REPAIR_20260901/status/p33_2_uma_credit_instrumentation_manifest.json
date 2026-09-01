@@ -1,0 +1,40 @@
+{
+  "status": "P33_2_INSTRUMENTED_WORKTREE_PREPARED",
+  "scope": "default-off logging only",
+  "source_repo": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/repos/unified-memory-agent",
+  "destination_repo": "/Users/xinman/Desktop/2026/Research/Agent/Paper Investigation/AgentPaperSurvey/Agent_Memory_Intensive_Reading/code_research/experiments/UMA-Official-Anatomy-20260901/instrumented_worktree_p33_2_v3",
+  "source_commit": "768f9620231bae11264771f59e43a4839506cf94",
+  "expected_commit": "768f9620231bae11264771f59e43a4839506cf94",
+  "forbidden_changes": [
+    "prompt",
+    "operator",
+    "split",
+    "metric",
+    "generation_protocol",
+    "reward_formula",
+    "trainer_objective"
+  ],
+  "activation": {
+    "enabled_env": "UMA_CREDIT_TRACE=1",
+    "path_env": "UMA_CREDIT_TRACE_PATH=/path/to/uma_credit_trace.jsonl",
+    "default": "off"
+  },
+  "files_modified_or_added": {
+    "added": [
+      "external/verl/verl/utils/uma_credit_trace.py"
+    ],
+    "modified": [
+      "external/verl/verl/experimental/agent_loop/agent_loop.py",
+      "external/verl/verl/experimental/agent_loop/tool_mem_agent_loop.py",
+      "external/verl/verl/trainer/ppo/ray_trainer.py"
+    ],
+    "diff": "p33_2_uma_credit_instrumentation.diff"
+  },
+  "sha256": {
+    "agent_loop.py": "e907a41ad7f797ac6b7904b1354fa0f1407e2b7db3a609394eb5ec3b8c99d80e",
+    "tool_mem_agent_loop.py": "8785a9da811a968269a29835e40de0d8fdc1ccff9b360468baa3a8d8984f7cc7",
+    "ray_trainer.py": "1ce18323a870f8c2d90168ef85e295a4269a184e6051bc78692895ed76c0b647",
+    "uma_credit_trace.py": "041ddc0f8ad6db4d483ce180de6455a2c5cb7c59fadfcbc0e4dca5ad409ee4b3",
+    "diff": "611da8810a7153d00fd402e6d1d117938f31c95ff278612adeaee74b78d9e13e"
+  }
+}
